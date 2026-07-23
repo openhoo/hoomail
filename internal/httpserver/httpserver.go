@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/openhoo/hoomail/internal/calendar"
 	"github.com/openhoo/hoomail/internal/events"
@@ -289,7 +290,7 @@ func (s *server) getMessage(response http.ResponseWriter, request *http.Request,
 				cidMap[*attachment.ContentID] = attachment.ID
 			}
 		}
-		clean := inspect.RewriteCIDURLs(inspect.SanitizeEmailHTML(*html), cidMap)
+		clean := inspect.SanitizeEmailHTML(*html, cidMap)
 		html = &clean
 	}
 	attachments := make([]attachmentInfoResponse, 0, len(detail.Attachments))
@@ -408,7 +409,107 @@ func (s *server) messageActions(response http.ResponseWriter, request *http.Requ
 	writeJSON(response, http.StatusOK, map[string]bool{"ok": true})
 }
 
+var inlineAttachmentTypes = map[string]bool{
+	"image/gif":  true,
+	"image/jpeg": true,
+	"image/png":  true,
+	"image/webp": true,
+	"text/csv":   true,
+	"text/plain": true,
+}
+
+func normalizeAttachmentContentType(value *string) string {
+	if value == nil {
+		return "application/octet-stream"
+	}
+	raw := strings.TrimSpace(*value)
+	if raw == "" {
+		return "application/octet-stream"
+	}
+	mediaType, _, err := mime.ParseMediaType(raw)
+	if err != nil {
+		return "application/octet-stream"
+	}
+	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
+	if mediaType == "" {
+		return "application/octet-stream"
+	}
+	if parsed, _, err := mime.ParseMediaType(mediaType); err != nil || parsed != mediaType {
+		return "application/octet-stream"
+	}
+	return mediaType
+}
+
+func sanitizeAttachmentFilename(value *string, id int64) string {
+	fallback := "attachment-" + strconv.FormatInt(id, 10)
+	if value == nil || *value == "" {
+		return fallback
+	}
+	name := path.Base(strings.ReplaceAll(*value, `\`, "/"))
+	var clean strings.Builder
+	clean.Grow(len(name))
+	for _, character := range name {
+		if unicode.IsControl(character) || character == '/' || character == '\\' {
+			continue
+		}
+		clean.WriteRune(character)
+	}
+	name = clean.String()
+	if name == "" || name == "." || name == ".." {
+		return fallback
+	}
+	return name
+}
+
+func formatAttachmentDisposition(disposition, filename string) string {
+	var ascii strings.Builder
+	ascii.Grow(len(filename))
+	nonASCII := false
+	replacing := false
+	for _, character := range filename {
+		switch {
+		case character > unicode.MaxASCII:
+			nonASCII = true
+			if !replacing {
+				ascii.WriteByte('_')
+				replacing = true
+			}
+		case character == '"' || character == '\\':
+			replacing = false
+		default:
+			ascii.WriteRune(character)
+			replacing = false
+		}
+	}
+	quoted := ascii.String()
+	if quoted == "" {
+		quoted = "attachment"
+	}
+	header := disposition + `; filename="` + quoted + `"`
+	if nonASCII {
+		header += "; filename*=UTF-8''" + encodeRFC5987(filename)
+	}
+	return header
+}
+
+func encodeRFC5987(value string) string {
+	const hexadecimal = "0123456789ABCDEF"
+	var encoded strings.Builder
+	for index := range len(value) {
+		character := value[index]
+		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || strings.ContainsRune("!#$&+-.^_`|~", rune(character)) {
+			encoded.WriteByte(character)
+			continue
+		}
+		encoded.WriteByte('%')
+		encoded.WriteByte(hexadecimal[character>>4])
+		encoded.WriteByte(hexadecimal[character&15])
+	}
+	return encoded.String()
+}
+
 func (s *server) getAttachment(response http.ResponseWriter, request *http.Request, rawID string) {
+	response.Header().Set("X-Content-Type-Options", "nosniff")
 	id, ok := parseID(rawID)
 	if !ok {
 		writeError(response, http.StatusBadRequest, "Invalid attachment id")
@@ -423,24 +524,16 @@ func (s *server) getAttachment(response http.ResponseWriter, request *http.Reque
 		writeError(response, http.StatusNotFound, "Attachment not found")
 		return
 	}
-	contentType := "application/octet-stream"
-	if attachment.ContentType != nil && *attachment.ContentType != "" {
-		contentType = *attachment.ContentType
-	}
-	previewable := strings.HasPrefix(contentType, "image/") || contentType == "application/pdf" || strings.HasPrefix(contentType, "text/")
-	filename := "attachment-" + strconv.FormatInt(attachment.ID, 10)
-	if attachment.Filename != nil && *attachment.Filename != "" {
-		filename = *attachment.Filename
-	}
-	filename = strings.NewReplacer("\"", "", "\\", "").Replace(filename)
-	disposition := "inline"
-	if request.URL.Query().Get("download") == "1" || !previewable {
-		disposition = "attachment"
+	contentType := normalizeAttachmentContentType(attachment.ContentType)
+	filename := sanitizeAttachmentFilename(attachment.Filename, attachment.ID)
+	disposition := "attachment"
+	if request.URL.Query().Get("download") != "1" && inlineAttachmentTypes[contentType] {
+		disposition = "inline"
 	}
 	response.Header().Set("Content-Type", contentType)
 	response.Header().Set("Content-Length", strconv.FormatInt(attachment.Size, 10))
-	response.Header().Set("Content-Disposition", disposition+`; filename="`+filename+`"`)
-	response.Header().Set("Cache-Control", "private, max-age=3600")
+	response.Header().Set("Content-Disposition", formatAttachmentDisposition(disposition, filename))
+	response.Header().Set("Cache-Control", "private, no-store")
 	response.WriteHeader(http.StatusOK)
 	_, _ = response.Write(attachment.Content)
 }

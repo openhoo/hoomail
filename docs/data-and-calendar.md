@@ -69,7 +69,7 @@ There are three related but intentionally different views of attachment data:
 | Message-list attachment count | Counts every row with no Content-ID. Inline CID images do not increase the count, but a recognized calendar part without a Content-ID does. |
 | Message detail attachment list | Always omits CID resources. It omits recognized calendar parts only when the message has non-null parsed iCalendar JSON. Unparseable calendar parts, and parts whose events were all incomplete, can therefore remain downloadable; when any event was parsed, every recognized calendar part in that message is hidden. All records remain stored. |
 
-For HTML preview, Hoomail sanitizes the parsed HTML first, then rewrites a matching `cid:` reference to `/api/attachments/{id}`. The reference value must match the stored normalized Content-ID; angle brackets around the HTML reference are not tolerated. An unresolved CID remains unchanged. CID rewriting does not make an absent or mismatched resource downloadable.
+For HTML preview, Hoomail resolves matching `cid:` references against resources from the selected `multipart/related` branch, then passes the rewritten document through the parsed HTML allowlist. Content-ID values are normalized, and percent-encoded `cid:` references are decoded before matching. Unresolved or out-of-branch references are removed rather than fetched remotely.
 
 ## Search boundaries
 
@@ -104,20 +104,15 @@ Individual message deletion does not remove reconciled calendar state; see [Cale
 
 ## HTML preview and inspection
 
-Preview sanitization and inspection are related but separate operations. SQLite retains the parsed HTML; the HTTP message-detail response sanitizes a copy for display. The inspection response derives diagnostics from stored raw MIME, parsed headers, and parsed bodies.
+Preview sanitization and inspection are related but separate operations. SQLite retains the selected, decoded HTML representation and the complete raw MIME. The HTTP message-detail response rewrites scoped CID references and sanitizes a copy for display; inspection derives diagnostics from stored raw MIME, parsed headers, and parsed bodies.
 
-### HTML preview sanitization
+### Standards, compatibility, and security
 
-Before returning HTML for preview, Hoomail removes or neutralizes:
+Rich HTML email—including table layouts, branding, color, typography, and elaborate inline styling—is valid `text/html`. Whether a particular declaration renders in Outlook, Gmail, Apple Mail, or another client is a compatibility question, not MIME validity. Hoomail preserves safe sender formatting to inspect the captured message, but does not claim pixel-perfect parity with those clients.
 
-- paired `script` blocks and standalone or self-closing `script` tags;
-- paired `iframe` blocks, but not standalone or self-closing `iframe` tags;
-- `object`, `embed`, `applet`, and `form` elements;
-- `base` and `meta` tags;
-- inline `on...` event-handler attributes; and
-- `javascript:`, `vbscript:`, and `data:text/html` URLs in `href`, `src`, `action`, or `formaction` attributes.
+Security is a third boundary. Hoomail uses a Bluemonday policy built on Go's HTML parser/tokenizer rather than regex replacement as the display security boundary. The policy preserves common email structures and ordinary formatting while allowing only a conservative set of inline presentation properties. Scripts, frames, forms, active embeds, event handlers, metadata/base changes, unsafe URL schemes, CSS URL/network functions, remote images, fonts, media, and other fetch initiators are removed. This follows the allowlist principle described by [OWASP's HTML sanitization guidance](https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html#html-sanitization).
 
-Dangerous URLs are replaced with `#`. **Security limitation:** this regex-based transformation does not cover standalone or self-closing `iframe` tags and is not a general-purpose browser security boundary or proof that arbitrary HTML is harmless in every context.
+Matching CID image sources are rewritten before final sanitization. Safe absolute `http:`, `https:`, and `mailto:` links can remain as inert, externalized metadata with `target="_blank"` and `rel="noopener noreferrer"`; the empty-sandbox preview itself cannot navigate or open them. Use the Inspect view to review extracted destinations before opening them separately. Remote image URLs and tracking pixels can still be reported by inspection from the stored HTML, but previewing a message never fetches them.
 
 ### Link and image extraction heuristics
 
@@ -269,7 +264,7 @@ Do not treat `last_message_id` as guaranteed dereferenceable history. It identif
 - Search is mailbox-local and field-limited; it is not full-text search over raw mail or attachments.
 - Each envelope recipient consumes independent storage for the message and all attachment bytes.
 - Inline CID resources do not contribute to the message-list attachment count. Recognized calendar parts can contribute to that count. Message detail always omits CID resources, but hides recognized calendar parts only when parsed iCalendar JSON is non-null; unparseable or wholly incomplete calendar content can remain downloadable, while any parsed event causes all recognized calendar parts in that message to be hidden. All remain stored.
-- Preview sanitization is regex-based and narrow. As a security limitation, standalone and self-closing `iframe` tags are not removed; inspection is heuristic and performs no remote or cryptographic verification.
+- Preview rendering uses a parsed allowlist, blocks remote resources by default, and keeps safe sender formatting without promising delivery-client parity. Inspection remains heuristic and performs no remote or cryptographic verification.
 - The MIME tree is structural, not a full decoder.
 - Calendar support is a practical subset of iCalendar, not complete RFC 5545 scheduling. Unknown methods have no documented scheduling contract.
 - Unknown `TZID` values silently become server-local time, and embedded `VTIMEZONE` data is not applied.

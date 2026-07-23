@@ -20,8 +20,8 @@ One static Go binary serves SMTP, POP3, the JSON API, server-sent events, and an
 ## Features
 
 - Catch mail without pre-creating inboxes. Each unique SMTP envelope recipient (`RCPT TO`) receives a normalized lowercase inbox, including BCC recipients.
-- View HTML and plain-text bodies, captured headers, a structural MIME tree, extracted links and external images, and heuristic checks for likely tracking pixels and other delivery concerns.
-- Render matching inline CID resources inside sanitized HTML. Regular image, PDF, and text attachments can be previewed; every regular attachment can be downloaded.
+- View standards-valid HTML and plain-text bodies, captured headers, a structural MIME tree, extracted links and external images, and heuristic checks for likely tracking pixels and other delivery concerns. Rich email styling is preserved within a parsed security allowlist; Hoomail is not a pixel-perfect Outlook or Gmail emulator.
+- Select MIME alternatives and related resources according to their multipart structure: selected HTML can retain the nearest earlier plain-text fallback, unselected alternatives contribute no ordinary attachments, and recognized calendar parts remain available for invite/calendar extraction. Decode common character sets and render matching inline CID images only from the selected related resources represented by parser storage. Remote content and active markup are blocked by default. A conservative raster/text attachment allowlist can be previewed; PDF and active formats are download-only.
 - Parse calendar parts and reconcile `PUBLISH`, `REQUEST`, `CANCEL`, and `REPLY` messages by event UID, sequence, cancellation state, and attendee participation.
 - Refresh mailbox counts, message lists, searches, and calendars through server-sent events.
 - Search within the selected inbox by subject, sender name/address, or plain-text body; mark messages read or unread, multi-select them, or delete them.
@@ -216,7 +216,7 @@ helm lint --strict charts/hoomail
 | `GET` | `/api/messages/{id}` | Get parsed message details; first retrieval also marks an unread message read |
 | `GET` | `/api/messages/{id}/inspect` | Inspect MIME structure, links, and message checks |
 | `POST` | `/api/messages/actions` | Delete messages or mark IDs read/unread |
-| `GET` | `/api/attachments/{id}` | Serve images, PDF, and text inline when possible; `?download=1` forces download |
+| `GET` | `/api/attachments/{id}` | Serve a conservative raster-image/plain-text allowlist inline with `nosniff`; PDF and active formats download only; `?download=1` forces download |
 | `GET` | `/api/events` | Subscribe to the best-effort, non-replayable SSE invalidation stream |
 | `POST` | `/api/send-test` | Generate a built-in message through the local SMTP listener |
 | `POST` | `/api/reset` | Irreversibly delete all stored data and reset generated ID sequences |
@@ -238,9 +238,11 @@ The release container is a scratch image containing the compiled server. The Vit
 
 ## Security
 
-Hoomail has no SMTP, POP3, or web authentication, no TLS, and no CSRF protection. Its HTTP server does not add a CORS policy or browser-security headers, and destructive API endpoints are available to every caller that can reach the service. It stores full message content and attachment bytes.
+Hoomail has no SMTP, POP3, or web authentication, no TLS, and no CSRF protection. Its HTTP server does not provide an application-wide browser-security-header policy, and destructive API endpoints are available to every caller that can reach the service. Message frames receive their own CSP/referrer restrictions, and attachment responses receive `nosniff`. Hoomail stores full message content and attachment bytes.
 
-HTML previews are sanitized and displayed in a sandboxed frame, but attachment endpoints can serve captured image, PDF, and text content inline using the stored media type. Run Hoomail only on a trusted development network or behind a reverse proxy that provides TLS, authentication, and an appropriate browser-header policy. Do not expose its ports directly to the public internet, share its origin with trusted applications, or use it as a production mail server.
+HTML previews are processed by a parsed allowlist and displayed in a sandboxed frame. Safe sender formatting—including email tables, ordinary typography, colors, spacing, and conservative inline CSS—is retained; scripts, active embeds, network-capable CSS, and remote subresources are removed. CID images resolve only from captured resources scoped to the selected multipart/related content represented by parser storage. The frame adds only security and containment rules: maximum-width containment, browser-default body margin with no Hoomail margin override, responsive image maximum width, CSP, and no-referrer—not Hoomail typography, colors, link styling, or padding. Attachment responses use `X-Content-Type-Options: nosniff`; only PNG, JPEG, GIF, WebP, plain text, and CSV are inline-capable, while PDF, HTML, SVG/XML, JavaScript, and other active or unknown formats are download-only. The app follows the browser/operating-system light or dark preference, while the isolated message canvas remains white unless safe sender styling changes it; Hoomail does not recolor message content to match the app. These security and containment choices are distinct from sender HTML standards validity and visual compatibility with particular mail clients. Run Hoomail only on a trusted development network or behind a reverse proxy that provides TLS, authentication, and an appropriate browser-header policy. Do not expose its ports directly to the public internet, share its origin with trusted applications, or use it as a production mail server.
+
+HTML email itself—including elaborate table layouts and inline styling—is standards-valid. Visual support still differs among clients, so Hoomail shows the safe sender-authored result rather than claiming Outlook/Gmail rendering parity. See [RFC 2854](https://www.rfc-editor.org/rfc/rfc2854), [Gmail's CSS guidance](https://developers.google.com/gmail/design/css), and [Microsoft's Outlook HTML/CSS guidance](https://learn.microsoft.com/en-us/previous-versions/office/developer/office-2007/aa338201(v=office.12)) for the distinction between MIME validity and client compatibility.
 
 ## Brand assets
 

@@ -57,7 +57,7 @@ func pointer(value string) *string { return &value }
 
 func TestMessageDetailCasingSanitizeCIDAndCalendarFiltering(t *testing.T) {
 	data := testStore(t)
-	html := `<p onclick="bad()"><img src="cid:owl"><a href="javascript:bad()">go</a></p><script>alert(1)</script>`
+	html := `<p onclick="bad()"><img src="cid:owl"><img src="https://tracker.example/pixel.png"><a href="https://safe.example/path">safe</a><a href="javascript:bad()">bad</a></p><div style="background-image:url(https://tracker.example/bg.png)">styled</div><script>alert(1)</script>`
 	ical := `[{"uid":"invite"}]`
 	stored, err := data.StoreMessage(context.Background(), store.StoreMessageInput{
 		Recipients: []string{"box@example.com"}, FromAddress: pointer("from@example.com"), FromName: pointer("Owl"),
@@ -97,11 +97,14 @@ func TestMessageDetailCasingSanitizeCIDAndCalendarFiltering(t *testing.T) {
 		}
 	}
 	clean := message["html"].(string)
-	if strings.Contains(clean, "onclick") || strings.Contains(clean, "<script") || strings.Contains(clean, "javascript:") {
-		t.Fatalf("unsafe html: %s", clean)
+	if strings.Contains(clean, "onclick") || strings.Contains(clean, "<script") || strings.Contains(clean, "javascript:") || strings.Contains(clean, "tracker.example") {
+		t.Fatalf("unsafe or remote HTML: %s", clean)
 	}
 	if !strings.Contains(clean, `src="/api/attachments/`) {
 		t.Fatalf("CID not rewritten: %s", clean)
+	}
+	if !strings.Contains(clean, `href="https://safe.example/path"`) || !strings.Contains(clean, `target="_blank"`) || !strings.Contains(clean, `rel="noopener noreferrer"`) {
+		t.Fatalf("safe link not externalized: %s", clean)
 	}
 	attachments := decoded["attachments"].([]any)
 	if len(attachments) != 1 || attachments[0].(map[string]any)["filename"] != "note.txt" {
@@ -117,7 +120,94 @@ func jsonNumber(value int64) string { return strconv.FormatInt(value, 10) }
 
 func TestAttachmentHeaders(t *testing.T) {
 	data := testStore(t)
-	stored, err := data.StoreMessage(context.Background(), store.StoreMessageInput{Recipients: []string{"a@example.com"}, To: []store.AddressEntry{}, CC: []store.AddressEntry{}, Headers: map[string]string{}, Attachments: []store.AttachmentInput{{Filename: pointer(`quo"te\\.txt`), ContentType: pointer("text/plain"), Content: []byte("hoot")}}})
+	handler := New(data, StaticConfig{}, nil)
+
+	tests := []struct {
+		name            string
+		filename        string
+		contentType     string
+		content         string
+		wantType        string
+		wantDisposition string
+	}{
+		{"raster image inline", "logo.png", " IMAGE/PNG ; name=logo.png", "image", "image/png", `inline; filename="logo.png"`},
+		{"jpeg image inline", "photo.jpg", "image/jpeg", "jpeg", "image/jpeg", `inline; filename="photo.jpg"`},
+		{"gif image inline", "motion.gif", "image/gif", "gif", "image/gif", `inline; filename="motion.gif"`},
+		{"webp image inline", "photo.webp", "image/webp", "webp", "image/webp", `inline; filename="photo.webp"`},
+		{"plain text inline", "note.txt", "Text/Plain; charset=utf-8", "plain", "text/plain", `inline; filename="note.txt"`},
+		{"csv inline", "data.csv", "text/csv; charset=utf-8", "a,b", "text/csv", `inline; filename="data.csv"`},
+		{"pdf download only", "document.pdf", "application/pdf", "%PDF", "application/pdf", `attachment; filename="document.pdf"`},
+		{"html download only", "page.html", "text/html; charset=utf-8", "<script>alert(1)</script>", "text/html", `attachment; filename="page.html"`},
+		{"svg download only", "vector.svg", "image/svg+xml", "<svg onload='alert(1)'></svg>", "image/svg+xml", `attachment; filename="vector.svg"`},
+		{"xhtml download only", "page.xhtml", "application/xhtml+xml", "<script>alert(1)</script>", "application/xhtml+xml", `attachment; filename="page.xhtml"`},
+		{"xml download only", "page.xml", "application/xml", "<script>alert(1)</script>", "application/xml", `attachment; filename="page.xml"`},
+		{"mhtml download only", "page.mhtml", "multipart/related", "active", "multipart/related", `attachment; filename="page.mhtml"`},
+		{"javascript download only", "page.js", "text/javascript", "alert(1)", "text/javascript", `attachment; filename="page.js"`},
+		{"mislabeled active download only", "picture.png", " TeXt/HtMl ; charset=utf-8", "<script>alert(1)</script>", "text/html", `attachment; filename="picture.png"`},
+		{"unknown download only", "payload.bin", "not a media type", "<script>alert(1)</script>", "application/octet-stream", `attachment; filename="payload.bin"`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			attachmentID := storeAttachment(t, data, test.filename, test.contentType, test.content)
+			response := request(t, handler, http.MethodGet, "/api/attachments/"+jsonNumber(attachmentID), "")
+			if response.Code != http.StatusOK || response.Body.String() != test.content {
+				t.Fatalf("status=%d body=%q", response.Code, response.Body.String())
+			}
+			if got := response.Header().Get("Content-Type"); got != test.wantType {
+				t.Errorf("Content-Type=%q, want %q", got, test.wantType)
+			}
+			if got := response.Header().Get("Content-Disposition"); got != test.wantDisposition {
+				t.Errorf("Content-Disposition=%q, want %q", got, test.wantDisposition)
+			}
+			if got := response.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+				t.Errorf("X-Content-Type-Options=%q", got)
+			}
+			if got := response.Header().Get("Content-Length"); got != strconv.Itoa(len(test.content)) {
+				t.Errorf("Content-Length=%q", got)
+			}
+			if got := response.Header().Get("Cache-Control"); got != "private, no-store" {
+				t.Errorf("Cache-Control=%q", got)
+			}
+		})
+	}
+}
+
+func TestAttachmentDownloadAndSafeUnicodeFilename(t *testing.T) {
+	data := testStore(t)
+	attachmentID := storeAttachment(t, data, "../ignored/\x00Résumé Q.txt", "text/plain", "hoot")
+	handler := New(data, StaticConfig{}, nil)
+
+	response := request(t, handler, http.MethodGet, "/api/attachments/"+jsonNumber(attachmentID), "")
+	if got := response.Header().Get("Content-Disposition"); got != `inline; filename="R_sum_ Q.txt"; filename*=UTF-8''R%C3%A9sum%C3%A9%20Q.txt` {
+		t.Fatalf("Content-Disposition=%q", got)
+	}
+	if strings.ContainsAny(response.Header().Get("Content-Disposition"), "\x00\r\n") || strings.Contains(response.Header().Get("Content-Disposition"), "../") {
+		t.Fatalf("unsafe Content-Disposition=%q", response.Header().Get("Content-Disposition"))
+	}
+
+	download := request(t, handler, http.MethodGet, "/api/attachments/"+jsonNumber(attachmentID)+"?download=1", "")
+	if got := download.Header().Get("Content-Disposition"); !strings.HasPrefix(got, "attachment;") {
+		t.Fatalf("download Content-Disposition=%q", got)
+	}
+	if got := download.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("download X-Content-Type-Options=%q", got)
+	}
+}
+
+func storeAttachment(t *testing.T, data *store.Store, filename, contentType, content string) int64 {
+	t.Helper()
+	stored, err := data.StoreMessage(context.Background(), store.StoreMessageInput{
+		Recipients: []string{"a@example.com"},
+		To:         []store.AddressEntry{},
+		CC:         []store.AddressEntry{},
+		Headers:    map[string]string{},
+		Attachments: []store.AttachmentInput{{
+			Filename:    pointer(filename),
+			ContentType: pointer(contentType),
+			Content:     []byte(content),
+		}},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,21 +215,7 @@ func TestAttachmentHeaders(t *testing.T) {
 	if err := data.DB().QueryRow(`SELECT id FROM attachments WHERE message_id=?`, stored[0].MessageID).Scan(&attachmentID); err != nil {
 		t.Fatal(err)
 	}
-	handler := New(data, StaticConfig{}, nil)
-	response := request(t, handler, http.MethodGet, "/api/attachments/"+jsonNumber(attachmentID), "")
-	if response.Code != 200 || response.Body.String() != "hoot" {
-		t.Fatalf("status=%d body=%q", response.Code, response.Body.String())
-	}
-	if got := response.Header().Get("Content-Disposition"); got != `inline; filename="quote.txt"` {
-		t.Fatalf("disposition=%q", got)
-	}
-	if response.Header().Get("Content-Type") != "text/plain" || response.Header().Get("Content-Length") != "4" || response.Header().Get("Cache-Control") != "private, max-age=3600" {
-		t.Fatalf("headers=%v", response.Header())
-	}
-	download := request(t, handler, http.MethodGet, "/api/attachments/"+jsonNumber(attachmentID)+"?download=1", "")
-	if got := download.Header().Get("Content-Disposition"); !strings.HasPrefix(got, "attachment;") {
-		t.Fatalf("download disposition=%q", got)
-	}
+	return attachmentID
 }
 
 func TestSSEHello(t *testing.T) {

@@ -234,7 +234,7 @@ Message fields:
 | `to` | address array | Parsed `To` recipients. |
 | `cc` | address array | Parsed `Cc` recipients. |
 | `subject` | string or `null` | Parsed subject. |
-| `html` | string or `null` | Sanitized HTML with known CID URLs rewritten as described below. |
+| `html` | string or `null` | Selected HTML representation after scoped CID rewriting and parsed allowlist sanitization, as described below. |
 | `text` | string or `null` | Plain-text body. |
 | `headers` | object | Parsed header names and string values. |
 | `size` | integer | Stored message size in bytes. |
@@ -282,12 +282,15 @@ Attachment metadata fields are `id` (integer), `filename` (string or `null`), `c
 
 #### HTML sanitization, CID rewriting, and attachment filtering
 
-The `html` field is transformed only on this parsed-detail route:
+The `html` field is a safe display projection, not a raw copy:
 
-1. A regex-based sanitizer removes script and iframe content; object, embed, applet, form, base, and meta elements; inline `on*` handlers; and detected `javascript:`, `vbscript:`, and `data:text/html` values in selected URL-bearing attributes.
-2. Quoted `cid:` URLs that match a stored attachment content ID are rewritten to `/api/attachments/{attachmentId}`.
+1. MIME ingestion recursively selects the supported `multipart/alternative` representation and the `multipart/related` root (`start` Content-ID, or the first part), with CID resources scoped to that selected related branch.
+2. Matching `cid:` image URLs are percent-decoded and rewritten to `/api/attachments/{attachmentId}`.
+3. A Bluemonday policy parses and allowlists the rewritten HTML. Safe email tables, ordinary text formatting, links, images, and conservative inline presentation properties remain; active elements/attributes, unsafe schemes, CSS network functions, remote subresources, fonts, frames, forms, media, and other fetch initiators are removed.
 
-This is a limited display sanitizer, not a general security boundary. It does not sanitize `text`, `headers`, raw MIME inspection output, or the bytes returned by the attachment endpoint.
+This policy intentionally accepts standards-valid rich HTML; it is a security boundary, not a rule that email must resemble plain correspondence. Client-specific CSS support remains a compatibility concern, and Hoomail does not emulate Gmail or Outlook pixel-for-pixel. The selected, charset-decoded HTML is stored without display sanitization, and the complete original MIME remains stored unchanged.
+
+Safe absolute HTTP(S) and `mailto:` anchors are externalized with `target="_blank"` and `rel="noopener noreferrer"`, but the empty-sandbox preview cannot navigate or open them. Inspection exposes destinations for explicit review/opening. Remote images may appear in inspection diagnostics but are never fetched by the detail projection or preview.
 
 The response's `attachments` array omits:
 
@@ -295,15 +298,6 @@ The response's `attachments` array omits:
 - when parsed calendar JSON exists for the message, non-CID parts recognized as calendar parts. Recognition is based on a content type containing `text/calendar` or `application/ics`, or a filename ending in `.ics`, case-insensitively.
 
 The underlying attachment remains addressable by its ID if a client already knows that ID.
-
-Responses:
-
-| Status | Body | Condition |
-| --- | --- | --- |
-| `200` | detail object | Message found; read update also succeeded. |
-| `400` | `{"error":"Invalid message id"}` | Invalid path ID. |
-| `404` | `{"error":"Message not found"}` | No message has that ID. |
-| `500` | plain text | Storage, read-state, or stored-JSON decoding failure. |
 
 ### `GET /api/messages/{id}/inspect`
 
@@ -464,26 +458,24 @@ This endpoint returns reconciled state, not every calendar part from every messa
 
 Returns the stored bytes directly, not JSON.
 
-Successful response headers:
+Successful inline-capable response example:
 
 ```text
 Content-Type: text/plain
 Content-Length: 42
 Content-Disposition: inline; filename="note.txt"
 Cache-Control: private, max-age=3600
+X-Content-Type-Options: nosniff
 ```
 
 Behavior:
 
-- `Content-Type` is the stored non-empty media type, otherwise `application/octet-stream`.
-- The filename is the stored non-empty filename, otherwise `attachment-{id}`.
-- Only `"` and `\` characters are removed from the filename before it is put in `Content-Disposition`; no broader filename normalization is promised.
-- The default disposition is `inline` only when the stored media type starts exactly with `image/`, starts exactly with `text/`, or equals exactly `application/pdf`.
-- All other media types use `attachment` even without a query parameter.
-- `?download=1` forces `attachment`. Other `download` values do not.
+- The stored content type is parsed, lowercased, and stripped of parameters. Missing, empty, or malformed values become `application/octet-stream`.
+- Only `image/png`, `image/jpeg`, `image/gif`, `image/webp`, `text/plain`, and `text/csv` are inline-capable. PDF, HTML/XHTML, SVG/XML, MHTML, JavaScript, unknown, and other active formats use `attachment`.
+- `?download=1` forces `attachment`; other `download` values do not.
+- Every attachment response, including validation, missing-record, and storage-error responses from this route, includes `X-Content-Type-Options: nosniff`.
+- The filename is reduced to its basename and control/path-separator characters are removed; a missing or unusable value becomes `attachment-{id}`. `Content-Disposition` includes a safe ASCII quoted fallback and, for non-ASCII names, a UTF-8 `filename*` parameter.
 - The private cache lifetime is one hour. After message deletion or reset, a browser or intermediary may retain a previously fetched private response until its cache lifetime expires; clients should clear relevant local caches when invalidated.
-
-The inline decision uses the stored media-type string as-is and is case-sensitive. For example, `application/pdf` is inline-capable, but a differently cased value or `application/pdf` with parameters does not exactly match the PDF allowance.
 
 Responses:
 
@@ -494,7 +486,7 @@ Responses:
 | `404` | JSON `Attachment not found` | Attachment is missing or has null content. |
 | `500` | plain text | Storage failure. |
 
-Attachment bytes are not sanitized. Inline-capable captured content is served under its stored media type on the Hoomail origin.
+Attachment bytes are not content-sanitized. The narrow inline allowlist, forced download for active/unknown formats, and `nosniff` reduce browser execution risk; Hoomail still must run on an isolated development origin.
 
 ## Destructive reset
 
@@ -634,12 +626,12 @@ Hoomail is intended for controlled development and test environments. The curren
 - no built-in TLS termination;
 - no CSRF token validation or Origin/Referer enforcement;
 - no CORS middleware and no configured `Access-Control-Allow-Origin` policy;
-- no application-wide browser security-header middleware: no configured Content Security Policy, HSTS, `X-Frame-Options`, `Referrer-Policy`, or `Permissions-Policy`, and no consistent `X-Content-Type-Options` policy;
+- no application-wide browser security-header middleware: no configured HSTS, `X-Frame-Options`, or `Permissions-Policy`; message frames receive their own restrictive CSP/referrer policy, and successful attachment responses receive `X-Content-Type-Options: nosniff`;
 - no authorization or confirmation requirement on destructive message, mailbox, and reset routes.
 
 Some Go standard-library error responses may add their own response-specific headers, but there is no application-wide security-header policy.
 
-CORS is not an authentication boundary, and non-browser network clients are unrestricted. Deploy Hoomail on an isolated origin behind a trusted reverse proxy or network boundary that provides TLS, authentication, access control, and an appropriate browser-security header policy. Do not share its origin with trusted applications, particularly because captured attachment bytes can be served inline under message-supplied media types.
+CORS is not an authentication boundary, and non-browser network clients are unrestricted. Deploy Hoomail on an isolated origin behind a trusted reverse proxy or network boundary that provides TLS, authentication, access control, and an appropriate browser-security header policy. Do not share its origin with trusted applications. Captured attachment bytes remain untrusted even though active and unknown formats are download-only by default.
 
 ## Implementation sources
 

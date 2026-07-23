@@ -76,25 +76,26 @@ Hoomail advertises `CHUNKING` in its `EHLO` response and accepts RFC 3030-style 
 
 ## MIME interpretation
 
-Hoomail retains the complete raw message while extracting a practical display model from MIME leaf parts. The following rules describe Hoomail's implementation, not every possible MIME user-agent behavior.
+Hoomail retains the complete raw message while deriving one practical display model from the MIME tree. HTML email is standards-valid, including elaborate tables and inline styling; MIME validity does not imply that Outlook, Gmail, and other clients implement every HTML/CSS feature identically. Hoomail preserves safe sender formatting, but it is not a pixel-perfect emulator of any delivery provider or desktop client.
 
-### Display bodies
+### Display-body selection
 
-- A non-attachment `text/plain` leaf becomes the plain-text body.
-- A non-attachment `text/html` leaf becomes the HTML body.
-- If multiple qualifying leaves of the same type occur, the last one encountered is retained. Hoomail does not expose every alternative as a separate body choice.
-- A named `text/plain` or `text/html` part is treated as an attachment rather than a display body.
-- HTML is sanitized before display. The original bytes remain available through the source and attachment data.
+- `multipart/alternative` is evaluated recursively and the last supported alternative wins, following the sender-preference order in [RFC 2046 section 5.1.4](https://www.rfc-editor.org/rfc/rfc2046#section-5.1.4). When that selected alternative provides HTML but no plain text, Hoomail may retain the nearest earlier supported plain-text-only alternative as its text fallback. That fallback contributes only text: related resources and ordinary attachments remain scoped to the selected branch.
+- `multipart/related` selects the part named by its `start` parameter, matching the part's normalized `Content-ID`; without `start`, the first part is the root. Hoomail recursively selects the display body from that root and associates inline resources only from the selected related branch. If `start` names no child, that related container supplies no display body.
+- `multipart/mixed` and other multipart containers use the first supported body aggregate. Remaining leaves are stored as attachments rather than replacing the selected body.
+- A named `text/plain` or `text/html` leaf, or a leaf explicitly marked `Content-Disposition: attachment`, is an attachment rather than a display body.
+- HTML is retained for safe sender-faithful rendering and later sanitized by the HTTP display projection. The original MIME bytes remain unchanged for POP3 and inspection.
 
 ### Attachment classification and filenames
 
-A leaf is persisted as an attachment when any of these conditions is true:
+Attachment classification depends on both leaf metadata and its position in the selected MIME structure:
 
-1. `Content-Disposition` is `attachment`;
-2. a filename or MIME `name` is present; or
-3. its media type is neither `text/plain` nor `text/html`.
+- a leaf with `Content-Disposition: attachment` or a filename/MIME `name` is an attachment;
+- non-display media and related resources are attachments;
+- after a mixed/unknown multipart selects its first supported body, leaves in the remaining branches are attachments, including otherwise displayable text; and
+- branches not selected from `multipart/alternative` contribute no ordinary attachments or independently displayed bodies. The only exceptions are the nearest earlier plain-text fallback described above and recognized calendar leaves, which are retained for calendar/invite extraction; the complete raw MIME still contains every branch.
 
-Consequently, unnamed images, application data, calendar data, and named text parts are attachments. The resolved filename preference is:
+If no supported body exists, all leaves are retained as attachments. The resolved filename preference is:
 
 1. a filename decoded by the MIME attachment-header parser;
 2. the `Content-Disposition` `filename` parameter;
@@ -102,9 +103,9 @@ Consequently, unnamed images, application data, calendar data, and named text pa
 
 ### Inline CID resources
 
-For an attachment with `Content-ID`, Hoomail trims whitespace and surrounding angle brackets before storing the identifier. In sanitized HTML, a matching `cid:` URL is rewritten to Hoomail's attachment endpoint. An unmatched `cid:` URL is left unchanged.
+For a resource with `Content-ID`, Hoomail trims whitespace and surrounding angle brackets before storing the identifier. Within the selected `multipart/related` branch, an HTML `cid:` URL is percent-decoded and matched to that identifier; a match is rewritten to Hoomail's attachment endpoint before the parsed HTML allowlist performs its final sanitization. Unresolved or out-of-branch CID references do not become network fallbacks.
 
-CID-bearing parts are not listed in the ordinary attachment list; they are intended to render through matching HTML references. Hoomail does not promise that an arbitrary or malformed CID reference will resolve.
+CID-bearing parts are not listed as ordinary attachments. The association follows [RFC 2387](https://www.rfc-editor.org/rfc/rfc2387) root selection and [RFC 2392](https://www.rfc-editor.org/rfc/rfc2392) Content-ID URL semantics; malformed, duplicate, or cross-branch identifiers have no guaranteed resolution.
 
 ### Calendar boundaries
 
@@ -114,14 +115,15 @@ An attachment-classified part is considered calendar input when any of these is 
 - its media type contains `application/ics`; or
 - its filename ends in `.ics`, case-insensitively.
 
-Parseable events are reconciled into the calendar model. Within one message, duplicate parsed events with the same `UID`, `SEQUENCE`, and `METHOD` are collapsed. Calendar parts remain stored as attachments. When the message contains at least one parsed calendar event, every calendar-classified part is omitted from the ordinary attachment list and represented through the message/calendar views. If the message contains no parsed calendar events, its calendar-looking parts remain ordinary attachments.
+Parseable events are reconciled into the calendar model, including events from recognized calendar leaves retained from otherwise unselected alternatives. Within one message, duplicate parsed events with the same `UID`, `SEQUENCE`, and `METHOD` are collapsed. Calendar parts remain stored as attachments. When the message contains at least one parsed calendar event, every calendar-classified part is omitted from the ordinary attachment list and represented through the message/calendar views. If the message contains no parsed calendar events, its calendar-looking parts remain ordinary attachments.
 
 ### Malformed MIME and charset handling
 
-- A missing or unparsable **part** `Content-Type` falls back to `text/plain` for Hoomail's leaf classification.
-- Unknown-character-set errors reported while opening the message, decoding the subject, or advancing parts are tolerated where the MIME library can continue.
-- Other malformed top-level headers, address fields, multipart structure, part iteration, body reads, or MIME errors can reject the entire SMTP transaction with the generic processing failure shown above.
-- Successful fallback does not repair the raw source; Hoomail stores the original payload unchanged.
+- An absent part `Content-Type` retains the MIME default of `text/plain`; a malformed explicit content type is not silently promoted into a display body and is retained as an opaque attachment.
+- Content-transfer encoding is decoded before text character decoding. Common registered character sets are converted to UTF-8 through go-message's charset support, so legacy mail such as ISO-8859-1 and Windows-1252 can be displayed alongside UTF-8 mail.
+- Unknown-character-set errors are tolerated when go-message can still expose the entity; Hoomail does not promise successful UTF-8 conversion for an unregistered or mislabeled charset. An unknown or malformed explicit transfer encoding is retained as opaque attachment content rather than guessed text.
+- Other malformed top-level headers, address fields, multipart structure, part reads, or MIME errors can reject the entire SMTP transaction with the generic processing failure shown above.
+- Fallback or decoded display representations never rewrite the retained raw source.
 
 ## Built-in sample sender
 
@@ -278,9 +280,17 @@ Clients should branch on the following current `-ERR` classes rather than expect
 
 EOF closes silently. Hoomail does not advertise or emit RFC 2449 extended response codes such as `[IN-USE]`.
 
+## Standards, compatibility, and security
+
+These are separate boundaries:
+
+- **Standards:** MIME defines valid body types, alternative preference, related roots, transfer encodings, character sets, and Content-ID references. Rich `text/html` is not invalid merely because it resembles a web page.
+- **Compatibility:** mail clients support different HTML and CSS subsets. A standards-valid message can render differently in Gmail, Outlook, Apple Mail, and Hoomail.
+- **Security:** Hoomail applies a parsed allowlist when presenting HTML, blocks active markup and remote resources by default, and limits inline attachment types. These restrictions protect the testing UI; they are not claims that the sender's MIME was invalid.
+
 ## Standards and implementation references
 
-Hoomail intentionally implements a small development-oriented subset and behavior profile. Protocol framing terminology comes from these authoritative specifications:
+Hoomail intentionally implements a development-oriented behavior profile. Protocol and media terminology comes from these primary specifications:
 
 - [RFC 5321 — Simple Mail Transfer Protocol](https://www.rfc-editor.org/rfc/rfc5321)
 - [RFC 1870 — SMTP Service Extension for Message Size Declaration](https://www.rfc-editor.org/rfc/rfc1870)
@@ -290,6 +300,9 @@ Hoomail intentionally implements a small development-oriented subset and behavio
 - [RFC 2047 — MIME Header Extensions for Non-ASCII Text](https://www.rfc-editor.org/rfc/rfc2047)
 - [RFC 2183 — Content-Disposition](https://www.rfc-editor.org/rfc/rfc2183)
 - [RFC 2392 — `cid:` and `mid:` URLs](https://www.rfc-editor.org/rfc/rfc2392)
+- [RFC 2387 — `multipart/related`](https://www.rfc-editor.org/rfc/rfc2387)
+- [RFC 2557 — MIME encapsulation of aggregate HTML documents](https://www.rfc-editor.org/rfc/rfc2557)
+- [RFC 2854 — `text/html`](https://www.rfc-editor.org/rfc/rfc2854)
 - [RFC 1939 — Post Office Protocol Version 3](https://www.rfc-editor.org/rfc/rfc1939)
 - [RFC 2449 — POP3 Extension Mechanism and CAPA](https://www.rfc-editor.org/rfc/rfc2449)
 

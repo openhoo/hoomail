@@ -1,4 +1,45 @@
+import { createConnection } from 'node:net'
 import { expect, messageRow, sendTestMessage, test } from './fixtures'
+
+async function sendRawMessage(raw: string): Promise<void> {
+  const socket = createConnection({ host: '127.0.0.1', port: Number(process.env.HOOMAIL_E2E_SMTP_PORT ?? '33125') })
+  socket.setEncoding('utf8')
+  let buffer = ''
+  const waitForReply = () => new Promise<string>((resolve, reject) => {
+    const onData = (chunk: string) => {
+      buffer += chunk
+      const lines = buffer.split('\r\n')
+      buffer = lines.pop() ?? ''
+      let final: string | undefined
+      for (let index = lines.length - 1; index >= 0; index -= 1) {
+        const line: string = lines[index]
+        if (!/^\d{3} /.test(line)) continue
+        final = line
+        break
+      }
+      if (!final) return
+      socket.off('data', onData)
+      resolve(final)
+    }
+    socket.on('data', onData)
+    socket.once('error', reject)
+  })
+  const command = async (value: string) => {
+    socket.write(`${value}\r\n`)
+    const reply = await waitForReply()
+    if (!/^[23]/.test(reply)) throw new Error(`SMTP rejected ${value}: ${reply}`)
+  }
+  await waitForReply()
+  await command('EHLO viewer.test')
+  await command('MAIL FROM:<sender@example.test>')
+  await command('RCPT TO:<privacy-viewer@hoomail.test>')
+  await command('DATA')
+  socket.write(`${raw.replace(/\r?\n/g, '\r\n')}\r\n.\r\n`)
+  const reply = await waitForReply()
+  if (!/^250 /.test(reply)) throw new Error(`SMTP rejected message: ${reply}`)
+  socket.end('QUIT\r\n')
+}
+
 
 test('message viewer tabs, inspection, and attachments expose the complete plain-message contract', async ({
   page,
@@ -117,4 +158,100 @@ test('switching plain to invite and back restores HTML without stale invite cont
   await expect(htmlFrame.getByRole('heading', { name: 'Hoot hoot! It works.', level: 1 })).toBeVisible()
   await expect(htmlFrame.locator('body')).toContainText(recipient)
   await expect(htmlFrame.locator('body')).not.toContainText(inviteTitle)
+})
+
+test('HTML preview preserves sender styling while blocking remote content and active previews', async ({ page }) => {
+  const remoteRequests: string[] = []
+  page.on('request', (request) => {
+    if (request.url().includes('remote.invalid')) remoteRequests.push(request.url())
+  })
+
+  const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
+  const raw = [
+    'From: Sender <sender@example.test>',
+    'To: privacy-viewer@hoomail.test',
+    'Subject: Sender faithful privacy preview',
+    'MIME-Version: 1.0',
+    'Content-Type: multipart/mixed; boundary="outer"',
+    '',
+    '--outer',
+    'Content-Type: multipart/related; boundary="related"; start="<root@example.test>"',
+    '',
+    '--related',
+    'Content-Type: text/html; charset=utf-8',
+    'Content-ID: <root@example.test>',
+    '',
+    '<!doctype html><html><head><link rel="stylesheet" href="https://remote.invalid/email.css"></head><body style="color:rgb(12,34,56)"><table style="border-collapse:collapse"><tr><td style="padding:7px">Sender table</td><td style="padding:7px"><img alt="CID logo" src="cid:logo@example.test"><img alt="Remote tracking pixel" src="https://remote.invalid/pixel.png"></td></tr></table></body></html>',
+    '--related',
+    'Content-Type: image/png; name="logo.png"',
+    'Content-Disposition: inline; filename="logo.png"',
+    'Content-ID: <logo@example.test>',
+    'Content-Transfer-Encoding: base64',
+    '',
+    png,
+    '--related--',
+    '--outer',
+    'Content-Type: application/pdf; name="report.pdf"',
+    'Content-Disposition: attachment; filename="report.pdf"',
+    'Content-Transfer-Encoding: base64',
+    '',
+    'JVBERi0xLjQKJSVFT0Y=',
+    '--outer',
+    'Content-Type: image/svg+xml; name="active.svg"',
+    'Content-Disposition: attachment; filename="active.svg"',
+    '',
+    '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>',
+    '--outer--',
+  ].join('\r\n')
+
+  await sendRawMessage(raw)
+  const row = page
+    .getByRole('list', { name: 'Messages' })
+    .getByRole('button', { name: /^Sender, Sender faithful privacy preview,/ })
+    .last()
+  await expect(row).toBeVisible()
+  await row.click()
+  await expect(page.getByRole('status').filter({ hasText: 'Message loaded: Sender faithful privacy preview' })).toBeVisible()
+
+  const iframe = page.locator('iframe[title="Email HTML content"]')
+  await expect(iframe).toHaveAttribute('sandbox', '')
+  await expect(iframe).toHaveAttribute('referrerpolicy', 'no-referrer')
+  const frame = page.frameLocator('iframe[title="Email HTML content"]')
+  const senderTable = frame.getByRole('table').filter({ hasText: 'Sender table' })
+  const senderCell = frame.getByRole('cell', { name: 'Sender table' })
+  const cidLogo = frame.getByRole('img', { name: 'CID logo' })
+  await expect(senderTable).toBeVisible()
+  await expect(senderCell).toBeVisible()
+  await expect(cidLogo).toBeVisible()
+  await expect.poll(() => cidLogo.evaluate((image: HTMLImageElement) => image.naturalWidth)).toBe(1)
+  const senderStyles = await frame.locator('body').evaluate((body) => {
+    const style = getComputedStyle(body)
+    const table = body.querySelector('table')
+    const cell = body.querySelector('td')
+    return {
+      color: style.color,
+      margin: style.margin,
+      padding: style.padding,
+      background: style.backgroundColor,
+      fontFamily: style.fontFamily,
+      tableBorderCollapse: table ? getComputedStyle(table).borderCollapse : '',
+      cellPadding: cell ? getComputedStyle(cell).padding : '',
+    }
+  })
+  expect(senderStyles).toEqual({
+    color: 'rgb(12, 34, 56)',
+    margin: '8px',
+    padding: '0px',
+    background: 'rgba(0, 0, 0, 0)',
+    fontFamily: '"Times New Roman"',
+    tableBorderCollapse: 'collapse',
+    cellPadding: '7px',
+  })
+  await page.waitForTimeout(100)
+  expect(remoteRequests).toEqual([])
+
+  for (const name of ['report.pdf', 'active.svg']) {
+    await expect(page.getByRole('link', { name: `Download ${name}` })).toBeVisible()
+    await expect(page.getByRole('button', { name: `Preview ${name}` })).toHaveCount(0)
+  }
 })

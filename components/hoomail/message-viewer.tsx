@@ -19,24 +19,31 @@ import {
   useCachedResource,
 } from './use-hoomail'
 
-const IFRAME_BASE_STYLES = `
+const IFRAME_CONTAINMENT_STYLES = `
   <style>
-    :root { color-scheme: light; }
-    body {
-      margin: 0;
-      padding: 16px;
-      background: #ffffff;
-      color: #1a1a1a;
-      font-family: -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-      font-size: 14px;
-      line-height: 1.55;
-      word-wrap: break-word;
-    }
-    img { max-width: 100%; height: auto; }
-    a { color: #1d4ed8; }
-    pre { white-space: pre-wrap; }
+    html, body { max-width: 100%; }
+    img { max-width: 100%; }
   </style>
 `
+
+function iframeDocumentPrefix(): string {
+  const attachmentSource = new URL('/api/attachments/', window.location.href).href
+  const policy = [
+    "default-src 'none'",
+    `img-src ${attachmentSource}`,
+    "style-src 'unsafe-inline'",
+    "script-src 'none'",
+    "object-src 'none'",
+    "frame-src 'none'",
+    "child-src 'none'",
+    "form-action 'none'",
+    "connect-src 'none'",
+    "media-src 'none'",
+    "font-src 'none'",
+    "base-uri 'none'",
+  ].join('; ')
+  return `<meta http-equiv="Content-Security-Policy" content="${policy}"><meta name="referrer" content="no-referrer">${IFRAME_CONTAINMENT_STYLES}`
+}
 
 export function MessageViewer({
   message,
@@ -51,11 +58,12 @@ export function MessageViewer({
 }) {
   const htmlDoc = useMemo(() => {
     if (!message?.html) return null
+    const prefix = iframeDocumentPrefix()
     const hasHead = /<head[\s>]/i.test(message.html)
     if (hasHead) {
-      return message.html.replace(/<head([^>]*)>/i, `<head$1>${IFRAME_BASE_STYLES}`)
+      return message.html.replace(/<head([^>]*)>/i, `<head$1>${prefix}`)
     }
-    return `<!DOCTYPE html><html><head>${IFRAME_BASE_STYLES}</head><body>${message.html}</body></html>`
+    return `<!DOCTYPE html><html><head>${prefix}</head><body>${message.html}</body></html>`
   }, [message?.html])
 
   // Choose the new message's default tab during the same render. Updating the
@@ -262,6 +270,7 @@ function HtmlFrame({ doc, onReady }: { doc: string; onReady: () => void }) {
         title="Email HTML content"
         srcDoc={doc}
         sandbox=""
+        referrerPolicy="no-referrer"
         tabIndex={visibleDoc === doc ? 0 : -1}
         aria-hidden={visibleDoc === doc ? undefined : "true"}
         onLoad={reveal}
@@ -273,7 +282,7 @@ function HtmlFrame({ doc, onReady }: { doc: string; onReady: () => void }) {
           title="Previous email content"
           srcDoc={prevDoc}
           sandbox=""
-          aria-hidden="true"
+          referrerPolicy="no-referrer"
           tabIndex={-1}
           className="absolute inset-0 size-full border-0"
         />
@@ -282,11 +291,11 @@ function HtmlFrame({ doc, onReady }: { doc: string; onReady: () => void }) {
   )
 }
 
-function isPreviewable(contentType: string | null): 'image' | 'pdf' | 'text' | null {
+function isPreviewable(contentType: string | null): 'image' | 'text' | null {
   if (!contentType) return null
-  if (contentType.startsWith('image/')) return 'image'
-  if (contentType === 'application/pdf') return 'pdf'
-  if (contentType.startsWith('text/')) return 'text'
+  const normalized = contentType.split(';', 1)[0].trim().toLowerCase()
+  if (['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(normalized)) return 'image'
+  if (normalized === 'text/plain' || normalized === 'text/csv') return 'text'
   return null
 }
 
@@ -363,9 +372,6 @@ function AttachmentChip({ attachment }: { attachment: AttachmentMeta }) {
                 {/* Served from our own API; dimensions are unknown. */}
                 <img src={url || "/placeholder.svg"} alt={name} className="max-h-[62vh] max-w-full object-contain" />
               </div>
-            )}
-            {previewKind === 'pdf' && (
-              <iframe title={name} src={url} tabIndex={-1} className="h-[65vh] w-full border-0" />
             )}
             {previewKind === 'text' && <TextPreview url={url} active={open} />}
           </div>
