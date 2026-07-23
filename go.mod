@@ -1,6 +1,6 @@
 module github.com/openhoo/hoomail
 
-go 1.24.0
+go 1.26.0
 
 require (
 	github.com/emersion/go-message v0.18.2
