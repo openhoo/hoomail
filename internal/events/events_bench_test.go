@@ -23,22 +23,22 @@ func BenchmarkHubBroadcast(b *testing.B) {
 			})
 
 			event := MessageNew(42, 101, stringPointer("Benchmark message"), stringPointer("sender@example.com"), stringPointer("Benchmark Sender"))
-		b.ReportAllocs()
-		b.ResetTimer()
-		for range b.N {
-			hub.Broadcast(event)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				hub.Broadcast(event)
 
-			b.StopTimer()
-			for _, subscriber := range subscribers {
-				select {
-				case received := <-subscriber:
-					benchmarkBroadcastEvent = received
-				default:
-					b.Fatal("subscriber did not receive broadcast")
+				b.StopTimer()
+				for _, subscriber := range subscribers {
+					select {
+					case received := <-subscriber:
+						benchmarkBroadcastEvent = received
+					default:
+						b.Fatal("subscriber did not receive broadcast")
+					}
 				}
+				b.StartTimer()
 			}
-			b.StartTimer()
-		}
 		})
 	}
 }
