@@ -1,0 +1,16 @@
+.git
+.github
+.hooversion
+node_modules
+web/dist
+data
+.env*
+.gitignore
+CHANGELOG.md
+LICENSE
+hooversion.config.ts
+*.log
+hoomail
+.v0-trash
+.snowflake
+.vercel

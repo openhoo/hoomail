@@ -1,0 +1,155 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUN_VERSION: 1.3.14
+  GO_VERSION: 1.24.12
+  HOOVERSION_SHA: 799ecf4a9c29e8ce4d5ad7055a6030adf665cf82 # v0.2.0
+
+jobs:
+  commitlint:
+    name: Conventional Commits
+    if: github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore(release):')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install Hooversion
+        run: |
+          set -euo pipefail
+          install_dir="$(mktemp -d "$RUNNER_TEMP/hooversion.XXXXXXXX")"
+          echo "HOOVERSION_DIR=$install_dir" >> "$GITHUB_ENV"
+          git init "$install_dir"
+          git -C "$install_dir" fetch --depth 1 https://github.com/openhoo/hooversion.git "$HOOVERSION_SHA"
+          git -C "$install_dir" checkout --detach FETCH_HEAD
+          test "$(git -C "$install_dir" rev-parse HEAD)" = "$HOOVERSION_SHA"
+          cd "$install_dir"
+          bun install --frozen-lockfile
+
+      - name: Lint commits
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            bun "$HOOVERSION_DIR/src/cli.ts" lint \
+              --from "${{ github.event.pull_request.base.sha }}" \
+              --to "${{ github.event.pull_request.head.sha }}"
+          else
+            bun "$HOOVERSION_DIR/src/cli.ts" lint --last
+          fi
+
+      - name: Remove Hooversion checkout
+        if: always()
+        run: test -z "${HOOVERSION_DIR:-}" || rm -rf "$HOOVERSION_DIR"
+
+  client:
+    name: Preact client
+    needs: commitlint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Type check
+        run: bun x tsc --noEmit
+
+      - name: Build
+        run: bun run build
+
+  test:
+    name: Go tests
+    needs: commitlint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Test
+        run: go test -race ./...
+
+      - name: Check formatting
+        run: test -z "$(gofmt -l cmd internal web)"
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Verify modules
+        run: go mod verify
+
+      - name: Scan reachable Go vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+
+      - name: Scan Go security patterns
+        run: go run github.com/securego/gosec/v2/cmd/gosec@v2.28.0 -quiet ./...
+
+  docker:
+    name: Docker build and smoke
+    needs:
+      - client
+      - test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Build image
+        run: docker build --build-arg VERSION=0.0.0-ci -t hoomail:ci .
+
+      - name: Verify embedded version
+        run: test "$(docker run --rm hoomail:ci version)" = "0.0.0-ci"
+
+      - name: Smoke HTTP and SMTP
+        run: |
+          set -euo pipefail
+          docker run --rm -d --name hoomail-ci \
+            --tmpfs /app/data:rw,noexec,nosuid,uid=65532,gid=65532,size=64m \
+            -p 3000:3000 -p 2525:2525 hoomail:ci
+          for attempt in $(seq 1 30); do
+            if docker exec hoomail-ci /hoomail healthcheck; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs hoomail-ci
+          exit 1
+
+      - name: Remove CI container and image
+        if: always()
+        run: |
+          docker rm -f hoomail-ci 2>/dev/null || true
+          docker image rm hoomail:ci 2>/dev/null || true
