@@ -31,11 +31,12 @@ FROM scratch
 WORKDIR /app
 ENV PORT=3000 \
     HOOMAIL_SMTP_PORT=2525 \
+    HOOMAIL_POP3_PORT=3110 \
     HOOMAIL_DB_PATH=/app/data/hoomail.db
 COPY --from=server /hoomail /hoomail
 USER 65532:65532
 VOLUME ["/app/data"]
-EXPOSE 3000 2525
+EXPOSE 3000 2525 3110
 HEALTHCHECK --interval=30s --timeout=3s --start-period=3s --retries=3 \
   CMD ["/hoomail", "healthcheck"]
 ENTRYPOINT ["/hoomail"]

@@ -55,6 +55,61 @@ func (store *Store) GetMessageRaw(ctx context.Context, id int64) (*RawMessage, e
 	return &raw, err
 }
 
+func (store *Store) OpenPOP3Mailbox(ctx context.Context, rawAddress string) ([]POP3Message, error) {
+	address := strings.TrimSpace(strings.ToLower(rawAddress))
+	if address == "" {
+		return nil, errors.New("mailbox address is empty")
+	}
+	now := store.now().UnixMilli()
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	var mailboxID int64
+	lookupErr := tx.QueryRowContext(ctx, `SELECT id FROM mailboxes WHERE address=?`, address).Scan(&mailboxID)
+	isNew := errors.Is(lookupErr, sql.ErrNoRows)
+	if lookupErr != nil && !isNew {
+		return nil, lookupErr
+	}
+	if isNew {
+		result, insertErr := tx.ExecContext(ctx, `INSERT INTO mailboxes(address,created_at,last_message_at) VALUES(?,?,NULL)`, address, now)
+		if insertErr != nil {
+			return nil, insertErr
+		}
+		mailboxID, err = result.LastInsertId()
+		if err != nil {
+			return nil, err
+		}
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT id,raw FROM messages WHERE mailbox_id=? ORDER BY received_at ASC,id ASC`, mailboxID)
+	if err != nil {
+		return nil, err
+	}
+	messages := []POP3Message{}
+	for rows.Next() {
+		var message POP3Message
+		if err := rows.Scan(&message.ID, &message.Raw); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		messages = append(messages, message)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	if isNew {
+		store.emit(events.MailboxNew(mailboxID, address))
+	}
+	return messages, nil
+}
+
 func (store *Store) MarkRead(ctx context.Context, id, mailboxID int64, wasRead int) error {
 	if wasRead != 0 {
 		return nil

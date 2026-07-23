@@ -14,9 +14,9 @@
     "isolatedModules": true,
     "jsx": "react-jsx",
     "jsxImportSource": "preact",
-    "types": ["vite/client"],
+    "types": ["vite/client", "node"],
     "baseUrl": ".",
     "paths": { "@/*": ["./*"] }
   },
-  "include": ["main.tsx", "vite.config.ts", "components/**/*.ts", "components/**/*.tsx", "lib/utils.ts"]
+  "include": ["main.tsx", "vite.config.ts", "playwright.config.ts", "e2e/**/*.ts", "components/**/*.ts", "components/**/*.tsx", "lib/utils.ts"]
 }

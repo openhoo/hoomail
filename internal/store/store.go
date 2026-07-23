@@ -238,6 +238,11 @@ type StoredMessage struct {
 	MessageID int64
 }
 
+type POP3Message struct {
+	ID  int64
+	Raw []byte
+}
+
 func (store *Store) ListMailboxes(ctx context.Context) ([]Mailbox, error) {
 	rows, err := store.db.QueryContext(ctx, `SELECT m.id,m.address,m.created_at,m.last_message_at,(SELECT COUNT(*) FROM messages WHERE mailbox_id=m.id),(SELECT COUNT(*) FROM messages WHERE mailbox_id=m.id AND is_read=0) FROM mailboxes m ORDER BY COALESCE(m.last_message_at,m.created_at) DESC`)
 	if err != nil {

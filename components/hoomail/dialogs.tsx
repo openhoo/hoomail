@@ -103,8 +103,14 @@ export function SendTestDialog({
                 else if (event.key === 'ArrowRight' || event.key === 'ArrowDown') next = (current + 1) % radios.length
                 else return
                 event.preventDefault()
+                const value = ['plain', 'invite', 'update', 'cancellation'][next] as typeof kind
                 radios[next]?.focus()
-                radios[next]?.click()
+                setKind(value)
+                setSubject((previous) => {
+                  const defaults = ['hoomail delivery test', 'Owl standup meeting']
+                  if (!defaults.includes(previous)) return previous
+                  return value === 'plain' ? 'hoomail delivery test' : 'Owl standup meeting'
+                })
               }}
             >
               {(

@@ -41,13 +41,14 @@ export function HoomailApp() {
   // Auto-select the first mailbox when none is selected
   useEffect(() => {
     if (selectedMailboxId == null && mailboxes.length > 0) {
+      mutateCache(`/api/mailboxes/${mailboxes[0].id}/messages`)
       setSelectedMailboxId(mailboxes[0].id)
     }
   }, [mailboxes, selectedMailboxId])
 
   // If the selected mailbox disappeared (e.g. after reset), clear selection
   useEffect(() => {
-    if (selectedMailboxId != null && mailboxes.length > 0) {
+    if (selectedMailboxId != null) {
       if (!mailboxes.some((m) => m.id === selectedMailboxId)) {
         setSelectedMailboxId(null)
         setSelectedMessageId(null)
@@ -87,6 +88,7 @@ export function HoomailApp() {
   }
 
   const selectMailbox = (id: number) => {
+    mutateCache(`/api/mailboxes/${id}/messages`)
     setSelectedMailboxId(id)
     setSelectedMessageId(null)
     setSelectedIds(new Set())
@@ -96,6 +98,9 @@ export function HoomailApp() {
 
   const handleSearchChange = (query: string) => {
     setSearchQuery(query)
+    if (query.trim() === '' && selectedMailboxId != null) {
+      mutateCache(`/api/mailboxes/${selectedMailboxId}/messages`)
+    }
     // Filtering changes row indices, so a kept selection would be misleading
     setSelectedIds(new Set())
     anchorIdRef.current = null
@@ -342,7 +347,10 @@ export function HoomailApp() {
             size="sm"
             variant={view === 'calendar' ? 'secondary' : 'ghost'}
             className="h-7 px-2.5 text-xs"
-            onClick={() => setView('calendar')}
+            onClick={() => {
+              if (selectedMailboxId != null) mutateCache(`/api/mailboxes/${selectedMailboxId}/events`)
+              setView('calendar')
+            }}
             aria-pressed={view === 'calendar'}
           >
             <CalendarDays className="size-3.5" aria-hidden="true" />

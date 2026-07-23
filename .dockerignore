@@ -14,3 +14,6 @@ hoomail
 .v0-trash
 .snowflake
 .vercel
+playwright-report
+test-results
+.e2e-runtime

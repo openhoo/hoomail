@@ -12,12 +12,12 @@ export interface MimeNode { contentType: string; charset: string | null; encodin
 export interface ExtractedLink { href: string; text: string; kind: 'link' | 'image' | 'tracking-pixel' }
 export interface HeaderCheck { id: string; label: string; status: 'pass' | 'warn' | 'fail' | 'info'; detail: string }
 
-type CacheEntry = { data?: unknown; error?: unknown; promise?: Promise<void>; revalidateAfter?: boolean; listeners: Set<() => void> }
+type CacheEntry = { data?: unknown; error?: unknown; promise?: Promise<void>; revalidateAfter?: boolean; generation: number; listeners: Set<() => void> }
 const cache = new Map<string, CacheEntry>()
 
 function entry(key: string) {
   let value = cache.get(key)
-  if (!value) { value = { listeners: new Set() }; cache.set(key, value) }
+  if (!value) { value = { generation: 0, listeners: new Set() }; cache.set(key, value) }
   return value
 }
 
@@ -27,7 +27,15 @@ async function fetchInto<T>(key: string, fetcher: (key: string) => Promise<T>, f
     if (force) current.revalidateAfter = true
     return current.promise
   }
-  current.promise = fetcher(key).then((data) => { current.data = data; current.error = undefined }).catch((error) => { current.error = error }).finally(() => {
+  const generation = current.generation
+  const promise = fetcher(key).then((data) => {
+    if (current.generation !== generation) return
+    current.data = data
+    current.error = undefined
+  }).catch((error) => {
+    if (current.generation === generation) current.error = error
+  }).finally(() => {
+    if (current.promise !== promise) return
     current.promise = undefined
     current.listeners.forEach((listener) => listener())
     if (current.revalidateAfter) {
@@ -35,8 +43,9 @@ async function fetchInto<T>(key: string, fetcher: (key: string) => Promise<T>, f
       void fetchInto(key, fetcher)
     }
   })
+  current.promise = promise
   current.listeners.forEach((listener) => listener())
-  return current.promise
+  return promise
 }
 
 export type CacheMatcher = string | ((key: string) => boolean)
@@ -45,7 +54,10 @@ export function mutateCache<T>(matcher: CacheMatcher, updater?: (data: T | undef
   if (typeof matcher === 'string' && keys.length === 0) keys.push(matcher)
   for (const key of keys) {
     const current = entry(key)
-    if (updater) current.data = updater(current.data as T | undefined)
+    if (updater) {
+      current.generation++
+      current.data = updater(current.data as T | undefined)
+    }
     current.listeners.forEach((listener) => listener())
     if (revalidate) void fetchInto(key, jsonFetcher, true)
   }
@@ -81,7 +93,7 @@ const jsonFetcher = async <T,>(url: string): Promise<T> => {
 }
 
 export function useMailboxes() { const { data, isLoading } = useCachedResource<{ mailboxes: Mailbox[] }>('/api/mailboxes'); return { mailboxes: data?.mailboxes ?? [], isLoading } }
-export function useMessages(mailboxId: number | null, query?: string) { const q = query?.trim(); const key = mailboxId == null ? null : `/api/mailboxes/${mailboxId}/messages${q ? `?q=${encodeURIComponent(q)}` : ''}`; const { data, isLoading } = useCachedResource<{ messages: MessageListItem[] }>(key, jsonFetcher, true); return { messages: data?.messages ?? [], isLoading } }
+export function useMessages(mailboxId: number | null, query?: string) { const q = query?.trim(); const key = mailboxId == null ? null : `/api/mailboxes/${mailboxId}/messages${q ? `?q=${encodeURIComponent(q)}` : ''}`; const { data, isLoading } = useCachedResource<{ messages: MessageListItem[] }>(key, jsonFetcher, true); return { messages: mailboxId == null ? [] : data?.messages ?? [], isLoading } }
 export function useCalendarEvents(mailboxId: number | null, enabled: boolean) { const { data, isLoading } = useCachedResource<{ events: CalendarEvent[] }>(enabled && mailboxId != null ? `/api/mailboxes/${mailboxId}/events` : null); return { events: data?.events ?? [], isLoading } }
 export function useInspection(messageId: number | null, enabled: boolean) { const { data, isLoading } = useCachedResource<{ mimeTree: MimeNode | null; links: ExtractedLink[]; checks: HeaderCheck[] }>(enabled && messageId != null ? `/api/messages/${messageId}/inspect` : null); return { inspection: data ?? null, isLoading } }
 export function useMessage(messageId: number | null) { const { data, isLoading } = useCachedResource<{ message: FullMessage; attachments: AttachmentMeta[] }>(messageId != null ? `/api/messages/${messageId}` : null, jsonFetcher, true); return messageId == null ? { detail: null, isLoading: false } : { detail: data ?? null, isLoading } }
@@ -97,15 +109,27 @@ export function useRealtime(options: { selectedMailboxId: number | null; onReset
     source.onmessage = (event) => {
       let payload: { type: string; [key: string]: unknown }
       try { payload = JSON.parse(event.data) } catch { return }
-      const { selectedMailboxId, onReset, onNewMailbox, onMailboxDeleted } = optionsRef.current
+      const { onReset, onNewMailbox, onMailboxDeleted } = optionsRef.current
       const mailboxId = payload.mailboxId as number
       switch (payload.type) {
         case 'mailbox:new': mutateCache('/api/mailboxes'); onNewMailbox?.(payload.mailbox as { id: number; address: string }); break
         case 'mailbox:deleted': mutateCache('/api/mailboxes'); onMailboxDeleted?.(mailboxId); break
         case 'message:new':
-        case 'messages:changed': mutateCache('/api/mailboxes'); if (selectedMailboxId === mailboxId) mutateCache((key) => key.startsWith(`/api/mailboxes/${mailboxId}/messages`)); break
-        case 'calendar:changed': if (selectedMailboxId === mailboxId) mutateCache(`/api/mailboxes/${mailboxId}/events`); break
-        case 'reset': mutateCache('/api/mailboxes'); onReset(); break
+        case 'messages:changed':
+          mutateCache('/api/mailboxes')
+          mutateCache(`/api/mailboxes/${mailboxId}/messages`)
+          mutateCache((key) => key.startsWith(`/api/mailboxes/${mailboxId}/messages?`))
+          break
+        case 'calendar:changed': mutateCache(`/api/mailboxes/${mailboxId}/events`); break
+        case 'reset':
+          mutateCache('/api/mailboxes')
+          mutateCache(
+            (key) => /^\/api\/mailboxes\/\d+\/(?:messages|events)(?:\?|$)/.test(key) || /^\/api\/messages\/\d+(?:\/inspect)?$/.test(key),
+            () => undefined,
+            false,
+          )
+          onReset()
+          break
       }
     }
     return () => source.close()

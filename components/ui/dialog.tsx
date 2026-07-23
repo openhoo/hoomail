@@ -10,6 +10,7 @@ import {
   useContext,
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
 } from "preact/hooks"
@@ -183,7 +184,7 @@ function DialogContent({
   const { open, setOpen, titleId, descriptionId, contentId, triggerRef, hasDescription } = useDialogContext()
   const contentRef = useRef<HTMLDivElement | null>(null)
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!open) return
     const previousActiveElement = document.activeElement as HTMLElement | null
     const previousOverflow = document.body.style.overflow

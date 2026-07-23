@@ -104,6 +104,45 @@ func TestListMessagesEscapesLikeWildcards(t *testing.T) {
 	}
 }
 
+func TestOpenPOP3MailboxCreatesMissingInboxAndReturnsRawMessages(t *testing.T) {
+	var emitted []events.Event
+	store := openTestStore(t, WithClock(func() time.Time { return time.UnixMilli(1234) }), WithBroadcaster(func(event events.Event) {
+		emitted = append(emitted, event)
+	}))
+	ctx := context.Background()
+	messages, err := store.OpenPOP3Mailbox(ctx, " New@Example.com ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 0 {
+		t.Fatalf("messages=%v", messages)
+	}
+	mailboxes, err := store.ListMailboxes(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mailboxes) != 1 || mailboxes[0].Address != "new@example.com" || mailboxes[0].LastMessageAt != nil {
+		t.Fatalf("mailboxes=%+v", mailboxes)
+	}
+	if len(emitted) != 1 || emitted[0].Type != events.TypeMailboxNew {
+		t.Fatalf("events=%v", emitted)
+	}
+	raw := []byte("Subject: stored\r\n\r\nbody\r\n")
+	if _, err := store.StoreMessage(ctx, StoreMessageInput{Recipients: []string{"new@example.com"}, Headers: map[string]string{}, Raw: raw}); err != nil {
+		t.Fatal(err)
+	}
+	messages, err = store.OpenPOP3Mailbox(ctx, "NEW@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 1 || string(messages[0].Raw) != string(raw) {
+		t.Fatalf("messages=%v", messages)
+	}
+	if len(emitted) != 2 || emitted[1].Type != events.TypeMessageNew {
+		t.Fatalf("duplicate mailbox event: %v", emitted)
+	}
+}
+
 func TestDeleteCascadeAndWipeResetSequences(t *testing.T) {
 	store := openTestStore(t, WithBroadcaster(func(events.Event) {}))
 	ctx := context.Background()
