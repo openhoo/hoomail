@@ -147,7 +147,7 @@ curl --fail-with-body \
 
 Malformed JSON, a non-object JSON value, or an empty body is currently treated like an empty request and therefore uses the defaults. Failure to connect to or complete the SMTP transaction returns HTTP `502` with `Could not reach the SMTP server. Is it running?`.
 
-> **Security and validation warning:** `subject` receives no CR/LF validation. The API trims only surrounding whitespace; embedded carriage returns and line feeds remain and are written into generated message headers and, for calendar kinds, ICS fields. Callers must not pass untrusted subject text. This is a current limitation, not an implemented validation guarantee.
+The sender treats both fields as untrusted. Recipient headers are serialized with `net/mail`; subject headers use RFC 2047 encoded words; plain-text and calendar bodies use MIME quoted-printable encoding; HTML interpolations are entity-escaped; and iCalendar values escape backslashes, line breaks, semicolons, and commas. Embedded CR/LF therefore cannot create additional message headers or MIME parts.
 
 The SMTP transaction uses:
 
