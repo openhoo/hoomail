@@ -15,7 +15,6 @@
     "jsx": "react-jsx",
     "jsxImportSource": "preact",
     "types": ["vite/client", "node"],
-    "baseUrl": ".",
     "paths": { "@/*": ["./*"] }
   },
   "include": ["main.tsx", "vite.config.ts", "playwright.config.ts", "e2e/**/*.ts", "components/**/*.ts", "components/**/*.tsx", "lib/utils.ts"]

@@ -22,3 +22,5 @@ data/
 /playwright-report/
 /test-results/
 /.e2e-runtime/
+/coverage.out
+/coverage.xml
