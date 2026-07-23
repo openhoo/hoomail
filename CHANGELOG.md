@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.1 (2026-07-23)
+
+### Performance
+
+- benchmark and optimize hot paths (372ab94)
+
+### Bug Fixes
+
+- **ci:** format event benchmark (65925d3)
+
 ## 0.3.0 (2026-07-23)
 
 ### Features
