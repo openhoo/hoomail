@@ -42,11 +42,12 @@ func main() {
 }
 
 func healthcheck() error {
+	host := environment("HOOMAIL_HEALTHCHECK_HOST", "127.0.0.1")
 	port := environment("PORT", "3000")
 	smtpPort := environment("HOOMAIL_SMTP_PORT", "2525")
 	pop3Port := environment("HOOMAIL_POP3_PORT", "3110")
 	client := http.Client{Timeout: 2 * time.Second}
-	response, err := client.Get("http://127.0.0.1:" + port + "/api/mailboxes")
+	response, err := client.Get("http://" + net.JoinHostPort(host, port) + "/api/mailboxes")
 	if err != nil {
 		return fmt.Errorf("HTTP healthcheck: %w", err)
 	}
@@ -61,14 +62,14 @@ func healthcheck() error {
 	if response.StatusCode != http.StatusOK {
 		return fmt.Errorf("HTTP healthcheck returned %s", response.Status)
 	}
-	connection, err := net.DialTimeout("tcp", "127.0.0.1:"+smtpPort, 2*time.Second)
+	connection, err := net.DialTimeout("tcp", net.JoinHostPort(host, smtpPort), 2*time.Second)
 	if err != nil {
 		return fmt.Errorf("SMTP healthcheck: %w", err)
 	}
 	if err := connection.Close(); err != nil {
 		return fmt.Errorf("close SMTP healthcheck: %w", err)
 	}
-	connection, err = net.DialTimeout("tcp", "127.0.0.1:"+pop3Port, 2*time.Second)
+	connection, err = net.DialTimeout("tcp", net.JoinHostPort(host, pop3Port), 2*time.Second)
 	if err != nil {
 		return fmt.Errorf("POP3 healthcheck: %w", err)
 	}

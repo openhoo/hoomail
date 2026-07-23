@@ -1,0 +1,16 @@
+Hoomail endpoints inside the cluster:
+  HTTP: http://{{ include "hoomail.fullname" . }}:{{ .Values.service.ports.http }}
+  SMTP: {{ include "hoomail.fullname" . }}:{{ .Values.service.ports.smtp }}
+  POP3: {{ include "hoomail.fullname" . }}:{{ .Values.service.ports.pop3 }}
+
+{{- if .Values.ingress.enabled }}
+HTTP ingress hosts:
+{{- range .Values.ingress.hosts }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}
+{{- end }}
+{{- else }}
+Local UI access:
+  kubectl port-forward service/{{ include "hoomail.fullname" . }} 3000:{{ .Values.service.ports.http }}
+{{- end }}
+
+Data is {{ if .Values.persistence.enabled }}stored on PVC {{ include "hoomail.pvcName" . }}{{ else }}ephemeral and lost when the pod is replaced{{ end }}.

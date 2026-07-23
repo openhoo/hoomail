@@ -1,0 +1,43 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "hoomail.fullname" . }}-test-connection"
+  labels:
+    {{- include "hoomail.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  {{- with .Values.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: health
+      image: {{ include "hoomail.image" . | quote }}
+      imagePullPolicy: {{ .Values.image.pullPolicy }}
+      env:
+        - name: PORT
+          value: {{ .Values.service.ports.http | quote }}
+        - name: HOOMAIL_SMTP_PORT
+          value: {{ .Values.service.ports.smtp | quote }}
+        - name: HOOMAIL_POP3_PORT
+          value: {{ .Values.service.ports.pop3 | quote }}
+        - name: HOOMAIL_HEALTHCHECK_HOST
+          value: {{ include "hoomail.fullname" . | quote }}
+      args: ["healthcheck"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: ["ALL"]
+        readOnlyRootFilesystem: true
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532

@@ -1,0 +1,113 @@
+replicaCount: 1
+revisionHistoryLimit: 1
+
+image:
+  repository: ghcr.io/openhoo/hoomail
+  pullPolicy: IfNotPresent
+  tag: ""
+  # When set, digest takes precedence over tag. Example: sha256:abc123...
+  digest: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Reuse the namespace's default account unless a dedicated identity is required.
+serviceAccount:
+  create: false
+  annotations: {}
+  automount: false
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  privileged: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+
+ports:
+  http: 3000
+  smtp: 2525
+  pop3: 3110
+
+service:
+  type: ClusterIP
+  annotations: {}
+  ports:
+    http: 3000
+    smtp: 2525
+    pop3: 3110
+
+# Ingress exposes only HTTP. SMTP and POP3 require a TCP-capable external service.
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: hoomail.localhost
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+persistence:
+  enabled: true
+  existingClaim: ""
+  storageClass: ""
+  accessModes:
+    - ReadWriteOnce
+  size: 256Mi
+  annotations: {}
+  selector: {}
+
+# Small defaults match Hoomail's single static Go binary. Raise the memory limit
+# for unusually large inboxes or MIME messages.
+resources:
+  requests:
+    cpu: 5m
+    memory: 16Mi
+  limits:
+    memory: 64Mi
+
+livenessProbe:
+  enabled: true
+  initialDelaySeconds: 5
+  periodSeconds: 30
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+readinessProbe:
+  enabled: true
+  initialDelaySeconds: 1
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+startupProbe:
+  enabled: true
+  initialDelaySeconds: 0
+  periodSeconds: 2
+  timeoutSeconds: 3
+  failureThreshold: 30
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []

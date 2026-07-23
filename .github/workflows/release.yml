@@ -132,6 +132,38 @@ jobs:
         if: always()
         run: test -z "${HOOVERSION_DIR:-}" || rm -rf "$HOOVERSION_DIR"
 
+  publish-chart:
+    name: Publish Helm chart
+    needs: release
+    if: needs.release.outputs.current == 'true' && needs.release.outputs.published == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+
+      - name: Set up Helm
+        uses: azure/setup-helm@59b1c81c6280f5abebb1fb1bc585696daa7dfb42 # v5
+        with:
+          version: v4.2.3
+
+      - name: Package chart
+        run: helm package charts/hoomail --destination dist
+
+      - name: Upload chart to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          charts=(dist/*.tgz)
+          test "${#charts[@]}" -eq 1
+          gh release upload "$RELEASE_TAG" "${charts[0]}" --clobber --repo "$GITHUB_REPOSITORY"
+
   publish-image:
     name: Publish images
     needs: release
@@ -183,7 +215,7 @@ jobs:
             org.opencontainers.image.revision=${{ needs.release.outputs.commit }}
             org.opencontainers.image.version=${{ needs.release.outputs.version }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.licenses=Apache-2.0
 
       - name: Build and push image
         id: push
