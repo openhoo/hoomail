@@ -32,3 +32,27 @@ func TestCalendarSequenceAndUIDRemainStable(t *testing.T) {
 		}
 	}
 }
+
+func TestMessageEncodesUntrustedFields(t *testing.T) {
+	raw := string(buildMessage(httpserver.SendTestRequest{
+		To:      "owl+<nest>@example.com",
+		Subject: "Status\r\nBcc: hidden@example.com",
+		Kind:    "plain",
+	}, time.Unix(1, 0).UTC()))
+
+	if strings.Contains(raw, "\r\nBcc:") {
+		t.Fatal("subject injected an additional header")
+	}
+	if !strings.Contains(raw, `To: <"owl+<nest>"@example.com>`) {
+		t.Fatalf("recipient header was not encoded: %q", raw)
+	}
+	if !strings.Contains(raw, "Subject: =?UTF-8?q?Status=0D=0ABcc:_hidden@example.com?=") {
+		t.Fatalf("subject header was not encoded: %q", raw)
+	}
+	if strings.Contains(raw, "\r\nBcc: hidden@example.com") {
+		t.Fatal("plain-text recipient introduced MIME structure")
+	}
+	if !strings.Contains(sampleHTML("owl+<nest>@example.com"), "owl+&lt;nest&gt;@example.com") {
+		t.Fatal("HTML recipient was not escaped")
+	}
+}

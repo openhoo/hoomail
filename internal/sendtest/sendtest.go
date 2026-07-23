@@ -5,8 +5,11 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"html"
+	"mime"
 	"mime/quotedprintable"
 	"net"
+	"net/mail"
 	"net/smtp"
 	"regexp"
 	"strings"
@@ -125,7 +128,9 @@ func calendarMessage(request httpserver.SendTestRequest, summary string, now tim
 	var body bytes.Buffer
 	writeHeaders(&body, request.To, prefix+": "+summary, now)
 	fmt.Fprintf(&body, "MIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary=%q\r\n\r\n", boundary)
-	fmt.Fprintf(&body, "--%s\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n%s\r\n", boundary, text)
+	fmt.Fprintf(&body, "--%s\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n", boundary)
+	writeQuotedPrintable(&body, text)
+	fmt.Fprintf(&body, "\r\n")
 	fmt.Fprintf(&body, "--%s\r\nContent-Type: text/calendar; charset=utf-8; method=%s\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n", boundary, method)
 	writeQuotedPrintable(&body, ics)
 	fmt.Fprintf(&body, "\r\n--%s--\r\n", boundary)
@@ -133,7 +138,9 @@ func calendarMessage(request httpserver.SendTestRequest, summary string, now tim
 }
 
 func writeHeaders(body *bytes.Buffer, to, subject string, now time.Time) {
-	fmt.Fprintf(body, "From: \"The hoomail Owl\" <owl@hoomail.local>\r\nTo: %s\r\nSubject: %s\r\nDate: %s\r\nMessage-ID: <%d@hoomail.local>\r\n", to, subject, now.Format(time.RFC1123Z), now.UnixNano())
+	recipient := (&mail.Address{Address: to}).String()
+	encodedSubject := mime.QEncoding.Encode("UTF-8", subject)
+	fmt.Fprintf(body, "From: \"The hoomail Owl\" <owl@hoomail.local>\r\nTo: %s\r\nSubject: %s\r\nDate: %s\r\nMessage-ID: <%d@hoomail.local>\r\n", recipient, encodedSubject, now.Format(time.RFC1123Z), now.UnixNano())
 }
 
 func writeQuotedPrintable(body *bytes.Buffer, value string) {
@@ -146,14 +153,15 @@ var unsafeUID = regexp.MustCompile(`[^a-zA-Z0-9]`)
 
 func buildICS(to, summary, method, status string, sequence int, stamp, start, end time.Time) string {
 	escape := func(value string) string {
-		replacer := strings.NewReplacer("\\", "\\\\", ";", "\\;", ",", "\\,")
-		return replacer.Replace(value)
+		normalized := strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(value)
+		replacer := strings.NewReplacer("\\", "\\\\", "\n", "\\n", ";", "\\;", ",", "\\,")
+		return replacer.Replace(normalized)
 	}
 	format := func(value time.Time) string { return value.UTC().Format("20060102T150405Z") }
 	uid := "hoomail-demo-" + unsafeUID.ReplaceAllString(to, "-") + "@hoomail.local"
-	return strings.Join([]string{"BEGIN:VCALENDAR", "PRODID:-//hoomail//test sender//EN", "VERSION:2.0", "METHOD:" + method, "BEGIN:VEVENT", "UID:" + uid, fmt.Sprintf("SEQUENCE:%d", sequence), "DTSTAMP:" + format(stamp), "DTSTART:" + format(start), "DTEND:" + format(end), "SUMMARY:" + escape(summary), "LOCATION:Owl Tree Conference Room", "DESCRIPTION:A test appointment sent by the hoomail built-in sender.", "STATUS:" + status, "ORGANIZER;CN=The hoomail Owl:mailto:owl@hoomail.local", "ATTENDEE;CN=" + to + ";ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:" + to, "END:VEVENT", "END:VCALENDAR"}, "\r\n")
+	return strings.Join([]string{"BEGIN:VCALENDAR", "PRODID:-//hoomail//test sender//EN", "VERSION:2.0", "METHOD:" + method, "BEGIN:VEVENT", "UID:" + uid, fmt.Sprintf("SEQUENCE:%d", sequence), "DTSTAMP:" + format(stamp), "DTSTART:" + format(start), "DTEND:" + format(end), "SUMMARY:" + escape(summary), "LOCATION:Owl Tree Conference Room", "DESCRIPTION:A test appointment sent by the hoomail built-in sender.", "STATUS:" + status, "ORGANIZER;CN=The hoomail Owl:mailto:owl@hoomail.local", "ATTENDEE;CN=" + escape(to) + ";ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:" + escape(to), "END:VEVENT", "END:VCALENDAR"}, "\r\n")
 }
 
 func sampleHTML(recipient string) string {
-	return fmt.Sprintf(`<!DOCTYPE html><html><body style="margin:0;padding:0;background-color:#f4f1ea;font-family:Georgia,serif;"><h1>Hoot hoot! It works.</h1><p>This test email was delivered through the hoomail SMTP server to <strong>%s</strong>. The inbox was created automatically, the message was parsed, stored in SQLite, and pushed to the UI in realtime.</p><a href="https://example.com">A sample button</a></body></html>`, recipient)
+	return fmt.Sprintf(`<!DOCTYPE html><html><body style="margin:0;padding:0;background-color:#f4f1ea;font-family:Georgia,serif;"><h1>Hoot hoot! It works.</h1><p>This test email was delivered through the hoomail SMTP server to <strong>%s</strong>. The inbox was created automatically, the message was parsed, stored in SQLite, and pushed to the UI in realtime.</p><a href="https://example.com">A sample button</a></body></html>`, html.EscapeString(recipient))
 }
