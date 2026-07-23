@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.0 (2026-07-23)
+
+### Features
+
+- add POP3 and end-to-end coverage (6cd2fcc)
+
 ## 0.2.0 (2026-07-23)
 
 ### Features
