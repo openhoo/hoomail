@@ -104,6 +104,15 @@ func TestListMessagesEscapesLikeWildcards(t *testing.T) {
 	}
 }
 
+func TestNormalizeSnippetCollapsesWhitespaceAndTruncatesUnicode(t *testing.T) {
+	if got := normalizeSnippet("  first\n\tsecond   third  ", 140); got != "first second third" {
+		t.Fatalf("normalized snippet = %q", got)
+	}
+	if got := normalizeSnippet("äöü owl", 4); got != "äöü " {
+		t.Fatalf("unicode snippet = %q", got)
+	}
+}
+
 func TestOpenPOP3MailboxCreatesMissingInboxAndReturnsRawMessages(t *testing.T) {
 	var emitted []events.Event
 	store := openTestStore(t, WithClock(func() time.Time { return time.UnixMilli(1234) }), WithBroadcaster(func(event events.Event) {

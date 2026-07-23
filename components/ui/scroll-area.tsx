@@ -18,20 +18,31 @@ function ScrollArea({
     const viewport = viewportRef.current
     if (!root || !viewport) return
 
+    let updateFrame = 0
     const update = () => {
+      updateFrame = 0
       const scrollable = root.scrollHeight > root.clientHeight + 1
       const hasFocusableDescendant = root.querySelector(
         "a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), iframe:not([tabindex='-1']), [contenteditable='true'], [tabindex]:not([tabindex='-1'])"
       ) !== null
-      setState({ scrollable, needsTabStop: scrollable && !hasFocusableDescendant })
+      const needsTabStop = scrollable && !hasFocusableDescendant
+      setState((current) =>
+        current.scrollable === scrollable && current.needsTabStop === needsTabStop
+          ? current
+          : { scrollable, needsTabStop }
+      )
     }
-    const resizeObserver = new ResizeObserver(update)
-    const mutationObserver = new MutationObserver(update)
+    const scheduleUpdate = () => {
+      if (updateFrame === 0) updateFrame = requestAnimationFrame(update)
+    }
+    const resizeObserver = new ResizeObserver(scheduleUpdate)
+    const mutationObserver = new MutationObserver(scheduleUpdate)
     resizeObserver.observe(root)
     resizeObserver.observe(viewport)
     mutationObserver.observe(viewport, { childList: true, subtree: true, attributes: true, attributeFilter: ["disabled", "hidden", "tabindex"] })
     update()
     return () => {
+      if (updateFrame !== 0) cancelAnimationFrame(updateFrame)
       resizeObserver.disconnect()
       mutationObserver.disconnect()
     }

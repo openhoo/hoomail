@@ -37,6 +37,7 @@ export function MessageList({
 }) {
   const searchRef = useRef<HTMLInputElement>(null)
   const multiSelected = selectedIds.size > 1
+  const hasSelectedMessage = selectedId != null && messages.some((message) => message.id === selectedId)
   const [messageListRef] = useAutoAnimate<HTMLUListElement>({ duration: 180, easing: 'ease-out' })
   const [toolbarRef] = useAutoAnimate<HTMLDivElement>({ duration: 160, easing: 'ease-out' })
 
@@ -150,8 +151,10 @@ export function MessageList({
           {messages.length === 0 ? 'No messages' : `${messages.length} messages`}
         </span>
         <ul ref={messageListRef} data-message-list aria-label="Messages" className="flex flex-col select-none">
-          {messages.map((message) => {
+          {messages.map((message, index) => {
             const isChecked = selectedIds.has(message.id)
+            const relativeTime = formatRelativeTime(message.received_at)
+            const isTabStop = selectedId === message.id || (!hasSelectedMessage && index === 0)
             return (
               <li key={message.id}>
                   <ContextMenu>
@@ -159,7 +162,7 @@ export function MessageList({
                       <button
                         type="button"
                         data-message-id={message.id}
-                        tabIndex={selectedId === message.id || (!messages.some((item) => item.id === selectedId) && message.id === messages[0]?.id) ? 0 : -1}
+                        tabIndex={isTabStop ? 0 : -1}
                         onClick={(event) => onRowClick(message.id, event)}
                         className={cn(
                           'reactive-message flex w-full flex-col gap-0.5 border-b border-border/60 px-4 py-3 text-left transition-[background-color,color] duration-200',
@@ -172,7 +175,7 @@ export function MessageList({
                         )}
                         aria-pressed={isChecked}
                         aria-current={selectedId === message.id ? "true" : undefined}
-                        aria-label={`${message.from_name || message.from_address || 'Unknown sender'}, ${message.subject || 'no subject'}, ${message.is_read ? 'read' : 'unread'}, ${formatRelativeTime(message.received_at)}`}
+                        aria-label={`${message.from_name || message.from_address || 'Unknown sender'}, ${message.subject || 'no subject'}, ${message.is_read ? 'read' : 'unread'}, ${relativeTime}`}
                       >
                         <div className="flex items-center">
                           <InlinePresence
@@ -190,7 +193,7 @@ export function MessageList({
                             {message.from_name || message.from_address || 'Unknown sender'}
                           </span>
                           <span className="shrink-0 text-[11px] text-muted-foreground">
-                            {formatRelativeTime(message.received_at)}
+                            {relativeTime}
                           </span>
                         </div>
                         <div className="flex items-center gap-1.5">

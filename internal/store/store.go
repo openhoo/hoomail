@@ -262,7 +262,6 @@ func (store *Store) ListMailboxes(ctx context.Context) ([]Mailbox, error) {
 
 var tags = regexp.MustCompile(`(?s)<[^>]+>`)
 var styleScript = regexp.MustCompile(`(?is)<(?:style|script)[^>]*>.*?</(?:style|script)>`)
-var whitespace = regexp.MustCompile(`\s+`)
 
 func (store *Store) ListMessages(ctx context.Context, mailboxID int64, query string) ([]MessageListItem, error) {
 	statement := `SELECT id,from_address,from_name,subject,text,html,is_read,received_at,ical_json IS NOT NULL,(SELECT COUNT(*) FROM attachments a WHERE a.message_id=messages.id AND a.content_id IS NULL) FROM messages WHERE mailbox_id=?`
@@ -292,12 +291,38 @@ func (store *Store) ListMessages(ctx context.Context, mailboxID int64, query str
 		} else if htmlValue != nil {
 			source = tags.ReplaceAllString(styleScript.ReplaceAllString(*htmlValue, " "), " ")
 		}
-		source = strings.TrimSpace(whitespace.ReplaceAllString(source, " "))
-		if len([]rune(source)) > 140 {
-			source = string([]rune(source)[:140])
-		}
-		row.Snippet = source
+		row.Snippet = normalizeSnippet(source, 140)
 		result = append(result, row)
 	}
 	return result, rows.Err()
+}
+
+func normalizeSnippet(source string, limit int) string {
+	if source == "" || limit <= 0 {
+		return ""
+	}
+	var normalized strings.Builder
+	normalized.Grow(min(len(source), limit))
+	spacePending := false
+	written := 0
+	for _, character := range source {
+		if character == ' ' || character == '\t' || character == '\n' || character == '\r' || character == '\f' {
+			spacePending = written > 0
+			continue
+		}
+		if spacePending {
+			if written == limit {
+				break
+			}
+			normalized.WriteByte(' ')
+			written++
+			spacePending = false
+		}
+		if written == limit {
+			break
+		}
+		normalized.WriteRune(character)
+		written++
+	}
+	return normalized.String()
 }

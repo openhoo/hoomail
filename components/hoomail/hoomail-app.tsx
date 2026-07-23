@@ -2,11 +2,10 @@ import type { JSX } from 'preact'
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
 import { CalendarDays, Mail } from '@/components/ui/icons'
 import { Button } from '@/components/ui/button'
-import { CalendarView } from './calendar-view'
+import { asyncComponent } from '@/components/ui/async-component'
 import { MailboxSidebar } from './mailbox-sidebar'
 import { MessageList } from './message-list'
 import { MessageViewer } from './message-viewer'
-import { ResetDialog, SendTestDialog } from './dialogs'
 import {
   deleteMailboxRequest,
   refreshAfterRead,
@@ -20,6 +19,14 @@ import {
   type Mailbox,
   type MessageListItem,
 } from './use-hoomail'
+
+const CalendarView = asyncComponent(
+  () => import('./calendar-view').then((module) => module.CalendarView),
+  <div role="status" className="flex min-w-0 flex-1 items-center justify-center text-sm text-muted-foreground">Loading calendar…</div>,
+)
+const SendTestDialog = asyncComponent(() => import('./dialogs').then((module) => module.SendTestDialog))
+const ResetDialog = asyncComponent(() => import('./dialogs').then((module) => module.ResetDialog))
+
 
 export function HoomailApp() {
 
@@ -37,6 +44,10 @@ export function HoomailApp() {
   const { messages } = useMessages(selectedMailboxId, searchQuery)
   const { detail, isLoading: messageLoading } = useMessage(selectedMessageId)
   const { events } = useCalendarEvents(selectedMailboxId, view === 'calendar')
+  const openMessageStateRef = useRef({ messages, selectedMailboxId })
+  openMessageStateRef.current = { messages, selectedMailboxId }
+  const actionStateRef = useRef({ messages, selectedMailboxId, selectedMessageId })
+  actionStateRef.current = { messages, selectedMailboxId, selectedMessageId }
 
   // Auto-select the first mailbox when none is selected
   useEffect(() => {
@@ -107,6 +118,7 @@ export function HoomailApp() {
   }
 
   const openMessage = useCallback((id: number) => {
+    const { messages, selectedMailboxId } = openMessageStateRef.current
     setSelectedMessageId(id)
     setSelectedIds(new Set())
     anchorIdRef.current = id
@@ -145,7 +157,7 @@ export function HoomailApp() {
     void runMessageAction('read', [id]).then((ok) => {
       if (!ok) refreshAfterRead(selectedMailboxId)
     })
-  }, [messages, selectedMailboxId])
+  }, [])
 
   useEffect(() => {
     const id = pendingMessageFocusRef.current
@@ -186,7 +198,8 @@ export function HoomailApp() {
     openMessage(id)
   }
 
-  const handleAction = async (action: 'delete' | 'read' | 'unread', ids: number[]) => {
+  const handleAction = useCallback(async (action: 'delete' | 'read' | 'unread', ids: number[]) => {
+    const { messages, selectedMailboxId, selectedMessageId } = actionStateRef.current
     // Optimistic delete: drop the rows from the cache immediately so the
     // exit animation starts right away instead of after the round-trip
     if (action === 'delete' && selectedMailboxId != null) {
@@ -221,7 +234,7 @@ export function HoomailApp() {
     setSelectedIds(new Set())
     // SSE 'messages:changed' refreshes lists; this covers latency gaps
     if (selectedMailboxId != null) refreshAfterRead(selectedMailboxId)
-  }
+  }, [])
 
   const openMessageFromCalendar = (messageId: number) => {
     pendingMessageFocusRef.current = messageId
@@ -253,31 +266,34 @@ export function HoomailApp() {
         if (event.key === 'Escape') target.blur()
         return
       }
-      // Don't steal keys while a dialog or menu is open
-      if (document.querySelector('[role="dialog"], [role="menu"]')) return
 
-      const messageList = document.querySelector('[data-message-list]')
-      if (!target || !messageList?.contains(target)) return
+      const messageList = target?.closest('[data-message-list]')
+      if (!messageList) return
 
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
         event.preventDefault()
         if (messages.length === 0) return
 
-        const rows = [...document.querySelectorAll<HTMLButtonElement>('button.reactive-message[data-message-id]')]
-        const focusedIndex = rows.indexOf(document.activeElement as HTMLButtonElement)
-        const selectedIndex = selectedMessageId == null
-          ? -1
-          : rows.findIndex((row) => Number(row.dataset.messageId) === selectedMessageId)
-        const currentIndex = focusedIndex >= 0 ? focusedIndex : selectedIndex
+        const currentRow = (document.activeElement as HTMLElement | null)?.closest<HTMLButtonElement>(
+          'button.reactive-message[data-message-id]'
+        )
+        const currentId = Number(currentRow?.dataset.messageId)
+        const currentIndex = Number.isInteger(currentId)
+          ? messages.findIndex((message) => message.id === currentId)
+          : selectedMessageId == null
+            ? -1
+            : messages.findIndex((message) => message.id === selectedMessageId)
         const nextIndex = currentIndex < 0
-          ? event.key === 'ArrowDown' ? 0 : rows.length - 1
+          ? event.key === 'ArrowDown' ? 0 : messages.length - 1
           : Math.min(
-              rows.length - 1,
+              messages.length - 1,
               Math.max(0, currentIndex + (event.key === 'ArrowDown' ? 1 : -1))
             )
-        const nextRow = rows[nextIndex]
-        const nextId = Number(nextRow?.dataset.messageId)
-        if (!nextRow || !Number.isInteger(nextId)) return
+        const nextId = messages[nextIndex]?.id
+        const nextRow = messageList.querySelector<HTMLButtonElement>(
+          `button.reactive-message[data-message-id="${nextId}"]`
+        )
+        if (!nextRow || nextId == null) return
 
         // Move browser focus before updating application state. This keeps the
         // native focus ring, Enter activation, and selection on one row even
@@ -311,7 +327,7 @@ export function HoomailApp() {
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [openMessage])
+  }, [])
 
   const selectedMailbox = mailboxes.find((m) => m.id === selectedMailboxId) ?? null
 
@@ -386,8 +402,8 @@ export function HoomailApp() {
           )}
         </div>
       </div>
-      <SendTestDialog open={sendTestOpen} onOpenChange={setSendTestOpen} />
-      <ResetDialog open={resetOpen} onOpenChange={setResetOpen} />
+      {sendTestOpen && <SendTestDialog open onOpenChange={setSendTestOpen} />}
+      {resetOpen && <ResetDialog open onOpenChange={setResetOpen} />}
     </main>
   )
 }

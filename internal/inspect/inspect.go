@@ -48,29 +48,36 @@ var (
 		regexp.MustCompile(`(?is)<applet[\s\S]*?</applet\s*>`),
 		regexp.MustCompile(`(?is)<form[\s\S]*?</form\s*>`),
 	}
-	dangerousTagPattern     = regexp.MustCompile(`(?is)<(object|embed|applet|form|base|meta)[^>]*\/?>`)
-	doubleEventPattern      = regexp.MustCompile(`(?i)\son[a-z]+\s*=\s*"[^"]*"`)
-	singleEventPattern      = regexp.MustCompile(`(?i)\son[a-z]+\s*=\s*'[^']*'`)
-	unquotedEventPattern    = regexp.MustCompile(`(?i)\son[a-z]+\s*=\s*[^\s>]+`)
-	doubleDangerousURL      = regexp.MustCompile(`(?i)\s(href|src|action|formaction)\s*=\s*"\s*(javascript|vbscript|data:text/html)[^"'\s>]*"`)
-	singleDangerousURL      = regexp.MustCompile(`(?i)\s(href|src|action|formaction)\s*=\s*'\s*(javascript|vbscript|data:text/html)[^"'\s>]*'`)
-	unquotedDangerousURL    = regexp.MustCompile(`(?i)\s(href|src|action|formaction)\s*=\s*(javascript|vbscript|data:text/html)[^"'\s>]*`)
-	cidPattern              = regexp.MustCompile(`(?i)(["'(])cid:([^"')\s>]+)(["')])`)
-	unfoldPattern           = regexp.MustCompile(`\r?\n[ \t]+`)
-	leadingLineBreakPattern = regexp.MustCompile(`^\r?\n`)
-	anchorPattern           = regexp.MustCompile(`(?is)<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)</a>`)
-	tagPattern              = regexp.MustCompile(`(?s)<[^>]+>`)
-	spacePattern            = regexp.MustCompile(`\s+`)
-	imagePattern            = regexp.MustCompile(`(?is)<img\b[^>]*>`)
-	srcPattern              = regexp.MustCompile(`(?i)src\s*=\s*["']([^"']+)["']`)
-	widthPattern            = regexp.MustCompile(`(?i)width\s*=\s*["']?([0-9]+)`)
-	heightPattern           = regexp.MustCompile(`(?i)height\s*=\s*["']?([0-9]+)`)
-	hiddenStylePattern      = regexp.MustCompile(`(?i)display\s*:\s*none|visibility\s*:\s*hidden`)
-	altPattern              = regexp.MustCompile(`(?i)alt\s*=\s*["']([^"']*)["']`)
-	altPresencePattern      = regexp.MustCompile(`(?i)\balt\s*=`)
-	textURLPattern          = regexp.MustCompile(`(?i)https?://[^\s<>"')\]]+`)
-	spfPattern              = regexp.MustCompile(`(?i)spf=(\w+)`)
-	dkimPattern             = regexp.MustCompile(`(?i)dkim=(\w+)`)
+	dangerousTagPattern             = regexp.MustCompile(`(?is)<(object|embed|applet|form|base|meta)[^>]*\/?>`)
+	doubleEventPattern              = regexp.MustCompile(`(?i)\son[a-z]+\s*=\s*"[^"]*"`)
+	singleEventPattern              = regexp.MustCompile(`(?i)\son[a-z]+\s*=\s*'[^']*'`)
+	unquotedEventPattern            = regexp.MustCompile(`(?i)\son[a-z]+\s*=\s*[^\s>]+`)
+	doubleDangerousURL              = regexp.MustCompile(`(?i)\s(href|src|action|formaction)\s*=\s*"\s*(javascript|vbscript|data:text/html)[^"'\s>]*"`)
+	singleDangerousURL              = regexp.MustCompile(`(?i)\s(href|src|action|formaction)\s*=\s*'\s*(javascript|vbscript|data:text/html)[^"'\s>]*'`)
+	unquotedDangerousURL            = regexp.MustCompile(`(?i)\s(href|src|action|formaction)\s*=\s*(javascript|vbscript|data:text/html)[^"'\s>]*`)
+	cidPattern                      = regexp.MustCompile(`(?i)(["'(])cid:([^"')\s>]+)(["')])`)
+	unfoldPattern                   = regexp.MustCompile(`\r?\n[ \t]+`)
+	leadingLineBreakPattern         = regexp.MustCompile(`^\r?\n`)
+	anchorPattern                   = regexp.MustCompile(`(?is)<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)</a>`)
+	tagPattern                      = regexp.MustCompile(`(?s)<[^>]+>`)
+	spacePattern                    = regexp.MustCompile(`\s+`)
+	imagePattern                    = regexp.MustCompile(`(?is)<img\b[^>]*>`)
+	srcPattern                      = regexp.MustCompile(`(?i)src\s*=\s*["']([^"']+)["']`)
+	widthPattern                    = regexp.MustCompile(`(?i)width\s*=\s*["']?([0-9]+)`)
+	heightPattern                   = regexp.MustCompile(`(?i)height\s*=\s*["']?([0-9]+)`)
+	hiddenStylePattern              = regexp.MustCompile(`(?i)display\s*:\s*none|visibility\s*:\s*hidden`)
+	altPattern                      = regexp.MustCompile(`(?i)alt\s*=\s*["']([^"']*)["']`)
+	altPresencePattern              = regexp.MustCompile(`(?i)\balt\s*=`)
+	textURLPattern                  = regexp.MustCompile(`(?i)https?://[^\s<>"')\]]+`)
+	spfPattern                      = regexp.MustCompile(`(?i)spf=(\w+)`)
+	dkimPattern                     = regexp.MustCompile(`(?i)dkim=(\w+)`)
+	contentTypeHeaderPattern        = regexp.MustCompile(`(?im)^Content-Type:[ \t]*(.+)$`)
+	transferEncodingHeaderPattern   = regexp.MustCompile(`(?im)^Content-Transfer-Encoding:[ \t]*(.+)$`)
+	contentDispositionHeaderPattern = regexp.MustCompile(`(?im)^Content-Disposition:[ \t]*(.+)$`)
+	charsetParamPattern             = regexp.MustCompile(`(?i)charset\s*=\s*"?([^";\s]+)"?`)
+	filenameParamPattern            = regexp.MustCompile(`(?i)filename\s*=\s*"?([^";\s]+)"?`)
+	nameParamPattern                = regexp.MustCompile(`(?i)name\s*=\s*"?([^";\s]+)"?`)
+	boundaryParamPattern            = regexp.MustCompile(`(?i)boundary\s*=\s*"?([^";\s]+)"?`)
 )
 
 func SanitizeEmailHTML(html string) string {
@@ -92,8 +99,7 @@ func SanitizeEmailHTML(html string) string {
 
 func RewriteCIDURLs(html string, cidMap map[string]int64) string {
 	return cidPattern.ReplaceAllStringFunc(html, func(match string) string {
-		parts := cidPattern.FindStringSubmatch(match)
-		cid := parts[2]
+		cid := match[5 : len(match)-1]
 		normalized := strings.TrimSuffix(strings.TrimPrefix(cid, "<"), ">")
 		attachmentID, ok := cidMap[normalized]
 		if !ok {
@@ -102,32 +108,33 @@ func RewriteCIDURLs(html string, cidMap map[string]int64) string {
 		if !ok {
 			return match
 		}
-		return parts[1] + "/api/attachments/" + strconv.FormatInt(attachmentID, 10) + parts[3]
+		return match[:1] + "/api/attachments/" + strconv.FormatInt(attachmentID, 10) + match[len(match)-1:]
 	})
 }
 
 func BuildMIMETree(raw string) MimeNode {
 	headers, body := splitHeadersBody(raw)
-	contentTypeHeader := headerValue(headers, "Content-Type")
+	headers = unfoldPattern.ReplaceAllString(headers, " ")
+	contentTypeHeader := headerValue(headers, contentTypeHeaderPattern)
 	contentType := "text/plain"
 	if contentTypeHeader != nil {
 		contentType = strings.TrimSpace(strings.SplitN(*contentTypeHeader, ";", 2)[0])
 	}
 	contentType = strings.ToLower(contentType)
-	encoding := lowerPointer(headerValue(headers, "Content-Transfer-Encoding"))
-	dispositionHeader := headerValue(headers, "Content-Disposition")
+	encoding := lowerPointer(headerValue(headers, transferEncodingHeaderPattern))
+	dispositionHeader := headerValue(headers, contentDispositionHeaderPattern)
 	var disposition *string
 	if dispositionHeader != nil {
 		value := strings.ToLower(strings.TrimSpace(strings.SplitN(*dispositionHeader, ";", 2)[0]))
 		disposition = &value
 	}
-	filename := headerParam(dispositionHeader, "filename")
+	filename := headerParam(dispositionHeader, filenameParamPattern)
 	if filename == nil {
-		filename = headerParam(contentTypeHeader, "name")
+		filename = headerParam(contentTypeHeader, nameParamPattern)
 	}
 	node := MimeNode{
 		ContentType: contentType,
-		Charset:     headerParam(contentTypeHeader, "charset"),
+		Charset:     headerParam(contentTypeHeader, charsetParamPattern),
 		Encoding:    encoding,
 		Disposition: disposition,
 		Filename:    filename,
@@ -135,7 +142,7 @@ func BuildMIMETree(raw string) MimeNode {
 		Children:    make([]MimeNode, 0),
 	}
 	if strings.HasPrefix(contentType, "multipart/") {
-		if boundary := headerParam(contentTypeHeader, "boundary"); boundary != nil {
+		if boundary := headerParam(contentTypeHeader, boundaryParamPattern); boundary != nil {
 			sections := strings.Split(body, "--"+*boundary)
 			for _, section := range sections[1:] {
 				if strings.HasPrefix(section, "--") {
@@ -322,10 +329,8 @@ func splitHeadersBody(part string) (string, string) {
 	return part, ""
 }
 
-func headerValue(headers string, name string) *string {
-	unfolded := unfoldPattern.ReplaceAllString(headers, " ")
-	pattern := regexp.MustCompile(`(?im)^` + regexp.QuoteMeta(name) + `:[ \t]*(.+)$`)
-	match := pattern.FindStringSubmatch(unfolded)
+func headerValue(headers string, pattern *regexp.Regexp) *string {
+	match := pattern.FindStringSubmatch(headers)
 	if match == nil {
 		return nil
 	}
@@ -333,11 +338,10 @@ func headerValue(headers string, name string) *string {
 	return &value
 }
 
-func headerParam(headerValue *string, name string) *string {
+func headerParam(headerValue *string, pattern *regexp.Regexp) *string {
 	if headerValue == nil {
 		return nil
 	}
-	pattern := regexp.MustCompile(`(?i)` + regexp.QuoteMeta(name) + `\s*=\s*"?([^";\s]+)"?`)
 	match := pattern.FindStringSubmatch(*headerValue)
 	if match == nil {
 		return nil
