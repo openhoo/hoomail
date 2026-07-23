@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0 (2026-07-23)
+
+### Features
+
+- **helm:** add footprint-first chart (fb92eca)
+
 ## 0.3.1 (2026-07-23)
 
 ### Performance
