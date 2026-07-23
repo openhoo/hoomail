@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.2 (2026-07-23)
+
+### Bug Fixes
+
+- **security:** encode test email fields (5ffd872)
+
 ## 0.4.1 (2026-07-23)
 
 ### Other Changes
