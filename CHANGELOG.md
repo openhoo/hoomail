@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.0 (2026-07-24)
+
+### Features
+
+- **viewer:** add responsive email preview (1c34f4a)
+
 ## 0.5.1 (2026-07-24)
 
 ### Bug Fixes
