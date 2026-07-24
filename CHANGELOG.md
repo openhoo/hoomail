@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.0 (2026-07-24)
+
+### Features
+
+- **api:** add OpenAPI and Swagger endpoints (56b5207)
+
 ## 0.7.1 (2026-07-24)
 
 ### Bug Fixes
