@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.0 (2026-07-24)
+
+### Other Changes
+
+- document send-test encoding (1213bd3)
+
+### Features
+
+- **inspect:** expand offline email analysis (ff7c110)
+
 ## 0.4.2 (2026-07-23)
 
 ### Bug Fixes
