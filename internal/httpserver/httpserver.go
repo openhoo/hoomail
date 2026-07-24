@@ -337,17 +337,17 @@ func (s *server) inspectMessage(response http.ResponseWriter, request *http.Requ
 		internalError(response, err)
 		return
 	}
-	links := inspect.ExtractLinks(row.HTML, row.Text)
-	var mimeTree any
-	if len(row.Raw) != 0 {
-		mimeTree = inspect.BuildMIMETree(string(row.Raw))
+	report, err := inspect.Analyze(inspect.Input{
+		Raw:        row.Raw,
+		LegacyHTML: row.HTML,
+		LegacyText: row.Text,
+		StoredSize: row.Size,
+	})
+	if err != nil {
+		internalError(response, err)
+		return
 	}
-	checks := inspect.RunHeaderChecks(inspect.HeaderCheckInput{Headers: headers, HTML: row.HTML, Links: links, Size: int(row.Size)})
-	writeJSON(response, http.StatusOK, struct {
-		MimeTree any                     `json:"mimeTree"`
-		Links    []inspect.ExtractedLink `json:"links"`
-		Checks   []inspect.HeaderCheck   `json:"checks"`
-	}{mimeTree, links, checks})
+	writeJSON(response, http.StatusOK, report)
 }
 
 func decodeBody(request *http.Request) (any, error) {

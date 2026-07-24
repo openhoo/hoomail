@@ -20,7 +20,7 @@ One static Go binary serves SMTP, POP3, the JSON API, server-sent events, and an
 ## Features
 
 - Catch mail without pre-creating inboxes. Each unique SMTP envelope recipient (`RCPT TO`) receives a normalized lowercase inbox, including BCC recipients.
-- View standards-valid HTML and plain-text bodies, captured headers, a structural MIME tree, extracted links and external images, and heuristic checks for likely tracking pixels and other delivery concerns. Rich email styling is preserved within a parsed security allowlist; Hoomail is not a pixel-perfect Outlook or Gmail emulator.
+- Inspect captured messages with a deterministic offline report: summary counts, grouped standards/recommendation/heuristic findings with evidence, aggregated links and images, and a wire-order MIME tree with raw and decoded sizes. Partial or truncated reports identify unavailable analysis instead of implying success. Hoomail does not verify DNS, SPF, DKIM, DMARC, ARC custody, reputation, SMTP transport, delivery, or unsubscribe endpoints. Standards-valid HTML and plain-text previews remain sender-faithful within the parsed security allowlist; Hoomail is not a pixel-perfect Outlook or Gmail emulator.
 - Select MIME alternatives and related resources according to their multipart structure: selected HTML can retain the nearest earlier plain-text fallback, unselected alternatives contribute no ordinary attachments, and recognized calendar parts remain available for invite/calendar extraction. Decode common character sets and render matching inline CID images only from the selected related resources represented by parser storage. Remote content and active markup are blocked by default. A conservative raster/text attachment allowlist can be previewed; PDF and active formats are download-only.
 - Parse calendar parts and reconcile `PUBLISH`, `REQUEST`, `CANCEL`, and `REPLY` messages by event UID, sequence, cancellation state, and attendee participation.
 - Refresh mailbox counts, message lists, searches, and calendars through server-sent events.
@@ -214,7 +214,7 @@ helm lint --strict charts/hoomail
 | `GET` | `/api/mailboxes/{id}/messages` | List messages; `?q=` searches subject, sender, and plain-text body within that inbox |
 | `GET` | `/api/mailboxes/{id}/events` | List reconciled calendar events for an inbox |
 | `GET` | `/api/messages/{id}` | Get parsed message details; first retrieval also marks an unread message read |
-| `GET` | `/api/messages/{id}/inspect` | Inspect MIME structure, links, and message checks |
+| `GET` | `/api/messages/{id}/inspect` | Get the versioned offline inspection report with analysis state, summary, grouped findings, resources, and MIME structure |
 | `POST` | `/api/messages/actions` | Delete messages or mark IDs read/unread |
 | `GET` | `/api/attachments/{id}` | Serve a conservative raster-image/plain-text allowlist inline with `nosniff`; PDF and active formats download only; `?download=1` forces download |
 | `GET` | `/api/events` | Subscribe to the best-effort, non-replayable SSE invalidation stream |

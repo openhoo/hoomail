@@ -7,10 +7,8 @@ import (
 )
 
 var (
-	benchmarkStringSink       string
-	benchmarkMIMENodeSink     MimeNode
-	benchmarkLinksSink        []ExtractedLink
-	benchmarkHeaderChecksSink []HeaderCheck
+	benchmarkStringSink string
+	benchmarkReportSink Report
 )
 
 func BenchmarkSanitizeEmailHTML(b *testing.B) {
@@ -54,54 +52,43 @@ func BenchmarkRewriteCIDURLs(b *testing.B) {
 	}
 }
 
-func BenchmarkBuildMIMETree(b *testing.B) {
+func BenchmarkAnalyze(b *testing.B) {
 	fixtures := []struct {
 		name string
-		raw  string
+		raw  []byte
 	}{
-		{name: "Mixed32Attachments", raw: benchmarkMIMEMessage(32, false)},
-		{name: "NestedMixed64Attachments", raw: benchmarkMIMEMessage(64, true)},
+		{name: "Mixed32Attachments", raw: []byte(benchmarkMIMEMessage(32, false))},
+		{name: "NestedMixed64Attachments", raw: []byte(benchmarkMIMEMessage(64, true))},
+		{name: "Campaign512Links", raw: []byte(benchmarkAnalysisMessage(benchmarkCampaignHTML(512)))},
+		{name: "CapSaturatingResources", raw: []byte(benchmarkAnalysisMessage(benchmarkCampaignHTML(MaxResources + 256)))},
 	}
-
 	for _, fixture := range fixtures {
 		b.Run(fixture.name, func(b *testing.B) {
 			b.ReportAllocs()
 			b.SetBytes(int64(len(fixture.raw)))
 			for b.Loop() {
-				benchmarkMIMENodeSink = BuildMIMETree(fixture.raw)
+				report, err := Analyze(Input{Raw: fixture.raw, StoredSize: int64(len(fixture.raw))})
+				if err != nil {
+					b.Fatal(err)
+				}
+				benchmarkReportSink = report
 			}
 		})
 	}
 }
 
-func BenchmarkExtractLinksAndRunHeaderChecks(b *testing.B) {
-	fixtures := []struct {
-		name string
-		html string
-	}{
-		{name: "Campaign128Items", html: benchmarkCampaignHTML(128)},
-		{name: "Campaign512Items", html: benchmarkCampaignHTML(512)},
-	}
-	headers := map[string]string{
-		"Message-ID":             "<campaign-20260723@example.test>",
-		"Authentication-Results": "mx.example.test; spf=pass smtp.mailfrom=example.test; dkim=pass header.d=example.test",
-		"DKIM-Signature":         "v=1; d=example.test; s=mail; bh=fixture",
-		"List-Unsubscribe":       "<mailto:unsubscribe@example.test>, <https://example.test/unsubscribe>",
-	}
-
-	for _, fixture := range fixtures {
-		input := HeaderCheckInput{Headers: headers, HTML: &fixture.html, Size: len(fixture.html)}
-		b.Run(fixture.name, func(b *testing.B) {
-			b.ReportAllocs()
-			b.SetBytes(int64(len(fixture.html)))
-			for b.Loop() {
-				links := ExtractLinks(input.HTML, nil)
-				input.Links = links
-				benchmarkLinksSink = links
-				benchmarkHeaderChecksSink = RunHeaderChecks(input)
-			}
-		})
-	}
+func benchmarkAnalysisMessage(htmlBody string) string {
+	return strings.Join([]string{
+		"Date: Fri, 24 Jul 2026 12:00:00 +0000",
+		"From: Sender <sender@example.test>",
+		"To: Recipient <recipient@example.test>",
+		"Message-ID: <benchmark@example.test>",
+		"MIME-Version: 1.0",
+		"Content-Type: text/html; charset=utf-8",
+		"",
+		htmlBody,
+		"",
+	}, "\r\n")
 }
 
 func benchmarkNewsletterHTML(sectionCount int) string {

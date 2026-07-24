@@ -17,7 +17,7 @@ The API routes are:
 | `GET` | `/api/mailboxes/{id}/messages` | List or search messages in a mailbox. |
 | `GET` | `/api/mailboxes/{id}/events` | List reconciled calendar events for a mailbox. |
 | `GET` | `/api/messages/{id}` | Get parsed message detail and mark it read. |
-| `GET` | `/api/messages/{id}/inspect` | Inspect raw MIME, extracted links, and diagnostic checks. |
+| `GET` | `/api/messages/{id}/inspect` | Return a versioned offline inspection report. |
 | `POST` | `/api/messages/actions` | Delete messages or set their read state. |
 | `GET` | `/api/attachments/{id}` | Return stored attachment bytes. |
 | `GET` | `/api/events` | Open the global SSE stream. |
@@ -301,56 +301,117 @@ The underlying attachment remains addressable by its ID if a client already know
 
 ### `GET /api/messages/{id}/inspect`
 
-Inspects the stored raw MIME and parsed message fields. This route does not mark the message read.
+Returns a deterministic, offline report for the stored message without marking it read. Raw bytes are authoritative when present; legacy selected bodies are fallback input only when raw parsing or presentation selection is unavailable. Stored header JSON is validated for corrupt-row error compatibility but is not analyzed as raw header evidence.
 
-Returns `200 OK`:
+Successful analysis returns `200 OK`, including sender-caused syntax defects, absent raw source, and bounded-analysis truncation. Such conditions are represented by findings and, when parsing cannot complete, `analysis.state: "partial"`, not an HTTP error.
 
 ```json
 {
+  "analysis": {
+    "version": 1,
+    "state": "complete",
+    "parsedThroughPath": null,
+    "unavailableRuleFamilies": [],
+    "truncated": false
+  },
+  "summary": {
+    "fail": 0,
+    "warning": 0,
+    "advisory": 1,
+    "observed": 2,
+    "pass": 12,
+    "notEvaluated": 0
+  },
+  "findings": [
+    {
+      "id": "authentication.dkim.1",
+      "category": "authentication",
+      "outcome": "observed",
+      "severity": "none",
+      "basis": "evidence",
+      "applicability": "all",
+      "label": "DKIM signature syntax",
+      "detail": "Signature and body hash were not cryptographically verified.",
+      "evidence": [
+        {"source":"raw-header","field":"DKIM-Signature","occurrence":1}
+      ],
+      "evidenceTruncated": false,
+      "reference": {
+        "label": "RFC 6376",
+        "url": "https://www.rfc-editor.org/rfc/rfc6376"
+      }
+    }
+  ],
+  "resources": [
+    {
+      "kind": "link",
+      "path": "1.2",
+      "url": "https://example.com",
+      "text": "Example",
+      "occurrenceCount": 1
+    }
+  ],
   "mimeTree": {
+    "path": "1",
     "contentType": "multipart/alternative",
     "charset": null,
     "encoding": null,
     "disposition": null,
     "filename": null,
-    "size": 456,
+    "contentId": null,
+    "rawSize": 456,
+    "decodedSize": null,
     "children": []
-  },
-  "links": [
-    {
-      "href": "https://example.com",
-      "text": "Example",
-      "kind": "link"
-    }
-  ],
-  "checks": [
-    {
-      "id": "message-id",
-      "label": "Message-ID",
-      "status": "pass",
-      "detail": "Message-ID header present."
-    }
-  ]
+  }
 }
 ```
 
-`mimeTree` is `null` when no raw MIME bytes are stored. Otherwise it is a recursive MIME node:
+The schema version is currently `analysis.version: 1`. Arrays are always present and encode as arrays, including when empty. `mimeTree` is `null` when raw source is absent or no root header was safely completed. `parsedThroughPath` is non-null only for the last complete MIME node before a fatal or bounded stop. `unavailableRuleFamilies` lists unavailable categories in catalog order without duplicates.
 
-| Field | Type |
+Top-level and nested fields:
+
+| Object | Required fields and types |
 | --- | --- |
-| `contentType` | string |
-| `charset` | string or `null` |
-| `encoding` | string or `null` |
-| `disposition` | string or `null` |
-| `filename` | string or `null` |
-| `size` | integer |
-| `children` | MIME node array |
+| report | `analysis` object, `summary` object, `findings` array, `resources` array, `mimeTree` object or `null` |
+| analysis | `version` integer, `state` string, `parsedThroughPath` string or `null`, `unavailableRuleFamilies` string array, `truncated` boolean |
+| summary | integer `fail`, `warning`, `advisory`, `observed`, `pass`, `notEvaluated` |
+| finding | string `id`, `category`, `outcome`, `severity`, `basis`, `applicability`, `label`, `detail`; `evidence` array; `evidenceTruncated` boolean; `reference` object or `null` |
+| evidence | required string `source`; optional `path`, `field`, `value` strings and `occurrence`, `line` integers |
+| reference | string `label` and `url` |
+| resource | string `kind`, `url`, `text`; `path` string or `null`; integer `occurrenceCount` |
+| MIME node | string `path`, `contentType`; nullable string `charset`, `encoding`, `disposition`, `filename`, `contentId`; nullable integer `rawSize`, `decodedSize`; `children` array |
 
-Each extracted link has `href`, `text`, and `kind`. Current kinds are `link`, `image`, and `tracking-pixel`. CID and data-URI images are not included in the image-link results. If HTML is absent, HTTP(S) URLs are extracted from the text body.
+Closed enums:
 
-Each diagnostic check has string fields `id`, `label`, `status`, and `detail`. Current status values are `pass`, `warn`, and `info`. Checks are heuristic diagnostics, not delivery or security guarantees.
+| Field | Values |
+| --- | --- |
+| `analysis.state` | `complete`, `partial` |
+| `category` | `analysis`, `message`, `mime`, `authentication`, `unsubscribe`, `content`, `privacy`, `compatibility` |
+| `outcome` | `pass`, `fail`, `observed`, `not-evaluated` |
+| `severity` | `error`, `warning`, `advisory`, `none` |
+| `basis` | `standard`, `recommendation`, `heuristic`, `evidence` |
+| `applicability` | `all`, `html`, `mailing-list`, `one-click-claim`, `bulk-marketing`, `unknown` |
+| evidence `source` | `raw-header`, `raw-line`, `mime-part`, `html`, `text` |
+| resource `kind` | `link`, `image`, `tracking-pixel`, `cid`, `data`, `attachment` |
 
-Responses are `400` with `Invalid message id`, `404` with `Message not found`, or plain-text `500` on internal failure.
+Summary buckets are mutually exclusive. `fail` counts failed findings; `warning` and `advisory` count passing recommendation/heuristic findings with those severities; `observed` and `notEvaluated` count their corresponding outcomes; `pass` counts only `pass` with severity `none`. Omitted rules are not counted.
+
+Findings use category order shown above. Within a category they order failed errors, warnings, advisories, not-evaluated results, observations, and ordinary passes, then by ID. Dynamic IDs append an occurrence or MIME path. Resources retain first-seen order; MIME children retain wire order.
+
+Every finding always includes `evidence`, `evidenceTruncated`, and `reference`; `reference` is `null` when unavailable. Evidence coordinates `path`, `field`, `occurrence`, `line`, and `value` are omitted when inapplicable. Every resource always includes `path`, which is `null` for fallback data. MIME `charset`, `encoding`, `disposition`, `filename`, `contentId`, `rawSize`, and `decodedSize` are present and nullable. A size of zero is distinct from `null`: raw size is known only for a complete indexed body range, and decoded size only after successful transfer decoding and text charset conversion; multipart decoded size is `null`.
+
+Reports may be partial because raw source is unavailable, semantic parsing stopped at a sender defect, or a deterministic parser/analyzer cap was reached. Unsupported encodings or charsets instead produce findings and nullable decoded sizes where applicable. Partial reports retain completed-prefix evidence. `analysis.truncated` is always retained when a cap is reached, and `truncated` becomes `true`. Authentication-Results, DKIM, ARC, unsubscribe, links, images, and MIME bytes are inspected statically; Hoomail performs no DNS or network access and does not verify SPF, DKIM signatures/body hashes, DMARC, ARC custody, alignment, endpoints, reputation, SMTP transport, delivery, or provider rendering. The 102 KiB compatibility heuristic measures selected decoded HTML only, never the total message or attachments.
+
+Responses:
+
+| Status | Body | Condition |
+| --- | --- | --- |
+| `200` | inspection report JSON | Complete or partial analysis, including ordinary message/parser defects. |
+| `400` | `{"error":"Invalid message id"}` | The path ID is invalid. |
+| `404` | `{"error":"Message not found"}` | No message has that ID. |
+| `500` | plain text `Internal Server Error` | Store failure, invalid persisted header JSON, analyzer invariant failure, or response encoding failure. |
+
+The `200`, `400`, and `404` responses use `Content-Type: application/json`; `500` remains plain text.
 
 ### `POST /api/messages/actions`
 
@@ -641,6 +702,6 @@ The contract above is derived from the current repository implementation and tes
 - `internal/events/events.go` — event payloads and the 64-event best-effort subscription hub.
 - `internal/store/store.go` and `internal/store/operations.go` — stored field shapes, ordering, side effects, reconciliation, reset, and event triggers.
 - `internal/calendar/calendar.go` — calendar payload and part-recognition shapes.
-- `internal/inspect/inspect.go` — sanitization, CID rewriting, MIME inspection, links, and checks.
+- `internal/inspect/inspect.go` and `internal/mimeparse` — display sanitization/CID rewriting plus the versioned offline analyzer and shared bounded MIME parser.
 - `internal/sendtest/sendtest.go` — built-in sample-message and SMTP behavior.
 - `internal/httpserver/httpserver_test.go` and `internal/events/events_test.go` — exact error, header, framing, payload, filtering, mutation, ordering, and slow-subscriber assertions.

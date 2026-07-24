@@ -177,18 +177,22 @@ MIME parameters and case are normalized before this decision. Every successful a
 
 ### Inspection
 
-The **Inspect** tab fetches analysis when activated and announces **Analyzing message…** followed by completion to assistive technology.
+The **Inspect** tab fetches analysis lazily when activated. While the request is in progress it shows and announces **Analyzing message…**. After report data exists, it announces **Message analysis complete**.
 
-Inspection includes:
+The report is organized into these regions:
 
-- header checks with `pass`, `warn`, `fail`, or `info` status and explanatory details;
-- extracted links, external images, and suspected tracking pixels;
-- controls that open extracted URLs in a new tab with opener isolation; and
-- a structural MIME tree containing content type, declared charset, transfer-encoding label, disposition, filename, and raw-part body size.
+- **Inspection summary** shows mutually exclusive fail, warning, advisory, observed, pass, and not-evaluated counts. It also shows **Partial analysis** and **Truncated** badges when the backend could not evaluate the complete stored message or reached a safety limit.
+- Non-empty finding groups appear as **Analysis**, **Message format**, **MIME**, **Authentication evidence**, **Unsubscribe readiness**, **Content & accessibility**, **Privacy**, and **Compatibility**. Each finding includes its outcome, severity, basis, applicability, explanatory detail, bounded evidence, and an optional primary-source link.
+- **Links & images** lists aggregated links, images, tracking-pixel candidates, CID/data references, and attachments in first-seen order. The region is omitted when there are no resources.
+- **MIME structure** shows the wire-order MIME tree with each part's path, content type, available metadata, and raw and decoded sizes. Unavailable fields and sizes are labeled as unknown; when no safe tree is available, the panel shows **MIME structure unavailable**.
 
-Opening an extracted link or image URL contacts that external destination. Inspection itself and ordinary HTML preview do not fetch it; review the destination before activating it.
+Partial analysis remains useful: completed prefix structures and available findings are displayed, while unavailable rule families and truncation are called out rather than presented as passes. Older rows without raw source use stored selected bodies only as explicitly labeled legacy fallbacks and cannot produce raw-message, MIME, authentication, or unsubscribe conformance claims.
 
-The MIME tree depends on stored raw source. Older messages captured before inspection support can show checks and extracted URLs but display **Raw source not available for this message (received before inspection support).** instead of a MIME tree.
+The panel always states: **Static offline analysis. Authentication, delivery, and unsubscribe endpoints are not verified.** Inspection performs no DNS, endpoint, reputation, SMTP-transport, delivery, or external-resource verification. Opening a displayed external destination is a separate user action that contacts that destination in a new tab with opener isolation.
+
+If the request fails, the panel stops loading and renders the alert **Could not analyze this message.** with the action **Retry analysis**. Retrying clears stale report/error state, shows **Analyzing message…** again, and then either displays the new report with **Message analysis complete** or returns to the alert. Switching messages uses the new message's independent loading, error, and report state; a previous message's inspection is not retained.
+
+Report enums are versioned and normally closed. If a newer backend supplies an outcome, severity, basis, applicability, category, evidence source, or resource kind the current interface does not recognize, the panel uses a neutral **Unknown** presentation instead of failing to render.
 
 ## Calendar view
 
@@ -297,26 +301,27 @@ Hoomail uses server-sent events (SSE) for event-specific refreshes:
 
 New mail can therefore appear in the current list without a manual page reload. Message and inspection caches are invalidated by realtime handling only for a full reset, not for ordinary message or calendar events.
 
-Observable loading states include:
+Observable loading and inspection status text includes:
 
 - **Loading calendar…** while the separately loaded Calendar interface is being fetched;
 - **Loading message…** before any detail is available;
 - an accessible busy/loading announcement while switching message details;
-- **Analyzing message…** in Inspect; and
+- **Analyzing message…** while an Inspect request is pending;
+- **Message analysis complete** only after inspection data exists;
+- **Could not analyze this message.** and **Retry analysis** after an Inspect request fails; and
 - attachment text-preview loading and failure text.
 
 The message viewer deliberately retains the previously displayed detail while the next message request is pending, keeping the viewer shell and existing iframe mounted until replacement content is ready.
 
 ## Current error and status limitations
 
-The UI has targeted feedback for Send-test failures and text-attachment preview failures, but it does not currently provide a general network-error banner or notification system.
+The UI has targeted feedback for Send-test failures, text-attachment preview failures, and inspection failures with an explicit retry action, but it does not currently provide a general network-error banner or notification system.
 
 Consequences include:
 
 - failed inbox, message-list, or calendar loads can appear empty;
 - a failed initial message-detail request can remain on **Loading message…**;
-- mailbox deletion and message read/unread/delete failures have no visible error notification and are handled through silent refresh where implemented;
-- inspection request failure has no dedicated error state; and
+- mailbox deletion and message read/unread/delete failures have no visible error notification and are handled through silent refresh where implemented; and
 - realtime connection state, disconnection, reconnection, and last-event time are not displayed.
 
 The absence of a realtime-status indicator means the interface does not tell users or accessibility reviewers whether SSE is currently connected. A manual reload may be necessary when validating behavior after an unseen network interruption.

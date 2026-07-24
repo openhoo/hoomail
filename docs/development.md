@@ -200,9 +200,8 @@ For quicker investigation, use package-focused tests:
 
 ```bash
 go test ./internal/pop3server
-go test ./internal/smtpserver
+go test ./internal/mimeparse ./internal/smtpserver ./internal/inspect ./internal/httpserver
 go test ./internal/calendar ./internal/store
-go test ./internal/httpserver ./internal/inspect
 go test ./internal/sendtest
 go test ./internal/events
 ```
@@ -210,39 +209,54 @@ go test ./internal/events
 | Packages | Primary contracts proved |
 | --- | --- |
 | `internal/pop3server` | Real socket protocol flow, authentication state, listing/retrieval, dot-stuffing, and delete-on-successful-`QUIT` semantics |
-| `internal/smtpserver` | SMTP envelope and BCC recipients, normalization/deduplication, raw MIME preservation, MIME parsing, and advertised/enforced 25 MiB size behavior |
+| `internal/mimeparse` | Shared bounded raw indexing and semantic MIME parsing, stable paths/ranges, parser limits, decoded/raw sizes, malformed and partial structures, and presentation selection |
+| `internal/smtpserver` | SMTP envelope and BCC recipients, normalization/deduplication, raw MIME preservation, projection of the shared parser's selected bodies/attachments/calendars, and advertised/enforced 25 MiB size behavior |
+| `internal/inspect` | Versioned deterministic analysis, complete/partial/truncated reports, fixed rule families and ordering, evidence/resources, HTML single-pass and cap contracts, and invariant-error propagation |
+| `internal/httpserver` | HTTP response/error shapes, SSE handshake, attachment delivery, SPA fallback, sanitized/CID-rewritten message details, typed inspection reports, unchanged `400`/`404`/`500` behavior, and no inspect read-state mutation |
 | `internal/calendar`, `internal/store` | iCalendar parsing and sequence/reply/cancellation reconciliation; SQLite migrations, search, transactions/events, cascades, reset, and message persistence semantics within the test process |
-| `internal/httpserver`, `internal/inspect` | HTTP response/error shapes, SSE handshake, attachment delivery, SPA fallback, sanitized/CID-rewritten message details, MIME/link/header inspection |
 | `internal/sendtest` | Built-in sample-message generation contracts |
 | `internal/events` | Event-hub subscription and broadcast behavior |
 
-Package tests are the primary coverage for protocol and parsing edge cases that would be unnecessarily indirect or slow to express through the browser.
+`internal/mimeparse` is the single structural parser used by both SMTP ingestion and inspection. SMTP remains responsible for envelope behavior and storage projection; `internal/inspect` owns the bounded analyzer, rule catalog, HTML facts, report caps, and offline-only conclusions. Focus changes on these packages together so parser selection and SMTP behavior cannot drift into separate implementations.
+
+Package tests are the primary coverage for protocol, parser, analyzer, cap, and malformed-message boundaries that would be unnecessarily indirect or slow to express through the browser.
 
 ## Go benchmarks
 
-Run the full benchmark inventory without running unit tests:
+Run the parser and analyzer benchmarks without running unit tests:
 
 ```bash
-go test ./internal/calendar ./internal/smtpserver ./internal/inspect ./internal/store ./internal/events \
+go test ./internal/mimeparse ./internal/inspect \
+  -run '^$' -bench 'Benchmark(Parse|Analyze)$' -benchmem -benchtime=1s -count=5
+```
+
+`BenchmarkParse` measures complete messages at increasing raw-byte and MIME-part counts plus a cap-saturating worst case. `BenchmarkAnalyze` adds increasing links/resources and the complete rule/report pipeline. These measurements are observational: unit tests, rather than timing, prove single-parser-pass, single-HTML-pass, deterministic-cap, and partial-report contracts.
+
+Retain the SMTP wrapper measurement when evaluating shared-parser changes:
+
+```bash
+go test ./internal/mimeparse ./internal/smtpserver \
+  -run '^$' -bench 'Benchmark(Parse|ParseMIME)' -benchmem -benchtime=1s -count=5
+```
+
+`BenchmarkParseMIME` measures the SMTP-facing wrapper, including presentation and storage projection. Compare repeated samples with `benchstat`; examine allocations first (`allocs/op`), then allocated bytes (`B/op`), then timing on equivalent hardware and toolchains. A parser improvement must not silently move material work or allocation into the SMTP hot path.
+
+The broader benchmark inventory remains available when a change crosses subsystems:
+
+```bash
+go test ./internal/calendar ./internal/mimeparse ./internal/smtpserver ./internal/inspect ./internal/store ./internal/events \
   -run '^$' -bench . -benchmem -benchtime=100ms
 ```
 
-`-run '^$'` intentionally selects no unit tests. The benchmark set covers:
+That inventory also covers iCalendar parsing, HTML sanitization and CID rewriting, SQLite list/search/store operations, synchronous event fan-out, and the Chromium frontend benchmark described above. Benchmarks are not CI pass/fail thresholds.
 
-- realistic iCalendar `REQUEST` parsing and a generated 100-event `PUBLISH` calendar;
-- small plain and realistic multipart SMTP/MIME parsing, including envelope recipients;
-- HTML sanitization, CID rewriting, MIME-tree construction, and link/header inspection at multiple input sizes;
-- listing and searching a 1,000-message SQLite inbox and storing a realistic attachment-bearing message;
-- synchronous event broadcast fan-out to 1, 16, and 64 subscribers.
+## Offline inspection fixture workflow
 
-For a more stable targeted comparison, run repeated one-second samples:
+Inspection fixtures must be deterministic raw messages committed with the focused parser/analyzer tests or constructed directly in those tests. Use one standards-clean fixture as the zero-failure baseline and separate minimal fixtures for each rule family and false-positive boundary. Before reusing a malformed fixture in Playwright, first prove that `internal/smtpserver.Parse` accepts that exact raw message; rows representing input SMTP currently rejects must be inserted directly through the store only in endpoint tests.
 
-```bash
-go test ./internal/store -run '^$' \
-  -bench 'BenchmarkListMessages1000' -benchmem -benchtime=1s -count=5
-```
+For browser verification, submit the accepted fixture through the isolated real SMTP listener, capture the message ID from the detail request the UI already makes, request `/api/messages/{id}/inspect`, and assert exact finding IDs and derived summary buckets before checking the grouped panel. The inspection route must make no non-loopback request while opening the tab. Fixture URLs, authentication claims, DKIM selectors, SPF/DMARC-looking domains, and one-click endpoints are syntax evidence only: use unroutable/example destinations and verify deterministic output without DNS, HTTP, cryptographic, reputation, transport, delivery, or endpoint checks.
 
-Compare allocations first (`allocs/op`), then allocated bytes (`B/op`), then timing across repeated samples. Benchmarks are not CI thresholds and should be compared on equivalent hardware, toolchains, and workloads.
+The focused viewer workflow must also cover request failure and recovery: intercept inspection with `500`, assert **Could not analyze this message.** and **Retry analysis**, restore the route, retry, observe **Analyzing message…**, and then **Message analysis complete**. This proves the explicit error lifecycle; failed inspection requests must not remain indefinitely in loading state.
 
 ## What CI checks
 

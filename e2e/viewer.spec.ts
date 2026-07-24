@@ -89,12 +89,14 @@ test('message viewer tabs, inspection, and attachments expose the complete plain
   await expect(inspectTab).toHaveAttribute('aria-selected', 'true')
   await expect(page.getByRole('status').filter({ hasText: 'Message analysis complete' })).toBeVisible()
 
-  const headerChecks = page.getByRole('region', { name: 'Header checks' })
+  const summary = page.getByRole('region', { name: 'Inspection summary' })
   const linksAndImages = page.getByRole('region', { name: 'Links and images' })
   const mimeStructure = page.getByRole('region', { name: 'MIME structure' })
-  await expect(headerChecks).toBeVisible()
-  await expect(linksAndImages.getByRole('heading', { name: 'Links & images (1)' })).toBeVisible()
+  await expect(summary).toBeVisible()
+  await expect(summary).toContainText('Static offline analysis. Authentication, delivery, and unsubscribe endpoints are not verified.')
+  await expect(linksAndImages.getByRole('heading', { name: 'Links & images (2)' })).toBeVisible()
   await expect(linksAndImages).toContainText('https://example.com')
+  await expect(linksAndImages).toContainText('hoot.txt')
   await expect(mimeStructure).toBeVisible()
 
   await page.keyboard.press('Home')
@@ -122,6 +124,57 @@ test('message viewer tabs, inspection, and attachments expose the complete plain
   const response = await request.get(href)
   expect(response.status()).toBe(200)
   expect(response.headers()['content-disposition']).toBe('attachment; filename="hoot.txt"')
+})
+
+test('inspection failure exposes retry and recovers the same message', async ({ page, request }) => {
+  const recipient = 'viewer-inspection-retry@hoomail.test'
+  const subject = 'Viewer inspection retry'
+  await sendTestMessage(request, { to: recipient, subject, kind: 'plain' })
+  const row = messageRow(page, subject)
+  await expect(row).toBeVisible()
+  await row.click()
+  await expect(page.getByRole('status').filter({ hasText: `Message loaded: ${subject}` })).toBeVisible()
+
+  let failInspection = true
+  await page.route('**/api/messages/*/inspect', async (route) => {
+    if (failInspection) {
+      await route.fulfill({ status: 500, contentType: 'text/plain', body: 'Internal Server Error\n' })
+      return
+    }
+    await route.continue()
+  })
+
+  await page.getByRole('tab', { name: 'Inspect' }).click()
+  await expect(page.getByRole('alert')).toHaveText('Could not analyze this message.')
+  failInspection = false
+  await page.getByRole('button', { name: 'Retry analysis' }).click()
+  await expect(page.getByRole('status').filter({ hasText: 'Analyzing message…' })).toBeVisible()
+  await expect(page.getByRole('status').filter({ hasText: 'Message analysis complete' })).toBeVisible()
+  await expect(page.getByRole('region', { name: 'Inspection summary' })).toBeVisible()
+})
+
+test('partial inspection displays unavailable rule families and parsed scope', async ({ page, request }) => {
+  const recipient = 'viewer-inspection-partial@hoomail.test'
+  const subject = 'Viewer partial inspection'
+  await sendTestMessage(request, { to: recipient, subject, kind: 'plain' })
+  const row = messageRow(page, subject)
+  await expect(row).toBeVisible()
+  await row.click()
+  await expect(page.getByRole('status').filter({ hasText: `Message loaded: ${subject}` })).toBeVisible()
+
+  await page.route('**/api/messages/*/inspect', async (route) => {
+    const response = await route.fetch()
+    const report = await response.json()
+    report.analysis.state = 'partial'
+    report.analysis.parsedThroughPath = '1.2'
+    report.analysis.unavailableRuleFamilies = ['mime', 'authentication']
+    await route.fulfill({ response, json: report })
+  })
+
+  await page.getByRole('tab', { name: 'Inspect' }).click()
+  const summary = page.getByRole('region', { name: 'Inspection summary' })
+  await expect(summary).toContainText('Parsed through MIME path 1.2.')
+  await expect(summary).toContainText('Unavailable checks: mime, authentication.')
 })
 
 test('switching plain to invite and back restores HTML without stale invite content', async ({ page, request }) => {

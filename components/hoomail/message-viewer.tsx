@@ -1,6 +1,7 @@
 import type { ComponentChildren } from 'preact'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { Download, FileText, Paperclip } from '@/components/ui/icons'
+import { asyncComponent } from '@/components/ui/async-component'
 import { Badge } from '@/components/ui/badge'
 import {
   Dialog,
@@ -10,7 +11,6 @@ import {
 } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { InspectPanel } from './inspect-panel'
 import { InviteCard } from './invite-card'
 import {
   formatBytes,
@@ -18,6 +18,13 @@ import {
   type FullMessage,
   useCachedResource,
 } from './use-hoomail'
+
+const InspectPanel = asyncComponent(
+  () => import('./inspect-panel').then(({ InspectPanel }) => InspectPanel),
+  <div role="status" aria-live="polite" className="flex h-full items-center justify-center">
+    <p className="text-sm text-muted-foreground">Analyzing message…</p>
+  </div>,
+)
 
 const IFRAME_CONTAINMENT_STYLES = `
   <style>

@@ -104,60 +104,40 @@ Individual message deletion does not remove reconciled calendar state; see [Cale
 
 ## HTML preview and inspection
 
-Preview sanitization and inspection are related but separate operations. SQLite retains the selected, decoded HTML representation and the complete raw MIME. The HTTP message-detail response rewrites scoped CID references and sanitizes a copy for display; inspection derives diagnostics from stored raw MIME, parsed headers, and parsed bodies.
+Preview sanitization and inspection are related but separate projections. SQLite retains selected decoded bodies and complete raw MIME without a schema migration. The message-detail endpoint rewrites scoped CID references and sanitizes a copy for display. SMTP ingestion and inspection share one semantic MIME parser and presentation selector: SMTP owns envelope handling and storage projection, while inspection additionally builds bounded raw header, line, body, boundary, and wire-order indexes.
 
-### Standards, compatibility, and security
+### Standards and compatibility
 
 Rich HTML email—including table layouts, branding, color, typography, and elaborate inline styling—is valid `text/html`. Whether a particular declaration renders in Outlook, Gmail, Apple Mail, or another client is a compatibility question, not MIME validity. Hoomail preserves safe sender formatting to inspect the captured message, but does not claim pixel-perfect parity with those clients.
 
-Security is a third boundary. Hoomail uses a Bluemonday policy built on Go's HTML parser/tokenizer rather than regex replacement as the display security boundary. The policy preserves common email structures and ordinary formatting while allowing only a conservative set of inline presentation properties. Scripts, frames, forms, active embeds, event handlers, metadata/base changes, unsafe URL schemes, CSS URL/network functions, remote images, fonts, media, and other fetch initiators are removed. This follows the allowlist principle described by [OWASP's HTML sanitization guidance](https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html#html-sanitization).
 
-Matching CID image sources are rewritten before final sanitization. Safe absolute `http:`, `https:`, and `mailto:` links can remain as inert, externalized metadata with `target="_blank"` and `rel="noopener noreferrer"`; the empty-sandbox preview itself cannot navigate or open them. Use the Inspect view to review extracted destinations before opening them separately. Remote image URLs and tracking pixels can still be reported by inspection from the stored HTML, but previewing a message never fetches them.
+### Inspection ownership and offline report
 
-### Link and image extraction heuristics
+Raw bytes are authoritative when present. Inspection preserves duplicate header fields, casing, whitespace, physical line endings, MIME boundaries, and stable 1-based part paths from bounded raw indexes. Semantic nodes own normalized media metadata, transfer-decoded content, charset-converted text, and the selected text/HTML presentation. Raw and decoded sizes therefore have different meanings: raw size covers a complete indexed entity body excluding multipart boundaries; decoded size exists only after transfer decoding and, for text, charset conversion succeeds. Multipart decoded size is unknown.
 
-When a non-empty HTML body exists, inspection extracts:
+Legacy rows require no database migration. When raw is absent, stored selected HTML/text bodies are fallback evidence; stored header JSON is decoded only to preserve corrupt-row error behavior and is not treated as raw header evidence. When raw exists, raw bytes are authoritative and stored bodies are used only when semantic presentation selection is unavailable. Fallback-derived findings identify that provenance and never imply reconstructed MIME selection or raw/authentication conformance.
 
-- quoted `href` values from `<a>` elements; and
-- quoted `src` values from `<img>` elements.
+The inspection endpoint returns report schema version `1` with:
 
-Fragment-only links are skipped, repeated link/image URLs are deduplicated within their kind, and anchor text is stripped of tags, whitespace-normalized, and truncated. CID and `data:` images are omitted from the extracted external-image list. Bare URLs appearing only as HTML text are not extracted.
+- analysis state, parsed-prefix path, unavailable rule families, and truncation state;
+- mutually exclusive summary counts;
+- ordered applicability-aware findings with bounded evidence and primary references;
+- first-seen resources covering links, images, suspected tracking pixels, CID/data sources, and MIME attachments; and
+- a wire-order MIME tree with nullable raw/decoded sizes.
 
-Plain-text `http://` and `https://` URLs are extracted only when HTML is absent or empty. Plain text is not used as an additional source when HTML is present.
+Findings cover message format, MIME, authentication and ARC evidence, unsubscribe syntax, content/accessibility, privacy, and compatibility. Authentication-Results assertions, DKIM/ARC fields, and DKIM unsubscribe-coverage claims are parsed as untrusted static evidence. A syntactically valid DKIM field does not mean the message is signed or verified: signature/body-hash validity, DNS keys, SPF, DMARC, ARC custody, alignment, reputation, SMTP transport, delivery, and unsubscribe endpoint behavior are unavailable from stored bytes and are never inferred.
 
-An image is classified as a **likely tracking pixel** when its tag contains `display:none`, `visibility:hidden`, a numeric width of at most 1, or a numeric height of at most 1. This is a heuristic: it can miss tracking techniques and can classify legitimate tiny or hidden images as tracking pixels. Inspection does not fetch remote URLs.
+HTML facts are collected once from the selected decoded HTML, before display sanitization. Link resources accept parseable HTTP, HTTPS, and mailto anchor destinations. Image resources distinguish HTTP(S), `cid:`, and `data:` sources; an external hidden or at-most-1-pixel candidate is reported as a tracking-pixel resource rather than duplicated as an image. This remains heuristic and can produce false positives or negatives. Plain-text HTTP(S) scanning runs only when authoritative HTML is unavailable. Resources retain exact bounded values, aggregate identical `(kind, path, URL)` occurrences, and are never fetched by inspection.
 
-### Inspection check catalog
+The Gmail clipping-risk heuristic uses only selected decoded HTML bytes above 102 KiB. It does not use total raw-message size, attachments, or encoded multipart overhead, and it is provider-behavior guidance rather than a conformance result.
 
-The inspection endpoint reports `pass`, `warn`, or `info` results for the following checks:
+Inspection is bounded and deterministic. Parser/analyzer caps can stop raw bytes, MIME depth/parts, headers, physical lines, legacy bodies, HTML tokens/nodes, resources, findings, evidence, or report bytes. Completed-prefix evidence remains available, `analysis.state` becomes `partial`, and `analysis.truncated` records causes. Raw absence or fatal semantic parsing can also produce useful partial reports. Unsupported encodings and charsets instead produce findings and unknown decoded sizes where applicable. Only internal parser/index correlation or other invariant failures become endpoint `500` responses.
 
-| Check | What Hoomail evaluates |
-| --- | --- |
-| Message-ID | Whether a `Message-ID` header is present. |
-| Authentication-Results | Textual `spf=...` and `dkim=...` tokens in `Authentication-Results`; both must equal `pass` for a passing result. |
-| DKIM-Signature | Whether a `DKIM-Signature` header is present. |
-| List-Unsubscribe | Whether a `List-Unsubscribe` header is present. |
-| Image alt text | For HTML messages, counts `<img>` tags with no `alt` attribute. An empty `alt` attribute counts as present. |
-| External images | For HTML messages, counts extracted non-CID, non-data images not classified as tracking pixels. |
-| Tracking pixels | Counts images classified by the size/hidden-style heuristic above. |
-| Message size | Warns when the stored raw-message size is greater than 102 KiB as an indicator of Gmail clipping risk. |
-| Link security | Warns for extracted link-kind URLs beginning with plain `http://`. |
+### Preview security boundary
 
-These are diagnostics, not cryptographic or deliverability verification. Hoomail does not validate DKIM signatures, perform SPF evaluation, determine whether unsubscribe behavior works, assess remote-host reputation, or prove that a provider will accept, render, or clip a message.
+Security remains separate from analysis. Hoomail uses a Bluemonday policy built on Go's HTML parser/tokenizer rather than regex replacement as the display boundary. The policy preserves common email structures and ordinary formatting while allowing only a conservative set of inline presentation properties. Scripts, frames, forms, active embeds, event handlers, metadata/base changes, unsafe URL schemes, CSS URL/network functions, remote images, fonts, media, and other fetch initiators are removed. This follows the allowlist principle described by [OWASP's HTML sanitization guidance](https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html#html-sanitization).
 
-### MIME tree and its limits
-
-When raw MIME bytes exist, inspection builds a structural tree containing:
-
-- content type;
-- charset parameter;
-- transfer-encoding label;
-- content disposition;
-- filename (preferring disposition `filename`, then content-type `name`);
-- body size measured in UTF-16 code units; and
-- recursively discovered multipart children.
-
-The tree is a lightweight diagnostic view. It unfolds header continuations and splits multipart bodies on the declared boundary, but it does not decode transfer-encoded bodies, decode RFC 2047/RFC 2231 parameter values, or provide a standards-complete MIME parse. Reported node size describes the body text as present in the raw part, not necessarily the decoded attachment or rendered body size. If legacy data has no raw MIME, no MIME tree is returned.
+Matching CID image sources are rewritten before final sanitization. Safe absolute `http:`, `https:`, and `mailto:` links can remain as inert, externalized metadata with `target="_blank"` and `rel="noopener noreferrer"`; the empty-sandbox preview itself cannot navigate or open them. Use Inspect to review destinations before opening them separately. Neither inspection nor preview fetches remote image URLs.
 
 ## Calendar recognition and parsing
 
@@ -264,8 +244,8 @@ Do not treat `last_message_id` as guaranteed dereferenceable history. It identif
 - Search is mailbox-local and field-limited; it is not full-text search over raw mail or attachments.
 - Each envelope recipient consumes independent storage for the message and all attachment bytes.
 - Inline CID resources do not contribute to the message-list attachment count. Recognized calendar parts can contribute to that count. Message detail always omits CID resources, but hides recognized calendar parts only when parsed iCalendar JSON is non-null; unparseable or wholly incomplete calendar content can remain downloadable, while any parsed event causes all recognized calendar parts in that message to be hidden. All remain stored.
-- Preview rendering uses a parsed allowlist, blocks remote resources by default, and keeps safe sender formatting without promising delivery-client parity. Inspection remains heuristic and performs no remote or cryptographic verification.
-- The MIME tree is structural, not a full decoder.
+- Preview rendering uses a parsed allowlist, blocks remote resources, and keeps safe sender formatting without promising delivery-client parity.
+- Inspection is bounded static analysis. Partial reports preserve completed evidence; no network, cryptographic, authentication, endpoint, transport, delivery, reputation, or provider-rendering verification occurs.
 - Calendar support is a practical subset of iCalendar, not complete RFC 5545 scheduling. Unknown methods have no documented scheduling contract.
 - Unknown `TZID` values silently become server-local time, and embedded `VTIMEZONE` data is not applied.
 - Stale updates remain visible in their source messages even though they do not change reconciled calendar state.
@@ -277,7 +257,7 @@ The contracts above are grounded in the current implementation:
 
 - `internal/store/store.go` — database opening, pragmas, schema, legacy columns, mailbox ordering/counts, search, and attachment counts.
 - `internal/store/operations.go` — recipient copies, stored fields/BLOBs, read/delete/reset behavior, and calendar reconciliation.
-- `internal/smtpserver/parser.go` and `internal/smtpserver/smtpserver.go` — raw/parsed MIME ingestion, attachment classification, calendar-part parsing, and recipient normalization.
-- `internal/inspect/inspect.go` — preview sanitization, CID rewriting, link/image heuristics, check catalog, and MIME-tree construction.
+- `internal/mimeparse` and `internal/smtpserver/parser.go` — shared MIME/raw parsing and presentation selection; SMTP storage projection and acceptance behavior.
+- `internal/inspect/inspect.go` — preview sanitization/CID rewriting and the versioned bounded offline report.
 - `internal/calendar/calendar.go` — recognized calendar parts, parser fields, date/time/duration behavior, and method defaults.
 - `internal/httpserver/httpserver.go` — sanitized message-detail projection, hidden CID/calendar attachment behavior, and inspection response assembly.

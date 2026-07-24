@@ -13,6 +13,7 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/openhoo/hoomail/internal/inspect"
 	"github.com/openhoo/hoomail/internal/store"
 )
 
@@ -279,27 +280,85 @@ func TestSendTestValidationDefaultsAndError(t *testing.T) {
 	assertResponse(t, request(t, handler, http.MethodPost, "/api/send-test", `{}`), 502, `{"error":"Could not reach the SMTP server. Is it running?"}`)
 }
 
-func TestInspectNotFoundAndShape(t *testing.T) {
+func TestInspectNotFoundAndReportShape(t *testing.T) {
 	data := testStore(t)
 	handler := New(data, StaticConfig{}, nil)
+	assertResponse(t, request(t, handler, http.MethodGet, "/api/messages/nope/inspect", ""), 400, `{"error":"Invalid message id"}`)
 	assertResponse(t, request(t, handler, http.MethodGet, "/api/messages/8/inspect", ""), 404, `{"error":"Message not found"}`)
-	stored, err := data.StoreMessage(context.Background(), store.StoreMessageInput{Recipients: []string{"inspect@example.com"}, To: []store.AddressEntry{}, CC: []store.AddressEntry{}, Headers: map[string]string{"subject": "Hello"}, Text: pointer("visit https://example.com"), Raw: []byte("Subject: Hello\r\nContent-Type: text/plain\r\n\r\nbody")})
+	stored, err := data.StoreMessage(context.Background(), store.StoreMessageInput{
+		Recipients: []string{"inspect@example.com"},
+		To:         []store.AddressEntry{},
+		CC:         []store.AddressEntry{},
+		Headers:    map[string]string{"subject": "Hello"},
+		Text:       pointer("visit https://example.com"),
+		Raw:        []byte("Date: Thu, 24 Jul 2026 12:00:00 +0000\r\nFrom: sender@example.com\r\nTo: inspect@example.com\r\nMessage-ID: <inspect@example.com>\r\nSubject: Hello\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nvisit https://example.com"),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	response := request(t, handler, http.MethodGet, "/api/messages/"+jsonNumber(stored[0].MessageID)+"/inspect", "")
-	if response.Code != 200 {
+	if response.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
-	var body map[string]json.RawMessage
-	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+	if contentType := response.Header().Get("Content-Type"); !strings.HasPrefix(contentType, "application/json") {
+		t.Fatalf("content type=%q", contentType)
+	}
+	var report inspect.Report
+	if err := json.Unmarshal(response.Body.Bytes(), &report); err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"mimeTree", "links", "checks"} {
-		if _, ok := body[key]; !ok {
-			t.Errorf("missing %s", key)
+	if report.Analysis.Version != 1 || report.Analysis.State != "complete" {
+		t.Fatalf("analysis=%+v", report.Analysis)
+	}
+	if report.MIMETree == nil || len(report.Findings) == 0 || report.Resources == nil {
+		t.Fatalf("report shape=%+v", report)
+	}
+	var read int
+	if err := data.DB().QueryRow(`SELECT is_read FROM messages WHERE id=?`, stored[0].MessageID).Scan(&read); err != nil || read != 0 {
+		t.Fatalf("read=%d err=%v", read, err)
+	}
+}
+
+func TestInspectRawlessPartialAndCorruptHeaders(t *testing.T) {
+	data := testStore(t)
+	handler := New(data, StaticConfig{}, nil)
+	legacyHTML := `<p>Legacy <a href="https://example.com">link</a></p>`
+	stored, err := data.StoreMessage(context.Background(), store.StoreMessageInput{
+		Recipients: []string{"legacy@example.com"},
+		To:         []store.AddressEntry{},
+		CC:         []store.AddressEntry{},
+		Headers:    map[string]string{"subject": "Legacy"},
+		HTML:       &legacyHTML,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := stored[0].MessageID
+	response := request(t, handler, http.MethodGet, "/api/messages/"+jsonNumber(id)+"/inspect", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var report inspect.Report
+	if err := json.Unmarshal(response.Body.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Analysis.State != "partial" || report.MIMETree != nil {
+		t.Fatalf("legacy analysis=%+v mime=%+v", report.Analysis, report.MIMETree)
+	}
+	found := false
+	for _, finding := range report.Findings {
+		if finding.ID == "analysis.raw-unavailable" {
+			found = true
+			break
 		}
 	}
+	if !found {
+		t.Fatalf("missing raw-unavailable finding: %+v", report.Findings)
+	}
+	if _, err := data.DB().Exec(`UPDATE messages SET headers_json='{' WHERE id=?`, id); err != nil {
+		t.Fatal(err)
+	}
+	assertResponse(t, request(t, handler, http.MethodGet, "/api/messages/"+jsonNumber(id)+"/inspect", ""), 500, "Internal Server Error\n")
 }
 
 func TestSSERequestReturnsPromptlyAfterCancel(t *testing.T) {
