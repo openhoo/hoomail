@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1 (2026-07-24)
+
+### Bug Fixes
+
+- **image:** publish Docker Hub repository details (b1b6683)
+
 ## 0.5.0 (2026-07-24)
 
 ### Other Changes
