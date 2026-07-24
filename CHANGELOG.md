@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.1 (2026-07-24)
+
+### Performance
+
+- **container:** omit unused HTTP/2 code (bcb6669)
+
+### Bug Fixes
+
+- **web:** add application favicon (78dedc3)
+
 ## 0.8.0 (2026-07-24)
 
 ### Features
