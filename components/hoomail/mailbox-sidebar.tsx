@@ -40,15 +40,15 @@ export function MailboxSidebar({
         />
         <div className="flex flex-col">
           <span className="text-base font-semibold leading-tight tracking-tight">hoomail</span>
-          <span className="text-[11px] text-muted-foreground leading-tight">email testing inbox</span>
+          <span className="text-xs text-muted-foreground leading-tight">email testing inbox</span>
         </div>
       </header>
 
       <div className="flex items-center justify-between px-4 pt-3 pb-1.5">
-        <h2 id="inboxes-heading" className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+        <h2 id="inboxes-heading" className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
           Inboxes
         </h2>
-        <AnimatedValue value={mailboxes.length} className="font-mono text-[11px] text-muted-foreground" />
+        <AnimatedValue value={mailboxes.length} className="text-xs tabular-nums text-muted-foreground" />
       </div>
 
       <ScrollArea className="min-h-0 flex-1" aria-label="Inboxes">
@@ -78,8 +78,8 @@ export function MailboxSidebar({
                       )}
                     >
                       <div className="min-w-0 flex-1 py-2">
-                        <p className="truncate font-mono text-[13px] leading-snug">{mailbox.address}</p>
-                        <p className="text-[11px] text-muted-foreground">
+                        <p className="truncate text-sm font-medium leading-snug">{mailbox.address}</p>
+                        <p className="text-xs text-muted-foreground">
                           <AnimatedValue value={mailbox.total_count} />{' '}
                           {mailbox.last_message_at
                             ? ` · ${formatRelativeTime(mailbox.last_message_at)}`
@@ -88,7 +88,7 @@ export function MailboxSidebar({
                       </div>
                       <InlinePresence
                         visible={mailbox.unread_count > 0}
-                        className="reactive-badge flex size-5 shrink-0 items-center justify-center rounded-full bg-primary font-mono text-[10px] font-bold text-primary-foreground"
+                        className="reactive-badge flex size-5 shrink-0 items-center justify-center rounded-full bg-primary text-[12px] font-bold tabular-nums text-primary-foreground"
                       >
                         <AnimatedValue value={mailbox.unread_count > 99 ? '99' : mailbox.unread_count} />
                         <span className="sr-only">{mailbox.unread_count} unread</span>

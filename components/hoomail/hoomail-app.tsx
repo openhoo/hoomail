@@ -339,6 +339,7 @@ export function HoomailApp() {
 
   return (
     <main className="flex h-dvh overflow-hidden bg-background text-foreground">
+      <h1 className="sr-only">Hoomail email testing inbox</h1>
       <MailboxSidebar
         mailboxes={mailboxes}
         selectedId={selectedMailboxId}

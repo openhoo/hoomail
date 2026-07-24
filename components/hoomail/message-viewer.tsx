@@ -30,6 +30,7 @@ const InspectPanel = asyncComponent(
 const IFRAME_CONTAINMENT_STYLES = `
   <style>
     html, body { max-width: 100%; }
+    body { background-color: #efebe5; box-sizing: border-box; margin: 0 !important; padding: 16px !important; }
     img { max-width: 100%; }
   </style>
 `
@@ -176,33 +177,33 @@ export function MessageViewer({
         {detailReady ? `Message loaded: ${message.subject || 'no subject'}` : 'Loading message'}
       </span>
       <header className="shrink-0 border-b border-border px-5 py-4">
-        <h1 className="text-lg font-semibold leading-snug text-balance">
+        <h2 className="text-lg font-semibold leading-snug text-balance">
           {message.subject || '(no subject)'}
-        </h1>
-        <dl className="mt-2 flex flex-col gap-0.5 text-[13px]">
+        </h2>
+        <dl className="mt-2 flex flex-col gap-0.5 text-sm">
           <HeaderRow label="From">
             <span className="font-medium">{message.fromName || message.fromAddress}</span>
             {message.fromName && message.fromAddress && (
-              <span className="ml-1.5 font-mono text-xs text-muted-foreground">
+              <span className="ml-1.5 text-xs text-muted-foreground">
                 {'<'}{message.fromAddress}{'>'}
               </span>
             )}
           </HeaderRow>
           <HeaderRow label="To">
-            <span className="font-mono text-xs">
+            <span className="text-xs">
               {message.to.map((t) => t.address).join(', ') || '—'}
             </span>
           </HeaderRow>
           {message.cc.length > 0 && (
             <HeaderRow label="Cc">
-              <span className="font-mono text-xs">{message.cc.map((c) => c.address).join(', ')}</span>
+              <span className="text-xs">{message.cc.map((c) => c.address).join(', ')}</span>
             </HeaderRow>
           )}
           <HeaderRow label="Date">
             <span className="text-muted-foreground">
               {new Date(message.receivedAt).toLocaleString()}
             </span>
-            <span className="ml-2 font-mono text-[11px] text-muted-foreground">
+            <span className="ml-2 text-xs tabular-nums text-muted-foreground">
               {formatBytes(message.size)}
             </span>
           </HeaderRow>
@@ -262,7 +263,7 @@ export function MessageViewer({
 
         <TabsContent value="text" className="min-h-0 flex-1 data-[state=inactive]:hidden">
           <ScrollArea className="h-full" aria-label="Plain text message">
-            <pre className="whitespace-pre-wrap px-5 py-4 font-mono text-[13px] leading-relaxed">
+            <pre className="whitespace-pre-wrap px-5 py-4 font-mono text-sm leading-relaxed">
               {message.text || 'No plain text part.'}
             </pre>
           </ScrollArea>
@@ -282,7 +283,7 @@ export function MessageViewer({
               <div className="px-5 py-4">
                 <div className="mb-2 flex items-center gap-2">
                   <FileText className="size-3.5 text-muted-foreground" aria-hidden="true" />
-                  <Badge variant="secondary" className="font-mono text-[10px]">
+                  <Badge variant="secondary" className="font-mono text-[12px]">
                     raw message
                   </Badge>
                 </div>
@@ -357,7 +358,7 @@ function ViewportToolbar({
             onCommit={(value) => onViewportChange('height', value)}
             className={dimensionFieldClass}
           />
-          <span className="font-mono text-[10px] text-muted-foreground">px</span>
+          <span className="font-mono text-[12px] text-muted-foreground">px</span>
           <Button
             variant="outline"
             size="icon-sm"
@@ -370,7 +371,7 @@ function ViewportToolbar({
         </div>
       )}
 
-      <span className="ml-auto hidden text-[11px] text-muted-foreground lg:inline">
+      <span className="ml-auto hidden text-xs text-muted-foreground lg:inline">
         Email viewport
       </span>
     </div>
@@ -501,8 +502,8 @@ function HtmlFrame({
       aria-label={viewport ? `${viewport.width} × ${viewport.height} pixel email preview` : undefined}
       className={
         viewport
-          ? 'relative mx-auto shrink-0 overflow-hidden rounded-lg bg-white shadow-sm ring-1 ring-border'
-          : 'relative size-full bg-white'
+          ? 'relative mx-auto shrink-0 overflow-hidden rounded-lg bg-card shadow-sm ring-1 ring-border'
+          : 'relative mx-auto h-full max-h-[30rem] w-full overflow-hidden rounded-lg bg-card shadow-sm ring-1 ring-border'
       }
       style={viewport ? { width: `${viewport.width}px`, height: `${viewport.height}px` } : undefined}
     >
@@ -540,8 +541,8 @@ function HtmlFrame({
       tabIndex={sized && canvasScrollable ? 0 : undefined}
       className={
         sized
-          ? 'min-h-0 flex-1 overflow-auto bg-muted/40 p-4 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring'
-          : 'min-h-0 flex-1'
+          ? 'min-h-0 flex-1 overflow-auto bg-muted p-4 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring'
+          : 'min-h-0 flex-1 overflow-hidden bg-muted p-3 sm:p-4'
       }
     >
       {frame}
@@ -617,7 +618,7 @@ function AttachmentChip({ attachment }: { attachment: AttachmentMeta }) {
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-3xl">
           <DialogHeader>
-            <DialogTitle className="truncate pr-6 font-mono text-sm">
+            <DialogTitle className="truncate pr-6 text-sm">
               {name}
               <span className="ml-2 font-sans text-xs text-muted-foreground">
                 {attachment.contentType} · {formatBytes(attachment.size)}

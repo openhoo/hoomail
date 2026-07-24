@@ -64,7 +64,7 @@ export function SendTestDialog({
               value={to}
               onInput={(event) => setTo(event.currentTarget.value)}
               placeholder="anyone@example.test"
-              className="font-mono text-sm"
+              className="text-sm"
               onKeyDown={(e) => {
                 if (
                   e.key === 'Enter' &&

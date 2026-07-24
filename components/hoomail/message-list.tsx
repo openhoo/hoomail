@@ -51,13 +51,13 @@ export function MessageList({
       className="flex h-full w-96 shrink-0 flex-col border-r border-border bg-background"
     >
       <header className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-border px-4">
-        <h2 id="message-list-heading" className="min-w-0 flex-1 truncate font-mono text-sm">
+        <h2 id="message-list-heading" className="min-w-0 flex-1 truncate text-sm font-medium">
           {mailbox ? mailbox.address : 'No inbox selected'}
         </h2>
         {mailbox && (
           <AnimatedValue
             value={messages.length}
-            className="shrink-0 font-mono text-[11px] text-muted-foreground"
+            className="shrink-0 text-xs tabular-nums text-muted-foreground"
           />
         )}
       </header>
@@ -75,7 +75,7 @@ export function MessageList({
               value={searchQuery}
               onInput={(event) => onSearchChange(event.currentTarget.value)}
               placeholder="Search subject, sender, body…"
-              className="h-8 pl-8 pr-8 text-[13px]"
+              className="h-8 pl-8 pr-8 text-sm"
               aria-label="Search messages"
             />
             {searchQuery && (
@@ -186,20 +186,20 @@ export function MessageList({
                           </InlinePresence>
                           <span
                             className={cn(
-                              'min-w-0 flex-1 truncate text-[13px]',
+                              'min-w-0 flex-1 truncate text-sm',
                               message.is_read ? 'text-muted-foreground' : 'font-semibold'
                             )}
                           >
                             {message.from_name || message.from_address || 'Unknown sender'}
                           </span>
-                          <span className="shrink-0 text-[11px] text-muted-foreground">
+                          <span className="shrink-0 text-xs text-muted-foreground">
                             {relativeTime}
                           </span>
                         </div>
                         <div className="flex items-center gap-1.5">
                           <span
                             className={cn(
-                              'min-w-0 flex-1 truncate text-[13px]',
+                              'min-w-0 flex-1 truncate text-sm',
                               message.is_read ? 'text-muted-foreground' : 'text-foreground'
                             )}
                           >
@@ -218,7 +218,7 @@ export function MessageList({
                             />
                           )}
                         </div>
-                        <p className="truncate text-xs text-muted-foreground/80">
+                        <p className="truncate text-xs text-muted-foreground">
                           {message.snippet}
                         </p>
                       </button>
@@ -255,7 +255,7 @@ export function MessageList({
       </ScrollArea>
 
       <footer className="shrink-0 border-t border-border px-4 py-1.5">
-        <p className="text-[10px] leading-relaxed text-muted-foreground">
+        <p className="text-[12px] leading-relaxed text-muted-foreground">
           Click to open · Shift+Click to select a range · Ctrl/Cmd+Click to toggle · Right-click for actions
         </p>
       </footer>

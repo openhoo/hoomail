@@ -95,11 +95,11 @@ export function InviteCard({ events }: { events: IcalEvent[] }) {
                 className={cn('size-4 shrink-0', cancelled ? 'text-destructive' : 'text-primary')}
                 aria-hidden="true"
               />
-              <Badge variant="outline" className={cn('text-[10px] font-semibold', info.className)}>
+              <Badge variant="outline" className={cn('text-[12px] font-semibold', info.className)}>
                 {info.label}
               </Badge>
               {event.sequence > 0 && (
-                <span className="font-mono text-[10px] text-muted-foreground">
+                <span className="text-[12px] tabular-nums text-muted-foreground">
                   seq {event.sequence}
                 </span>
               )}
@@ -107,33 +107,33 @@ export function InviteCard({ events }: { events: IcalEvent[] }) {
 
             <p
               className={cn(
-                'mt-2 text-[15px] font-semibold leading-snug text-balance',
+                'mt-2 text-base font-semibold leading-snug text-balance',
                 cancelled && 'line-through decoration-destructive/60'
               )}
             >
               {event.summary || '(untitled event)'}
             </p>
-            <p className="mt-0.5 text-[13px] text-muted-foreground">{formatEventRange(event)}</p>
+            <p className="mt-0.5 text-sm text-muted-foreground">{formatEventRange(event)}</p>
 
             {event.location && (
-              <p className="mt-1.5 flex items-center gap-1.5 text-[13px]">
+              <p className="mt-1.5 flex items-center gap-1.5 text-sm">
                 <MapPin className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
                 {event.location}
               </p>
             )}
 
             {event.organizerAddress && (
-              <p className="mt-1 flex items-center gap-1.5 text-[13px]">
+              <p className="mt-1 flex items-center gap-1.5 text-sm">
                 <User className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
                 <span className="text-muted-foreground">Organizer:</span>
-                <span className="font-mono text-xs">
+                <span className="text-xs">
                   {event.organizerName || event.organizerAddress}
                 </span>
               </p>
             )}
 
             {event.attendees.length > 0 && (
-              <div className="mt-1 flex items-start gap-1.5 text-[13px]">
+              <div className="mt-1 flex items-start gap-1.5 text-sm">
                 <Users
                   className="mt-0.5 size-3.5 shrink-0 text-muted-foreground"
                   aria-hidden="true"
@@ -142,9 +142,9 @@ export function InviteCard({ events }: { events: IcalEvent[] }) {
                   {event.attendees.map((att) => {
                     const ps = partstatBadge(att.partstat)
                     return (
-                      <span key={att.address} className="font-mono text-xs">
+                      <span key={att.address} className="text-xs">
                         {att.name || att.address}
-                        <span className={cn('ml-1 text-[10px]', ps.className)}>({ps.label})</span>
+                        <span className={cn('ml-1 text-[12px]', ps.className)}>({ps.label})</span>
                       </span>
                     )
                   })}

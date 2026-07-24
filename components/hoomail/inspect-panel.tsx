@@ -167,7 +167,7 @@ function InspectionSummary({ report }: { report: InspectionReport }) {
       <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-3 lg:grid-cols-6">
         {SUMMARY_ITEMS.map(([key, label]) => (
           <div key={key} className="flex items-baseline justify-between gap-2 border-b border-border/60 pb-1 lg:block lg:border-b-0 lg:pb-0">
-            <dt className="text-[11px] text-muted-foreground">{label}</dt>
+            <dt className="text-xs text-muted-foreground">{label}</dt>
             <dd className="font-mono text-sm font-semibold">{report.summary[key]}</dd>
           </div>
         ))}
@@ -211,7 +211,7 @@ function FindingRow({ finding }: { finding: InspectionFinding }) {
         <OutcomeIcon className={cn('mt-0.5 size-4 shrink-0', outcome.className)} aria-hidden="true" />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-1.5">
-            <p className="mr-auto text-[13px] font-medium leading-snug">{finding.label}</p>
+            <p className="mr-auto text-sm font-medium leading-snug">{finding.label}</p>
             <MetaBadge value={finding.severity} />
             <MetaBadge value={finding.basis} />
             <MetaBadge value={finding.applicability} />
@@ -230,19 +230,19 @@ function MetaBadge({ value }: { value: string }) {
   const label = value && ['error', 'warning', 'advisory', 'none', 'standard', 'recommendation', 'heuristic', 'evidence', 'all', 'html', 'mailing-list', 'one-click-claim', 'bulk-marketing', 'unknown'].includes(value)
     ? value.replaceAll('-', ' ')
     : 'Unknown'
-  return <Badge variant="secondary" className="text-[10px] capitalize">{label}</Badge>
+  return <Badge variant="secondary" className="text-[12px] capitalize">{label}</Badge>
 }
 
 function EvidenceList({ evidence, truncated }: { evidence: InspectionEvidence[]; truncated: boolean }) {
   return (
     <div className="mt-2 rounded-md bg-muted/50 px-2.5 py-2">
       <div className="mb-1.5 flex items-center justify-between gap-2">
-        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Evidence</p>
-        {truncated && <Badge variant="outline" className="text-[10px]">Truncated</Badge>}
+        <p className="text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">Evidence</p>
+        {truncated && <Badge variant="outline" className="text-[12px]">Truncated</Badge>}
       </div>
       <ul className="flex flex-col gap-1.5">
         {evidence.map((item, index) => (
-          <li key={index} className="text-[11px] leading-relaxed text-muted-foreground">
+          <li key={index} className="text-xs leading-relaxed text-muted-foreground">
             <span className="font-medium text-foreground">{evidenceLocation(item)}</span>
             {item.value !== undefined && <span className="block break-words font-mono">{item.value}</span>}
           </li>
@@ -263,14 +263,14 @@ function evidenceLocation(evidence: InspectionEvidence): string {
 
 function ReferenceLink({ reference }: { reference: { label: string; url: string } }) {
   if (!safeExternalURL(reference.url, false)) {
-    return <p className="mt-2 text-[11px] text-muted-foreground">Source: {reference.label}</p>
+    return <p className="mt-2 text-xs text-muted-foreground">Source: {reference.label}</p>
   }
   return (
     <a
       href={reference.url}
       target="_blank"
       rel="noopener noreferrer"
-      className="mt-2 inline-flex items-center gap-1 rounded-sm text-[11px] font-medium text-foreground underline underline-offset-2 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+      className="mt-2 inline-flex items-center gap-1 rounded-sm text-xs font-medium text-foreground underline underline-offset-2 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
       aria-label={`Open source ${reference.label} in a new tab`}
     >
       {reference.label}
@@ -288,12 +288,12 @@ function ResourceRow({ resource }: { resource: InspectionResource }) {
       <Icon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-[11px] font-medium">{meta.label}</span>
-          {resource.path && <code className="font-mono text-[10px] text-muted-foreground">{resource.path}</code>}
-          {resource.occurrenceCount > 1 && <Badge variant="secondary" className="text-[10px]">{resource.occurrenceCount} occurrences</Badge>}
+          <span className="text-xs font-medium">{meta.label}</span>
+          {resource.path && <code className="font-mono text-[12px] text-muted-foreground">{resource.path}</code>}
+          {resource.occurrenceCount > 1 && <Badge variant="secondary" className="text-[12px]">{resource.occurrenceCount} occurrences</Badge>}
         </div>
         {resource.url && <p className="break-all font-mono text-xs">{resource.url}</p>}
-        {resource.text && <p className="break-words text-[11px] text-muted-foreground">{resource.text}</p>}
+        {resource.text && <p className="break-words text-xs text-muted-foreground">{resource.text}</p>}
       </div>
       {canOpen && (
         <a
@@ -337,13 +337,13 @@ function MimeTree({ tree }: { tree: MimeNode }) {
       {nodes.map((node, index) => (
         <li key={`${node.path}-${index}`} className="px-3 py-2.5">
           <div className="flex flex-wrap items-center gap-1.5">
-            <code className="rounded bg-secondary px-1.5 py-0.5 font-mono text-[10px] text-secondary-foreground">{node.path}</code>
+            <code className="rounded bg-secondary px-1.5 py-0.5 font-mono text-[12px] text-secondary-foreground">{node.path}</code>
             <code className="font-mono text-xs">{node.contentType}</code>
-            {node.charset && <span className="font-mono text-[10px] text-muted-foreground">{node.charset}</span>}
-            {node.encoding && <span className="font-mono text-[10px] text-muted-foreground">{node.encoding}</span>}
-            {node.disposition && <Badge variant="secondary" className="text-[10px]">{node.disposition}</Badge>}
+            {node.charset && <span className="font-mono text-[12px] text-muted-foreground">{node.charset}</span>}
+            {node.encoding && <span className="font-mono text-[12px] text-muted-foreground">{node.encoding}</span>}
+            {node.disposition && <Badge variant="secondary" className="text-[12px]">{node.disposition}</Badge>}
           </div>
-          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-muted-foreground">
+          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[12px] text-muted-foreground">
             <span>Raw {node.rawSize === null ? 'unknown' : formatBytes(node.rawSize)}</span>
             <span>Decoded {node.decodedSize === null ? 'unknown' : formatBytes(node.decodedSize)}</span>
             {node.filename && <span className="break-all font-mono">{node.filename}</span>}

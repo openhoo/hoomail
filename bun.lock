@@ -5,20 +5,22 @@
     "": {
       "name": "hoomail",
       "dependencies": {
-        "@formkit/auto-animate": "latest",
-        "class-variance-authority": "latest",
-        "clsx": "latest",
-        "preact": "latest",
-        "tailwind-merge": "latest",
+        "@fontsource-variable/atkinson-hyperlegible-next": "5.3.0",
+        "@fontsource-variable/jetbrains-mono": "5.3.0",
+        "@formkit/auto-animate": "^0.10.0",
+        "class-variance-authority": "^0.7.1",
+        "clsx": "^2.1.1",
+        "preact": "^10.29.7",
+        "tailwind-merge": "^3.6.0",
       },
       "devDependencies": {
-        "@playwright/test": "latest",
-        "@preact/preset-vite": "latest",
-        "@tailwindcss/vite": "latest",
-        "@types/node": "latest",
-        "tailwindcss": "latest",
-        "typescript": "latest",
-        "vite": "latest",
+        "@playwright/test": "1.61.1",
+        "@preact/preset-vite": "^2.10.6",
+        "@tailwindcss/vite": "^4.3.3",
+        "@types/node": "^26.1.1",
+        "tailwindcss": "^4.3.3",
+        "typescript": "7.0.2",
+        "vite": "^8.1.5",
       },
     },
   },
@@ -70,6 +72,10 @@
     "@emnapi/runtime": ["@emnapi/runtime@1.11.1", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-vgj7R3y3Wgx24IQaGPA/R6YFXLHVMOZ0uVEyIQPaWs+rd1AzfEMXlAC22FYwO1XkKR6NPsq7mUandH8oIRdZFw=="],
 
     "@emnapi/wasi-threads": ["@emnapi/wasi-threads@1.2.2", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-c95qOXkHdydNKhscBTebqEC1CVAZpyqOfVfBzQ1qgzyl3gfeldUjIggDbIZgDKsHLgnsM+igH7TJ/eAasaVuMA=="],
+
+    "@fontsource-variable/atkinson-hyperlegible-next": ["@fontsource-variable/atkinson-hyperlegible-next@5.3.0", "", {}, "sha512-UnLzNUy1RWoLDfydAatP4NaRm99X/WbQEph7q/PymJnCFIOOwKOx3pBmp5ys8trO0dM+CKGuJgeZP9fAR4mQpA=="],
+
+    "@fontsource-variable/jetbrains-mono": ["@fontsource-variable/jetbrains-mono@5.3.0", "", {}, "sha512-F32xpS2NsGYoQi2ADSkKTgpJj7ozajsGgDJ8woTnqjmIB+dxDIqImjl4pXZVEExu8UFZ2ndhmX18EBS/hdz3Lw=="],
 
     "@formkit/auto-animate": ["@formkit/auto-animate@0.10.0", "", {}, "sha512-KGomRttjUfORuPUaR/ZGQw+6xfMrTM+sxnILv7JAd9AmabU9rg9i6gF/iC0Ih+QpKCubJpCA/1DX9UHKE8cX+A=="],
 

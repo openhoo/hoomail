@@ -124,8 +124,8 @@ export function CalendarView({
       <header className="flex h-12 shrink-0 items-center justify-between border-b border-border px-5">
         <div className="flex items-center gap-2">
           <CalendarDays className="size-4 text-primary" aria-hidden="true" />
-          <h1 className="text-sm font-semibold">{monthLabel}</h1>
-          <span className="font-mono text-[11px] text-muted-foreground">
+          <h2 className="text-sm font-semibold">{monthLabel}</h2>
+          <span className="text-xs tabular-nums text-muted-foreground">
             {events.length} {events.length === 1 ? 'event' : 'events'}
           </span>
         </div>
@@ -170,7 +170,7 @@ export function CalendarView({
               <div
                 key={day}
                 role="columnheader"
-                className="px-2 py-1.5 text-center text-[10px] font-medium uppercase tracking-wider text-muted-foreground"
+                className="px-2 py-1.5 text-center text-[12px] font-medium uppercase tracking-wider text-muted-foreground"
               >
                 {day}
               </div>
@@ -213,12 +213,12 @@ export function CalendarView({
                 >
                   <span
                     className={cn(
-                      'flex size-5 shrink-0 items-center justify-center rounded-full text-[11px]',
+                      'flex size-5 shrink-0 items-center justify-center rounded-full text-xs',
                       isToday
                         ? 'bg-primary font-bold text-primary-foreground'
                         : inMonth
                           ? 'text-foreground'
-                          : 'text-muted-foreground/50'
+                          : 'text-muted-foreground'
                     )}
                   >
                     {day.getDate()}
@@ -227,7 +227,7 @@ export function CalendarView({
                     <span
                       key={event.id}
                       className={cn(
-                        'truncate rounded-sm px-1 py-px text-[10px] leading-tight',
+                        'truncate rounded-sm px-1 py-px text-[12px] leading-tight',
                         event.status === 'CANCELLED'
                           ? 'bg-destructive/15 text-destructive line-through'
                           : 'bg-primary/20 text-foreground'
@@ -237,7 +237,7 @@ export function CalendarView({
                     </span>
                   ))}
                   {dayEvents.length > 2 && (
-                    <span className="px-1 text-[9px] text-muted-foreground">
+                    <span className="px-1 text-[11px] text-muted-foreground">
                       +{dayEvents.length - 2} more
                     </span>
                   )}
@@ -283,7 +283,7 @@ export function CalendarView({
                       <div className="flex items-center justify-between gap-2">
                         <span
                           className={cn(
-                            'min-w-0 flex-1 truncate text-[13px] font-semibold',
+                            'min-w-0 flex-1 truncate text-sm font-semibold',
                             cancelled && 'line-through decoration-destructive/60'
                           )}
                         >
@@ -292,7 +292,7 @@ export function CalendarView({
                         <Badge
                           variant="outline"
                           className={cn(
-                            'shrink-0 text-[9px]',
+                            'shrink-0 text-[11px]',
                             cancelled
                               ? 'border-destructive/30 text-destructive'
                               : event.status === 'TENTATIVE'
@@ -311,7 +311,7 @@ export function CalendarView({
                         </p>
                       )}
                       {event.organizerAddress && (
-                        <p className="mt-0.5 flex items-center gap-1 font-mono text-[11px] text-muted-foreground">
+                        <p className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
                           <User className="size-3 shrink-0" aria-hidden="true" />
                           {event.organizerName || event.organizerAddress}
                         </p>
