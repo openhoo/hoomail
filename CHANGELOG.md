@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.0 (2026-07-24)
+
+### Features
+
+- **viewer:** color checks and show full source (0df98b2)
+
 ## 0.6.0 (2026-07-24)
 
 ### Features
