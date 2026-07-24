@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.1 (2026-07-24)
+
+### Bug Fixes
+
+- **release:** tolerate Docker Hub metadata denial (4577e72)
+
 ## 0.7.0 (2026-07-24)
 
 ### Features
