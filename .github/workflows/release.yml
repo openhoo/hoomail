@@ -253,6 +253,15 @@ jobs:
           done
           docker buildx imagetools inspect "${DOCKERHUB_IMAGE}@${INDEX_DIGEST}" > /dev/null
 
+      - name: Update Docker Hub repository information
+        uses: peter-evans/dockerhub-description@1b9a80c056b620d92cedb9d9b5a223409c68ddfa # v5.0.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ env.DOCKERHUB_IMAGE }}
+          short-description: Small, self-hosted SMTP/POP3 email testing server with a real-time web inbox and offline inspection.
+          enable-url-completion: true
+
       - name: Generate artifact attestation
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
         with:

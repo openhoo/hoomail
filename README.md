@@ -29,6 +29,16 @@ One static Go binary serves SMTP, POP3, the JSON API, server-sent events, and an
 - Persist data in one logical SQLite database. WAL mode can create `-wal` and `-shm` sidecar files beside the configured database file.
 - Run as a non-root `linux/amd64` or `linux/arm64` container, or deploy with the included footprint-first Helm chart.
 
+## Email inspection
+
+Inspection is on demand. Receiving a message, listing an inbox, opening a message, or viewing its HTML/text content does not run the inspector. Select the **Inspect** tab—or call `GET /api/messages/{id}/inspect`—to analyze that message. Inspection does not mark the message as read.
+
+Each endpoint request analyzes the stored message locally from its raw MIME bytes and parsed fallback content. Reports are not written to SQLite, and inspection performs no DNS or HTTP requests. Authentication, reputation, delivery, and unsubscribe checks that require external data are therefore reported as unverified or not evaluated rather than guessed.
+
+The web interface caches completed reports in memory and reuses them when an inspected message is reopened. It retains up to eight inactive inspection reports; active and in-flight reports are not evicted. Older reports can be analyzed again after eviction, page reload, or browser restart. **Retry** discards the cached result and requests a fresh analysis. Direct API calls always run a fresh analysis because the server does not cache reports.
+
+Reports are deterministic and versioned. They include analysis completeness, severity counts, evidence-backed findings, discovered links and images, and the MIME tree. Safety limits can produce a partial or truncated report; those states identify what could not be analyzed instead of treating missing analysis as a pass.
+
 ## Quick start
 
 The release image runs as UID/GID `65532`. Initialize a named volume once so the non-root process can write the database:
