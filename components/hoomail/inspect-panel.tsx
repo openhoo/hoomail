@@ -51,10 +51,10 @@ const EVIDENCE_SOURCES: Record<string, string> = {
 }
 
 const OUTCOME_META: Record<string, { label: string; icon: IconComponent; className: string }> = {
-  pass: { label: 'Pass', icon: CheckCircle2, className: 'text-foreground' },
+  pass: { label: 'Pass', icon: CheckCircle2, className: 'text-green-500' },
   fail: { label: 'Fail', icon: XCircle, className: 'text-destructive' },
-  observed: { label: 'Observed', icon: Info, className: 'text-muted-foreground' },
-  'not-evaluated': { label: 'Not evaluated', icon: TriangleAlert, className: 'text-muted-foreground' },
+  observed: { label: 'Observed', icon: Info, className: 'text-blue-500' },
+  'not-evaluated': { label: 'Not evaluated', icon: TriangleAlert, className: 'text-amber-500' },
 }
 
 const RESOURCE_META: Record<string, { label: string; icon: IconComponent }> = {
@@ -206,7 +206,7 @@ function FindingRow({ finding }: { finding: InspectionFinding }) {
   const outcome = OUTCOME_META[finding.outcome] ?? { label: 'Unknown', icon: Info, className: 'text-muted-foreground' }
   const OutcomeIcon = outcome.icon
   return (
-    <li className="rounded-lg border border-border bg-card px-3 py-2.5">
+    <li data-outcome={finding.outcome} className="rounded-lg border border-border bg-card px-3 py-2.5">
       <div className="flex items-start gap-2.5">
         <OutcomeIcon className={cn('mt-0.5 size-4 shrink-0', outcome.className)} aria-hidden="true" />
         <div className="min-w-0 flex-1">

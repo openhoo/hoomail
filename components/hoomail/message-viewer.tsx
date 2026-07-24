@@ -1,5 +1,5 @@
 import type { ComponentChildren } from 'preact'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { Download, FileText, Paperclip, RefreshCw, Smartphone } from '@/components/ui/icons'
 import { asyncComponent } from '@/components/ui/async-component'
 import { Button } from '@/components/ui/button'
@@ -96,6 +96,14 @@ export function MessageViewer({
   const [tabMessageId, setTabMessageId] = useState(message?.id ?? null)
   const messageChanged = message != null && message.id !== tabMessageId
   const activeTab = messageChanged ? defaultTab : tab
+  const {
+    data: rawSource,
+    error: rawSourceError,
+    isLoading: rawSourceLoading,
+  } = useCachedResource<string>(
+    activeTab === 'source' && message ? `/api/messages/${message.id}/source` : null,
+    textFetcher,
+  )
   const [readyMessageId, setReadyMessageId] = useState<number | null>(null)
   const [viewportPreset, setViewportPreset] = useState<ViewportPreset>('fit')
   const [viewport, setViewport] = useState<ViewportSize>({ width: 390, height: 844 })
@@ -157,7 +165,6 @@ export function MessageViewer({
     )
   }
 
-  const rawSource = Object.values(message.headers).join('\n')
 
   return (
     <section
@@ -262,19 +269,29 @@ export function MessageViewer({
         </TabsContent>
 
         <TabsContent value="source" className="min-h-0 flex-1 data-[state=inactive]:hidden">
-          <ScrollArea className="h-full" aria-label="Raw message source">
-            <div className="px-5 py-4">
-              <div className="mb-2 flex items-center gap-2">
-                <FileText className="size-3.5 text-muted-foreground" aria-hidden="true" />
-                <Badge variant="secondary" className="font-mono text-[10px]">
-                  raw headers
-                </Badge>
-              </div>
-              <pre className="whitespace-pre-wrap break-all font-mono text-xs leading-relaxed text-muted-foreground">
-                {rawSource || 'No headers captured.'}
-              </pre>
+          {rawSourceLoading ? (
+            <div role="status" className="flex h-full items-center justify-center text-sm text-muted-foreground">
+              Loading raw message…
             </div>
-          </ScrollArea>
+          ) : rawSourceError ? (
+            <div role="alert" className="flex h-full items-center justify-center text-sm text-destructive">
+              Could not load raw message.
+            </div>
+          ) : (
+            <ScrollArea className="h-full" aria-label="Raw message source">
+              <div className="px-5 py-4">
+                <div className="mb-2 flex items-center gap-2">
+                  <FileText className="size-3.5 text-muted-foreground" aria-hidden="true" />
+                  <Badge variant="secondary" className="font-mono text-[10px]">
+                    raw message
+                  </Badge>
+                </div>
+                <pre className="whitespace-pre-wrap break-all font-mono text-xs leading-relaxed text-muted-foreground">
+                  {rawSource || 'Raw message unavailable.'}
+                </pre>
+              </div>
+            </ScrollArea>
+          )}
         </TabsContent>
 
         <TabsContent value="inspect" className="min-h-0 flex-1 data-[state=inactive]:hidden">
@@ -374,9 +391,12 @@ function ViewportDimensionField({
   className: string
 }) {
   const [draft, setDraft] = useState(String(value))
+  const draftRef = useRef(String(value))
 
-  useEffect(() => {
-    setDraft(String(value))
+  useLayoutEffect(() => {
+    const canonical = String(value)
+    draftRef.current = canonical
+    setDraft(canonical)
   }, [value])
 
   return (
@@ -389,14 +409,22 @@ function ViewportDimensionField({
         min={MIN_VIEWPORT_SIZE}
         max={MAX_VIEWPORT_SIZE}
         value={draft}
-        onInput={(event) => setDraft(event.currentTarget.value)}
+        onInput={(event) => {
+          draftRef.current = event.currentTarget.value
+          setDraft(draftRef.current)
+        }}
         onBlur={() => {
-          const parsed = Number(draft)
-          if (draft.trim() === '' || !Number.isFinite(parsed)) {
-            setDraft(String(value))
+          const currentDraft = draftRef.current
+          const parsed = Number(currentDraft)
+          if (currentDraft.trim() === '' || !Number.isFinite(parsed)) {
+            const canonical = String(value)
+            draftRef.current = canonical
+            setDraft(canonical)
             return
           }
-          setDraft(String(onCommit(parsed)))
+          const canonical = String(onCommit(parsed))
+          draftRef.current = canonical
+          setDraft(canonical)
         }}
         onKeyDown={(event) => {
           if (event.key === 'Enter') event.currentTarget.blur()

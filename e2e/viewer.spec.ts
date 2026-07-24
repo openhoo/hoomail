@@ -82,7 +82,12 @@ test('message viewer tabs, inspection, and attachments expose the complete plain
   await page.keyboard.press('ArrowRight')
   await expect(sourceTab).toBeFocused()
   await expect(sourceTab).toHaveAttribute('aria-selected', 'true')
-  await expect(page.getByLabel('Raw message source')).toContainText('raw headers')
+  const rawSource = page.getByLabel('Raw message source')
+  await expect(rawSource).toContainText('raw message')
+  await expect(rawSource).toContainText(`Subject: ${subject}`)
+  await expect(rawSource).toContainText('Content-Type: multipart/mixed; boundary="hoomail-mixed-boundary"')
+  await expect(rawSource).toContainText('Hoot hoot! It works.')
+  await expect(rawSource).toContainText('Content-Disposition: attachment; filename="hoot.txt"')
 
   await page.keyboard.press('End')
   await expect(inspectTab).toBeFocused()
@@ -93,6 +98,16 @@ test('message viewer tabs, inspection, and attachments expose the complete plain
   const linksAndImages = page.getByRole('region', { name: 'Links and images' })
   const mimeStructure = page.getByRole('region', { name: 'MIME structure' })
   await expect(summary).toBeVisible()
+  for (const [outcome, colorClass] of [
+    ['pass', 'text-green-500'],
+    ['fail', 'text-destructive'],
+    ['observed', 'text-blue-500'],
+    ['not-evaluated', 'text-amber-500'],
+  ]) {
+    const icon = page.locator(`li[data-outcome="${outcome}"] svg`).first()
+    await expect(icon).toBeVisible()
+    await expect(icon).toHaveClass(new RegExp(colorClass))
+  }
   await expect(summary).toContainText('Static offline analysis. Authentication, delivery, and unsubscribe endpoints are not verified.')
   await expect(linksAndImages.getByRole('heading', { name: 'Links & images (2)' })).toBeVisible()
   await expect(linksAndImages).toContainText('https://example.com')

@@ -81,4 +81,4 @@ All notable changes to Hoomail are documented in this file.
 
 ### Features
 
-- **viewer:** add responsive email viewport preview
+- **viewer:** color inspection checks and show full raw source

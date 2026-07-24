@@ -117,6 +117,39 @@ func TestMessageDetailCasingSanitizeCIDAndCalendarFiltering(t *testing.T) {
 	}
 }
 
+func TestMessageSourceReturnsExactRawWithoutMarkingRead(t *testing.T) {
+	data := testStore(t)
+	handler := New(data, StaticConfig{}, nil)
+	assertResponse(t, request(t, handler, http.MethodGet, "/api/messages/nope/source", ""), 400, `{"error":"Invalid message id"}`)
+	assertResponse(t, request(t, handler, http.MethodGet, "/api/messages/8/source", ""), 404, `{"error":"Message not found"}`)
+
+	raw := []byte("From: Sender <sender@example.test>\r\nTo: source@example.test\r\nSubject: Full source\r\nMIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary=source-boundary\r\n\r\n--source-boundary\r\nContent-Type: text/plain\r\n\r\ncomplete body\r\n--source-boundary--\r\n")
+	stored, err := data.StoreMessage(context.Background(), store.StoreMessageInput{
+		Recipients: []string{"source@example.test"},
+		To:         []store.AddressEntry{},
+		CC:         []store.AddressEntry{},
+		Headers:    map[string]string{"subject": "Full source"},
+		Raw:        raw,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := stored[0].MessageID
+	response := request(t, handler, http.MethodGet, "/api/messages/"+jsonNumber(id)+"/source", "")
+	if response.Code != http.StatusOK || response.Body.String() != string(raw) {
+		t.Fatalf("status=%d body=%q", response.Code, response.Body.String())
+	}
+	if response.Header().Get("Content-Type") != "message/rfc822" ||
+		response.Header().Get("Cache-Control") != "private, no-store" ||
+		response.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("headers=%v", response.Header())
+	}
+	var read int
+	if err := data.DB().QueryRow(`SELECT is_read FROM messages WHERE id=?`, id).Scan(&read); err != nil || read != 0 {
+		t.Fatalf("read=%d err=%v", read, err)
+	}
+}
+
 func jsonNumber(value int64) string { return strconv.FormatInt(value, 10) }
 
 func TestAttachmentHeaders(t *testing.T) {

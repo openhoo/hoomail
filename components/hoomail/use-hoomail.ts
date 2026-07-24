@@ -176,7 +176,8 @@ export function useCachedResource<T>(key: string | null, fetcher: (key: string) 
     if (current.data === undefined && !current.promise) void fetchInto(key, fetcher)
     return () => {
       current.listeners.delete(listener)
-      if (key.endsWith('/inspect')) trimInspectionCache()
+      if (key.endsWith('/source')) cache.delete(key)
+      else if (key.endsWith('/inspect')) trimInspectionCache()
     }
   }, [key, fetcher])
 
@@ -232,7 +233,7 @@ export function useRealtime(options: { selectedMailboxId: number | null; onReset
         case 'reset':
           mutateCache('/api/mailboxes')
           mutateCache(
-            (key) => /^\/api\/mailboxes\/\d+\/(?:messages|events)(?:\?|$)/.test(key) || /^\/api\/messages\/\d+(?:\/inspect)?$/.test(key),
+            (key) => /^\/api\/mailboxes\/\d+\/(?:messages|events)(?:\?|$)/.test(key) || /^\/api\/messages\/\d+(?:\/(?:inspect|source))?$/.test(key),
             () => undefined,
             false,
           )

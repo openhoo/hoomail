@@ -55,6 +55,18 @@ func (store *Store) GetMessageRaw(ctx context.Context, id int64) (*RawMessage, e
 	return &raw, err
 }
 
+func (store *Store) GetMessageSource(ctx context.Context, id int64) ([]byte, bool, error) {
+	var raw []byte
+	err := store.db.QueryRowContext(ctx, `SELECT raw FROM messages WHERE id=?`, id).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return raw, true, nil
+}
+
 func (store *Store) OpenPOP3Mailbox(ctx context.Context, rawAddress string) ([]POP3Message, error) {
 	address := strings.TrimSpace(strings.ToLower(rawAddress))
 	if address == "" {

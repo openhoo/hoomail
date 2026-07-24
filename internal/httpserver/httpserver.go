@@ -76,6 +76,8 @@ func (s *server) ServeHTTP(response http.ResponseWriter, request *http.Request) 
 		s.listCalendarEvents(response, request, strings.TrimSuffix(strings.TrimPrefix(route, "/api/mailboxes/"), "/events"))
 	case request.Method == http.MethodPost && route == "/api/messages/actions":
 		s.messageActions(response, request)
+	case request.Method == http.MethodGet && strings.HasPrefix(route, "/api/messages/") && strings.HasSuffix(route, "/source"):
+		s.getMessageSource(response, request, strings.TrimSuffix(strings.TrimPrefix(route, "/api/messages/"), "/source"))
 	case request.Method == http.MethodGet && strings.HasPrefix(route, "/api/messages/") && strings.HasSuffix(route, "/inspect"):
 		s.inspectMessage(response, request, strings.TrimSuffix(strings.TrimPrefix(route, "/api/messages/"), "/inspect"))
 	case request.Method == http.MethodGet && strings.HasPrefix(route, "/api/messages/") && !strings.Contains(strings.TrimPrefix(route, "/api/messages/"), "/"):
@@ -315,6 +317,28 @@ func (s *server) getMessage(response http.ResponseWriter, request *http.Request,
 		Message     messageResponse          `json:"message"`
 		Attachments []attachmentInfoResponse `json:"attachments"`
 	}{message, attachments})
+}
+
+func (s *server) getMessageSource(response http.ResponseWriter, request *http.Request, rawID string) {
+	id, ok := parseID(rawID)
+	if !ok {
+		writeError(response, http.StatusBadRequest, "Invalid message id")
+		return
+	}
+	raw, found, err := s.store.GetMessageSource(request.Context(), id)
+	if err != nil {
+		internalError(response, err)
+		return
+	}
+	if !found {
+		writeError(response, http.StatusNotFound, "Message not found")
+		return
+	}
+	response.Header().Set("Cache-Control", "private, no-store")
+	response.Header().Set("Content-Type", "message/rfc822")
+	response.Header().Set("X-Content-Type-Options", "nosniff")
+	response.WriteHeader(http.StatusOK)
+	_, _ = response.Write(raw)
 }
 
 func (s *server) inspectMessage(response http.ResponseWriter, request *http.Request, rawID string) {
