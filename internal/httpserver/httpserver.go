@@ -66,6 +66,15 @@ func New(data *store.Store, static StaticConfig, sender TestSender) http.Handler
 func (s *server) ServeHTTP(response http.ResponseWriter, request *http.Request) {
 	route := request.URL.Path
 	switch {
+	case (request.Method == http.MethodGet || request.Method == http.MethodHead) && route == "/openapi.json":
+		serveOpenAPI(response, request)
+	case (request.Method == http.MethodGet || request.Method == http.MethodHead) && route == "/swagger":
+		http.Redirect(response, request, "/swagger/", http.StatusPermanentRedirect)
+	case (request.Method == http.MethodGet || request.Method == http.MethodHead) && route == "/swagger/":
+		serveSwaggerUI(response, request)
+	case route == "/openapi.json" || route == "/swagger" || route == "/swagger/":
+		response.Header().Set("Allow", "GET, HEAD")
+		http.Error(response, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 	case request.Method == http.MethodGet && route == "/api/mailboxes":
 		s.listMailboxes(response, request)
 	case request.Method == http.MethodDelete && strings.HasPrefix(route, "/api/mailboxes/") && !strings.Contains(strings.TrimPrefix(route, "/api/mailboxes/"), "/"):

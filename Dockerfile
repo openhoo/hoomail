@@ -22,6 +22,7 @@ ARG VERSION
 ARG TARGETOS
 ARG TARGETARCH
 RUN --mount=type=cache,target=/root/.cache/go-build \
+    go generate ./internal/httpserver && \
     VERSION="${VERSION:-$(cat internal/version/version)}" && \
     CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" go build -trimpath \
       -ldflags="-s -w -X github.com/openhoo/hoomail/internal/version.Value=${VERSION}" \

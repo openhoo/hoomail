@@ -44,6 +44,79 @@ func assertResponse(t *testing.T, response *httptest.ResponseRecorder, status in
 	}
 }
 
+func TestGeneratedOpenAPIAndSwaggerEndpoints(t *testing.T) {
+	handler := New(testStore(t), StaticConfig{}, nil)
+
+	openAPI := request(t, handler, http.MethodGet, "/openapi.json", "")
+	if openAPI.Code != http.StatusOK {
+		t.Fatalf("openapi status=%d body=%s", openAPI.Code, openAPI.Body.String())
+	}
+	if openAPI.Header().Get("Content-Type") != "application/json" ||
+		openAPI.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("openapi headers=%v", openAPI.Header())
+	}
+	var document struct {
+		OpenAPI string                    `json:"openapi"`
+		Paths   map[string]map[string]any `json:"paths"`
+	}
+	if err := json.Unmarshal(openAPI.Body.Bytes(), &document); err != nil {
+		t.Fatal(err)
+	}
+	if document.OpenAPI != "3.0.3" {
+		t.Fatalf("openapi=%q", document.OpenAPI)
+	}
+	expected := map[string]string{
+		"/api/mailboxes":                      "get",
+		"/api/mailboxes/{mailboxId}":          "delete",
+		"/api/mailboxes/{mailboxId}/messages": "get",
+		"/api/mailboxes/{mailboxId}/events":   "get",
+		"/api/messages/actions":               "post",
+		"/api/messages/{messageId}":           "get",
+		"/api/messages/{messageId}/source":    "get",
+		"/api/messages/{messageId}/inspect":   "get",
+		"/api/attachments/{attachmentId}":     "get",
+		"/api/events":                         "get",
+		"/api/reset":                          "post",
+		"/api/send-test":                      "post",
+	}
+	if len(document.Paths) != len(expected) {
+		t.Fatalf("documented paths=%d want=%d", len(document.Paths), len(expected))
+	}
+	for path, method := range expected {
+		if document.Paths[path][method] == nil {
+			t.Errorf("missing %s %s", method, path)
+		}
+	}
+
+	head := request(t, handler, http.MethodHead, "/openapi.json", "")
+	if head.Code != http.StatusOK || head.Body.Len() != 0 {
+		t.Fatalf("openapi HEAD status=%d body=%q", head.Code, head.Body.String())
+	}
+	disallowed := request(t, handler, http.MethodPost, "/openapi.json", "")
+	if disallowed.Code != http.StatusMethodNotAllowed || disallowed.Header().Get("Allow") != "GET, HEAD" {
+		t.Fatalf("openapi POST status=%d headers=%v", disallowed.Code, disallowed.Header())
+	}
+
+	redirect := request(t, handler, http.MethodGet, "/swagger", "")
+	if redirect.Code != http.StatusPermanentRedirect || redirect.Header().Get("Location") != "/swagger/" {
+		t.Fatalf("swagger redirect status=%d location=%q", redirect.Code, redirect.Header().Get("Location"))
+	}
+	swagger := request(t, handler, http.MethodGet, "/swagger/", "")
+	if swagger.Code != http.StatusOK ||
+		!strings.Contains(swagger.Body.String(), `url:"/openapi.json"`) ||
+		!strings.Contains(swagger.Body.String(), "swagger-ui-dist@5.11.0") {
+		t.Fatalf("swagger status=%d body=%q", swagger.Code, swagger.Body.String())
+	}
+	if swagger.Header().Get("Content-Security-Policy") == "" ||
+		swagger.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("swagger headers=%v", swagger.Header())
+	}
+	swaggerHead := request(t, handler, http.MethodHead, "/swagger/", "")
+	if swaggerHead.Code != http.StatusOK || swaggerHead.Body.Len() != 0 {
+		t.Fatalf("swagger HEAD status=%d body=%q", swaggerHead.Code, swaggerHead.Body.String())
+	}
+}
+
 func TestInvalidIDsJSONAndActions(t *testing.T) {
 	handler := New(testStore(t), StaticConfig{}, nil)
 	assertResponse(t, request(t, handler, http.MethodDelete, "/api/mailboxes/nope", ""), 400, `{"error":"Invalid mailbox id"}`)
