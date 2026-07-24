@@ -1,7 +1,8 @@
 import type { ComponentChildren } from 'preact'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
-import { Download, FileText, Paperclip } from '@/components/ui/icons'
+import { Download, FileText, Paperclip, RefreshCw, Smartphone } from '@/components/ui/icons'
 import { asyncComponent } from '@/components/ui/async-component'
+import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import {
   Dialog,
@@ -32,6 +33,20 @@ const IFRAME_CONTAINMENT_STYLES = `
     img { max-width: 100%; }
   </style>
 `
+
+const VIEWPORT_PRESETS = [
+  { id: 'mobile-s', label: 'Mobile · 375 × 667', width: 375, height: 667 },
+  { id: 'mobile-m', label: 'Mobile · 390 × 844', width: 390, height: 844 },
+  { id: 'mobile-l', label: 'Mobile · 430 × 932', width: 430, height: 932 },
+  { id: 'tablet', label: 'Tablet · 768 × 1024', width: 768, height: 1024 },
+] as const
+
+type ViewportPreset = 'fit' | 'custom' | (typeof VIEWPORT_PRESETS)[number]['id']
+type ViewportSize = { width: number; height: number }
+
+const MIN_VIEWPORT_SIZE = 240
+const MAX_VIEWPORT_SIZE = 1920
+
 
 function iframeDocumentPrefix(): string {
   const attachmentSource = new URL('/api/attachments/', window.location.href).href
@@ -82,6 +97,28 @@ export function MessageViewer({
   const messageChanged = message != null && message.id !== tabMessageId
   const activeTab = messageChanged ? defaultTab : tab
   const [readyMessageId, setReadyMessageId] = useState<number | null>(null)
+  const [viewportPreset, setViewportPreset] = useState<ViewportPreset>('fit')
+  const [viewport, setViewport] = useState<ViewportSize>({ width: 390, height: 844 })
+  const previewViewport = viewportPreset === 'fit' ? null : viewport
+  const selectViewportPreset = (preset: ViewportPreset) => {
+    setViewportPreset(preset)
+    const selected = VIEWPORT_PRESETS.find((candidate) => candidate.id === preset)
+    if (selected) setViewport({ width: selected.width, height: selected.height })
+  }
+  const updateViewport = (dimension: keyof ViewportSize, value: number): number => {
+    if (!Number.isFinite(value)) return viewport[dimension]
+    const normalized = Math.min(
+      MAX_VIEWPORT_SIZE,
+      Math.max(MIN_VIEWPORT_SIZE, Math.round(value)),
+    )
+    setViewport((current) => ({ ...current, [dimension]: normalized }))
+    setViewportPreset('custom')
+    return normalized
+  }
+  const rotateViewport = () => {
+    setViewport(({ width, height }) => ({ width: height, height: width }))
+    setViewportPreset('custom')
+  }
   const selectedDetailPending = selectedMessageId != null && message?.id !== selectedMessageId
   const detailReady = !selectedDetailPending && (!htmlDoc || readyMessageId === message?.id)
   const markHtmlReady = useCallback(() => {
@@ -201,8 +238,19 @@ export function MessageViewer({
           </TabsList>
         </div>
 
-        <TabsContent value="html" className="min-h-0 flex-1 bg-white data-[state=inactive]:hidden">
-          {htmlDoc && <HtmlFrame doc={htmlDoc} onReady={markHtmlReady} />}
+        <TabsContent value="html" className="flex min-h-0 flex-1 flex-col bg-white data-[state=inactive]:hidden">
+          {htmlDoc && (
+            <>
+              <ViewportToolbar
+                preset={viewportPreset}
+                viewport={viewport}
+                onPresetChange={selectViewportPreset}
+                onViewportChange={updateViewport}
+                onRotate={rotateViewport}
+              />
+              <HtmlFrame doc={htmlDoc} viewport={previewViewport} onReady={markHtmlReady} />
+            </>
+          )}
         </TabsContent>
 
         <TabsContent value="text" className="min-h-0 flex-1 data-[state=inactive]:hidden">
@@ -237,15 +285,147 @@ export function MessageViewer({
   )
 }
 
+function ViewportToolbar({
+  preset,
+  viewport,
+  onPresetChange,
+  onViewportChange,
+  onRotate,
+}: {
+  preset: ViewportPreset
+  viewport: ViewportSize
+  onPresetChange: (preset: ViewportPreset) => void
+  onViewportChange: (dimension: keyof ViewportSize, value: number) => number
+  onRotate: () => void
+}) {
+  const dimensionFieldClass =
+    'h-7 w-[4.5rem] rounded-md border border-input bg-background px-2 text-center font-mono text-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40'
+
+  return (
+    <div
+      role="group"
+      aria-label="Email viewport"
+      className="flex min-h-11 shrink-0 flex-wrap items-center gap-2 border-b border-border bg-background px-3 py-2"
+    >
+      <Smartphone className="size-4 text-muted-foreground" aria-hidden="true" />
+      <label className="sr-only" for="email-preview-size">Preview size</label>
+      <select
+        id="email-preview-size"
+        aria-label="Preview size"
+        value={preset}
+        onChange={(event) => onPresetChange(event.currentTarget.value as ViewportPreset)}
+        className="h-7 rounded-md border border-input bg-background px-2 text-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
+      >
+        <option value="fit">Fit to panel</option>
+        {VIEWPORT_PRESETS.map((option) => (
+          <option key={option.id} value={option.id}>{option.label}</option>
+        ))}
+        <option value="custom">Custom</option>
+      </select>
+
+      {preset !== 'fit' && (
+        <div role="group" className="flex min-w-0 flex-wrap items-center gap-1" aria-label="Custom viewport dimensions">
+          <ViewportDimensionField
+            id="email-preview-width"
+            label="Preview width"
+            value={viewport.width}
+            onCommit={(value) => onViewportChange('width', value)}
+            className={dimensionFieldClass}
+          />
+          <span className="text-xs text-muted-foreground" aria-hidden="true">×</span>
+          <ViewportDimensionField
+            id="email-preview-height"
+            label="Preview height"
+            value={viewport.height}
+            onCommit={(value) => onViewportChange('height', value)}
+            className={dimensionFieldClass}
+          />
+          <span className="font-mono text-[10px] text-muted-foreground">px</span>
+          <Button
+            variant="outline"
+            size="icon-sm"
+            aria-label="Rotate preview"
+            title="Rotate viewport"
+            onClick={onRotate}
+          >
+            <RefreshCw className="size-3.5" aria-hidden="true" />
+          </Button>
+        </div>
+      )}
+
+      <span className="ml-auto hidden text-[11px] text-muted-foreground lg:inline">
+        Email viewport
+      </span>
+    </div>
+  )
+}
+
+function ViewportDimensionField({
+  id,
+  label,
+  value,
+  onCommit,
+  className,
+}: {
+  id: string
+  label: string
+  value: number
+  onCommit: (value: number) => number
+  className: string
+}) {
+  const [draft, setDraft] = useState(String(value))
+
+  useEffect(() => {
+    setDraft(String(value))
+  }, [value])
+
+  return (
+    <>
+      <label className="sr-only" for={id}>{label}</label>
+      <input
+        id={id}
+        aria-label={label}
+        type="number"
+        min={MIN_VIEWPORT_SIZE}
+        max={MAX_VIEWPORT_SIZE}
+        value={draft}
+        onInput={(event) => setDraft(event.currentTarget.value)}
+        onBlur={() => {
+          const parsed = Number(draft)
+          if (draft.trim() === '' || !Number.isFinite(parsed)) {
+            setDraft(String(value))
+            return
+          }
+          setDraft(String(onCommit(parsed)))
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') event.currentTarget.blur()
+        }}
+        className={className}
+      />
+    </>
+  )
+}
+
 /**
  * Double-buffered email frame. The incoming iframe remains transparent until
  * its document has loaded (or the bounded grace period expires), preventing
  * partially parsed HTML from becoming visible during its first paint.
  */
-function HtmlFrame({ doc, onReady }: { doc: string; onReady: () => void }) {
+function HtmlFrame({
+  doc,
+  viewport,
+  onReady,
+}: {
+  doc: string
+  viewport: ViewportSize | null
+  onReady: () => void
+}) {
   const [prevDoc, setPrevDoc] = useState<string | null>(null)
   const [visibleDoc, setVisibleDoc] = useState<string | null>(null)
   const lastDocRef = useRef(doc)
+  const canvasRef = useRef<HTMLDivElement>(null)
+  const [canvasScrollable, setCanvasScrollable] = useState(false)
 
   if (doc !== lastDocRef.current) {
     setPrevDoc(visibleDoc === lastDocRef.current ? lastDocRef.current : null)
@@ -264,14 +444,40 @@ function HtmlFrame({ doc, onReady }: { doc: string; onReady: () => void }) {
     return () => clearTimeout(timer)
   }, [doc, onReady])
 
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas || !viewport) {
+      setCanvasScrollable(false)
+      return
+    }
+
+    const updateScrollable = () => {
+      setCanvasScrollable(
+        canvas.scrollWidth > canvas.clientWidth || canvas.scrollHeight > canvas.clientHeight,
+      )
+    }
+    updateScrollable()
+    const observer = new ResizeObserver(updateScrollable)
+    observer.observe(canvas)
+    return () => observer.disconnect()
+  }, [viewport?.height, viewport?.width])
+
   const reveal = () => {
     setVisibleDoc(doc)
     setPrevDoc(null)
     onReady()
   }
 
-  return (
-    <div className="relative size-full bg-white">
+  const frame = (
+    <div
+      aria-label={viewport ? `${viewport.width} × ${viewport.height} pixel email preview` : undefined}
+      className={
+        viewport
+          ? 'relative mx-auto shrink-0 overflow-hidden rounded-lg bg-white shadow-sm ring-1 ring-border'
+          : 'relative size-full bg-white'
+      }
+      style={viewport ? { width: `${viewport.width}px`, height: `${viewport.height}px` } : undefined}
+    >
       <iframe
         key={doc}
         title="Email HTML content"
@@ -294,6 +500,23 @@ function HtmlFrame({ doc, onReady }: { doc: string; onReady: () => void }) {
           className="absolute inset-0 size-full border-0"
         />
       )}
+    </div>
+  )
+
+  const sized = viewport !== null
+  return (
+    <div
+      ref={canvasRef}
+      role={sized ? 'region' : undefined}
+      aria-label={sized ? 'Email preview canvas' : undefined}
+      tabIndex={sized && canvasScrollable ? 0 : undefined}
+      className={
+        sized
+          ? 'min-h-0 flex-1 overflow-auto bg-muted/40 p-4 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring'
+          : 'min-h-0 flex-1'
+      }
+    >
+      {frame}
     </div>
   )
 }

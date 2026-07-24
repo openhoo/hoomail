@@ -72,3 +72,7 @@
 All notable changes to Hoomail are documented in this file.
 
 ## Unreleased
+
+### Features
+
+- **viewer:** add responsive email viewport preview
