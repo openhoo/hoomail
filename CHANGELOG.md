@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.2 (2026-07-24)
+
+### Bug Fixes
+
+- **web:** improve readability and email preview (1db462d)
+
 ## 0.8.1 (2026-07-24)
 
 ### Performance
