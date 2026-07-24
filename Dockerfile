@@ -21,10 +21,11 @@ COPY --from=client /src/web/dist web/dist
 ARG VERSION
 ARG TARGETOS
 ARG TARGETARCH
+# Hoomail serves plain HTTP; TLS and HTTP/2 terminate at the reverse proxy.
 RUN --mount=type=cache,target=/root/.cache/go-build \
     go generate ./internal/httpserver && \
     VERSION="${VERSION:-$(cat internal/version/version)}" && \
-    CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" go build -trimpath \
+    CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" go build -trimpath -tags=nethttpomithttp2 \
       -ldflags="-s -w -X github.com/openhoo/hoomail/internal/version.Value=${VERSION}" \
       -o /hoomail ./cmd/hoomail
 
