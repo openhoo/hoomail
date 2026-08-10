@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.5 (2026-08-10)
+
+### Performance
+
+- cut message loading overhead (c45c731)
+
 ## 0.8.4 (2026-08-10)
 
 ### Bug Fixes
