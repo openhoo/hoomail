@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"html"
 	"mime"
@@ -56,6 +57,12 @@ func (sender Sender) SendTest(ctx context.Context, request httpserver.SendTestRe
 	defer func() {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			err = ctxErr
+			return
+		}
+		var networkError net.Error
+		deadline, hasDeadline := ctx.Deadline()
+		if err != nil && hasDeadline && !time.Now().Before(deadline) && errors.As(err, &networkError) && networkError.Timeout() {
+			err = context.DeadlineExceeded
 		}
 	}()
 	client, err := smtp.NewClient(connection, host(address))
