@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.4 (2026-08-10)
+
+### Bug Fixes
+
+- prevent reset identity races (f90ba4b)
+
 ## 0.8.3 (2026-08-10)
 
 ### Bug Fixes
