@@ -161,17 +161,40 @@ func run() error {
 func shutdown(httpService *http.Server, smtpService *smtpserver.Service, pop3Service *pop3server.Service) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	httpErr := httpService.Shutdown(ctx)
-	smtpErr := smtpService.Shutdown(ctx)
-	pop3Err := pop3Service.Shutdown(ctx)
-	if httpErr != nil {
-		return fmt.Errorf("shutdown HTTP server: %w", httpErr)
+	return shutdownServices(ctx, httpService.Shutdown, smtpService.Shutdown, pop3Service.Shutdown)
+}
+
+func shutdownServices(
+	ctx context.Context,
+	shutdownHTTP func(context.Context) error,
+	shutdownSMTP func(context.Context) error,
+	shutdownPOP3 func(context.Context) error,
+) error {
+	shutdowns := [...]func(context.Context) error{shutdownHTTP, shutdownSMTP, shutdownPOP3}
+	type result struct {
+		index int
+		err   error
 	}
-	if smtpErr != nil && !isExpectedClose(smtpErr) {
-		return fmt.Errorf("shutdown SMTP server: %w", smtpErr)
+	results := make(chan result, len(shutdowns))
+	for index, stop := range shutdowns {
+		go func() {
+			results <- result{index: index, err: stop(ctx)}
+		}()
 	}
-	if pop3Err != nil && !isExpectedClose(pop3Err) {
-		return fmt.Errorf("shutdown POP3 server: %w", pop3Err)
+
+	var shutdownErrors [len(shutdowns)]error
+	for range shutdowns {
+		outcome := <-results
+		shutdownErrors[outcome.index] = outcome.err
+	}
+	if shutdownErrors[0] != nil {
+		return fmt.Errorf("shutdown HTTP server: %w", shutdownErrors[0])
+	}
+	if shutdownErrors[1] != nil && !isExpectedClose(shutdownErrors[1]) {
+		return fmt.Errorf("shutdown SMTP server: %w", shutdownErrors[1])
+	}
+	if shutdownErrors[2] != nil && !isExpectedClose(shutdownErrors[2]) {
+		return fmt.Errorf("shutdown POP3 server: %w", shutdownErrors[2])
 	}
 	return nil
 }

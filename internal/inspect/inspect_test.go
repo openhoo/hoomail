@@ -13,7 +13,7 @@ import (
 func TestSanitizeEmailHTMLUsesParserAllowlist(t *testing.T) {
 	input := `<html><head><base href="https://evil.test"><meta charset="utf-8"><link rel="stylesheet" href="https://evil.test/x.css"><style>@import url(https://evil.test/x.css)</style><script>alert(1)</script></head><body id="page" onload="steal()"><iframe src="bad"><b>hidden</b><iframe><form><input></form><svg><script>alert(2)</script><circle></circle></svg><math><mi>x</mi></math><table role="presentation" width="600" cellpadding="12" style="width: 600px; border-collapse: collapse; background-color: #ffffff; position: fixed; z-index: 9999; background-image: url(https://evil.test/bg.png)"><tr><td bgcolor="#fff" style="padding: 8px; color: rgb(1, 2, 3); behavior: url(x)">Hello &amp; welcome</td></tr></table><a name="legacy" href="https://safe.test/path?q=1" onclick="bad()">safe</a><a href="mailto:user@example.test">mail</a><a href="#fragment">fragment</a><a href="relative">relative</a><a href="javascript:bad()">bad</a><img src="https://remote.test/a.png" alt="remote"><img src="cid:logo@example.test" alt="logo" onerror="bad()"></body></html>`
 	got := SanitizeEmailHTML(input, map[string]int64{"logo@example.test": 12})
-	for _, retained := range []string{`<table role="presentation" width="600" cellpadding="12" style="width: 600px; border-collapse: collapse; background-color: #ffffff">`, `<td bgcolor="#fff" style="padding: 8px; color: rgb(1, 2, 3)">Hello &amp; welcome</td>`, `<a href="https://safe.test/path?q=1" target="_blank" rel="noopener noreferrer">safe</a>`, `<img alt="logo" src="/api/attachments/12">`} {
+	for _, retained := range []string{`<table role="presentation" width="600" cellpadding="12" style="width: 600px; border-collapse: collapse; background-color: #ffffff">`, `<td bgcolor="#fff" style="padding: 8px; color: rgb(1, 2, 3)">Hello &amp; welcome</td>`, `<a href="https://safe.test/path?q=1" target="_blank" rel="noopener noreferrer">safe</a>`, `<img alt="logo" src="/api/attachments/12?inline=cid">`} {
 		if !strings.Contains(got, retained) {
 			t.Errorf("sanitized HTML missing %q:\n%s", retained, got)
 		}
@@ -31,6 +31,34 @@ func TestRewriteCIDURLsParsesQuotedAndUnquotedSources(t *testing.T) {
 	want := `<img src="/api/attachments/12"><img src="/api/attachments/34"><img src="cid:missing@example">`
 	if got != want {
 		t.Fatalf("CID rewrite mismatch\nwant: %s\n got: %s", want, got)
+	}
+}
+
+func TestSanitizeSVGStaticAllowlistFailsClosed(t *testing.T) {
+	raw := []byte(`<svg xmlns="http://www.w3.org/2000/svg" onload="bad()"><defs><linearGradient id="paint"><stop offset="0" stop-color="red"/></linearGradient></defs><rect id="safe" width="10" height="10" fill="url(#paint)"/><use href="#safe"/><use href="https://evil.invalid/x"/><script>alert(1)</script><style>*{background:url(https://evil.invalid/x)}</style><foreignObject><div>bad</div></foreignObject></svg>`)
+	got, err := SanitizeSVG(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := string(got)
+	for _, removed := range []string{"onload", "<script", "<style", "foreignObject", "evil.invalid"} {
+		if strings.Contains(output, removed) {
+			t.Fatalf("unsafe SVG content retained %q: %s", removed, output)
+		}
+	}
+	for _, retained := range []string{`id="safe"`, `fill="url(#paint)"`, `href="#safe"`} {
+		if !strings.Contains(output, retained) {
+			t.Fatalf("safe SVG content missing %q: %s", retained, output)
+		}
+	}
+	for _, malformed := range [][]byte{
+		[]byte(`<svg><path>`),
+		[]byte(`<!DOCTYPE svg [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><svg>&xxe;</svg>`),
+		[]byte(`<html><svg></svg></html>`),
+	} {
+		if _, err := SanitizeSVG(malformed); err == nil {
+			t.Fatalf("unsafe or malformed SVG accepted: %q", malformed)
+		}
 	}
 }
 

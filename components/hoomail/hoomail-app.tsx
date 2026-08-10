@@ -46,8 +46,8 @@ export function HoomailApp() {
   const { events } = useCalendarEvents(selectedMailboxId, view === 'calendar')
   const openMessageStateRef = useRef({ messages, selectedMailboxId })
   openMessageStateRef.current = { messages, selectedMailboxId }
-  const actionStateRef = useRef({ messages, selectedMailboxId, selectedMessageId })
-  actionStateRef.current = { messages, selectedMailboxId, selectedMessageId }
+  const actionStateRef = useRef({ messages, selectedMailboxId, selectedMessageId, searchQuery })
+  actionStateRef.current = { messages, selectedMailboxId, selectedMessageId, searchQuery }
 
   // Auto-select the first mailbox when none is selected
   useEffect(() => {
@@ -199,7 +199,8 @@ export function HoomailApp() {
   }
 
   const handleAction = useCallback(async (action: 'delete' | 'read' | 'unread', ids: number[]) => {
-    const { messages, selectedMailboxId, selectedMessageId } = actionStateRef.current
+    const { messages, selectedMailboxId, selectedMessageId, searchQuery } = actionStateRef.current
+    const actionContext = { mailboxId: selectedMailboxId, searchQuery: searchQuery.trim(), ids: new Set(ids) }
     // Optimistic delete: drop the rows from the cache immediately so the
     // exit animation starts right away instead of after the round-trip
     if (action === 'delete' && selectedMailboxId != null) {
@@ -231,9 +232,19 @@ export function HoomailApp() {
       if (selectedMailboxId != null) refreshAfterRead(selectedMailboxId)
       return
     }
-    setSelectedIds(new Set())
+    const currentContext = actionStateRef.current
+    if (
+      currentContext.selectedMailboxId === actionContext.mailboxId &&
+      currentContext.searchQuery.trim() === actionContext.searchQuery
+    ) {
+      setSelectedIds((current) => {
+        const next = new Set(current)
+        for (const id of actionContext.ids) next.delete(id)
+        return next
+      })
+    }
     // SSE 'messages:changed' refreshes lists; this covers latency gaps
-    if (selectedMailboxId != null) refreshAfterRead(selectedMailboxId)
+    if (actionContext.mailboxId != null) refreshAfterRead(actionContext.mailboxId)
   }, [])
 
   const openMessageFromCalendar = (messageId: number) => {

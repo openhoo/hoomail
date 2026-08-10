@@ -72,3 +72,21 @@ test('resets all inboxes and restores the empty application state', async ({ pag
   expect(apiResponse.status()).toBe(200)
   expect(await apiResponse.json()).toEqual({ mailboxes: [] })
 })
+
+test('keeps reset dialog open and reports a failed reset response', async ({ page }) => {
+  await page.route('**/api/reset', async (route) => {
+    await route.fulfill({
+      status: 500,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: 'Reset unavailable' }),
+    })
+  })
+
+  const resetButton = page.getByRole('button', { name: 'Reset', exact: true })
+  const resetDialog = page.getByRole('dialog', { name: 'Reset hoomail?' })
+  await resetButton.click()
+  await resetDialog.getByRole('button', { name: 'Wipe everything' }).click()
+
+  await expect(resetDialog).toBeVisible()
+  await expect(resetDialog.getByRole('alert')).toHaveText('Reset unavailable')
+})

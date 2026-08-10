@@ -103,3 +103,28 @@ test.describe('test message delivery', () => {
     await expect(dialog.getByLabel('Event title')).toHaveValue('Owl standup meeting')
   })
 })
+
+test('sends only once when Enter repeats while the request is pending', async ({ page }) => {
+  let calls = 0
+  let release!: () => void
+  let requestStarted!: () => void
+  const pending = new Promise<void>((resolve) => { release = resolve })
+  const started = new Promise<void>((resolve) => { requestStarted = resolve })
+  await page.route('**/api/send-test', async (route) => {
+    calls += 1
+    requestStarted()
+    await pending
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })
+  })
+
+  await page.getByRole('button', { name: 'Send test' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Send a test email' })
+  const recipient = dialog.getByLabel('Recipient')
+  await recipient.press('Enter')
+  await started
+  await recipient.press('Enter')
+  expect(calls).toBe(1)
+
+  release()
+  await expect(dialog).toBeHidden()
+})

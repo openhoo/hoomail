@@ -152,6 +152,36 @@ func TestOpenPOP3MailboxCreatesMissingInboxAndReturnsRawMessages(t *testing.T) {
 	}
 }
 
+func TestStoreMessageKeepsMailboxLastMessageAtMonotoneAcrossClockChanges(t *testing.T) {
+	var clockNow int64 = 1000
+	store := openTestStore(t, WithClock(func() time.Time { return time.UnixMilli(clockNow) }), WithBroadcaster(func(events.Event) {}))
+	ctx := context.Background()
+	if _, err := store.OpenPOP3Mailbox(ctx, "box@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	storeAtClock := func(want int64) {
+		t.Helper()
+		if _, err := store.StoreMessage(ctx, StoreMessageInput{Recipients: []string{"box@example.com"}, Headers: map[string]string{}}); err != nil {
+			t.Fatal(err)
+		}
+		mailboxes, err := store.ListMailboxes(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(mailboxes) != 1 || mailboxes[0].LastMessageAt == nil || *mailboxes[0].LastMessageAt != want {
+			t.Fatalf("mailboxes=%+v, want last_message_at=%d", mailboxes, want)
+		}
+	}
+
+	storeAtClock(1000)
+	clockNow = 2000
+	storeAtClock(2000)
+	clockNow = 1500
+	storeAtClock(2000)
+	clockNow = 2000
+	storeAtClock(2000)
+}
+
 func TestDeleteCascadeAndWipeResetSequences(t *testing.T) {
 	store := openTestStore(t, WithBroadcaster(func(events.Event) {}))
 	ctx := context.Background()

@@ -146,6 +146,30 @@ func TestParseMalformedHeadersAndMultipartDigestDefault(t *testing.T) {
 	}
 }
 
+func TestParseMultipartDigestDefaultWithoutRawIndex(t *testing.T) {
+	raw := []byte(strings.Join([]string{
+		"Content-Type: multipart/digest; boundary=digest",
+		"",
+		"--digest",
+		"From: nested@example.test",
+		"",
+		"nested body",
+		"--digest--",
+		"",
+	}, "\r\n"))
+	document, err := Parse(raw, Limits{})
+	if err != nil || document.SemanticError != nil {
+		t.Fatalf("Parse: err=%v semantic=%v", err, document.SemanticError)
+	}
+	if document.Root == nil || len(document.Root.Children) != 1 {
+		t.Fatalf("document=%#v", document)
+	}
+	child := document.Root.Children[0]
+	if child.MediaType != "message/rfc822" || len(child.Children) != 1 || child.Children[0].MediaType != "text/plain" {
+		t.Fatalf("digest child=%#v", child)
+	}
+}
+
 func TestParseIndexesEncapsulatedMessagesWithoutSelectingNestedBody(t *testing.T) {
 	raw := []byte(strings.Join([]string{
 		"MIME-Version: 1.0",

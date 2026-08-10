@@ -195,7 +195,7 @@ const jsonFetcher = async <T,>(url: string): Promise<T> => {
 }
 
 export function useMailboxes() { const { data, isLoading } = useCachedResource<{ mailboxes: Mailbox[] }>('/api/mailboxes'); return { mailboxes: data?.mailboxes ?? [], isLoading } }
-export function useMessages(mailboxId: number | null, query?: string) { const q = query?.trim(); const key = mailboxId == null ? null : `/api/mailboxes/${mailboxId}/messages${q ? `?q=${encodeURIComponent(q)}` : ''}`; const { data, isLoading } = useCachedResource<{ messages: MessageListItem[] }>(key, jsonFetcher, true); return { messages: mailboxId == null ? [] : data?.messages ?? [], isLoading } }
+export function useMessages(mailboxId: number | null, query?: string) { const q = query?.trim(); const key = mailboxId == null ? null : `/api/mailboxes/${mailboxId}/messages${q ? `?q=${encodeURIComponent(q)}` : ''}`; const { data, isLoading } = useCachedResource<{ messages: MessageListItem[] }>(key, jsonFetcher); return { messages: mailboxId == null ? [] : data?.messages ?? [], isLoading } }
 export function useCalendarEvents(mailboxId: number | null, enabled: boolean) { const { data, isLoading } = useCachedResource<{ events: CalendarEvent[] }>(enabled && mailboxId != null ? `/api/mailboxes/${mailboxId}/events` : null); return { events: data?.events ?? [], isLoading } }
 export function useInspection(messageId: number | null, enabled: boolean) {
   const key = enabled && messageId != null ? `/api/messages/${messageId}/inspect` : null

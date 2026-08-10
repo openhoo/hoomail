@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	_ "time/tzdata"
 )
 
 const (
@@ -410,7 +411,7 @@ func optionalParameter(params map[string][]string, name string, upper bool) *str
 
 func parseSequence(value string) int {
 	sequence, err := strconv.Atoi(value)
-	if err != nil {
+	if err != nil || sequence < 0 {
 		return 0
 	}
 	return sequence

@@ -41,7 +41,7 @@ Outside `/api/`, production `GET` and `HEAD` requests are served from the embedd
 
 ### IDs
 
-Path IDs are parsed first as IEEE 754 binary64 (`float64`) values, then accepted when finite and integer-valued and when the rounded float passes the current `math.MinInt64`/`math.MaxInt64` comparisons, before conversion to `int64`. `strconv.ParseFloat` syntax is exposed: besides ordinary decimal integers, forms such as `1.0`, `1e0`, signed values, and hexadecimal floating-point forms such as `0x1p0` can be accepted. Binary64 cannot distinguish every integer above $2^{53}$: for example, `9007199254740993` is handled as `9007199254740992`. Boundary checks are also imprecise because `float64(math.MaxInt64)` is $2^{63}$; currently `9223372036854775807` and `9223372036854775808` can pass and convert to `-9223372036854775808`, while `-9223372036854775809` can round to that same minimum value. Clients should send only the ordinary base-10 integer representation returned by the API, with IDs no greater than $2^{53}$ if exact parsing matters.
+Path IDs are parsed as base-10 signed 64-bit integers with `strconv.ParseInt`. Only decimal syntax accepted by that parser is valid; values outside `[-9223372036854775808, 9223372036854775807]`, fractional values, exponents, and hexadecimal forms return `400`. JSON action IDs are decoded as exact `json.Number` values and undergo the same signed 64-bit validation, without IEEE-754 rounding or aliasing.
 
 Invalid path IDs return `400` JSON with an endpoint-specific message:
 
@@ -59,7 +59,7 @@ Successful JSON responses and documented JSON client errors are compact JSON wit
 Content-Type: application/json
 ```
 
-There is no `charset` parameter and no general JSON cache header. JSON request endpoints do not require or check a request `Content-Type`. The API handler also does not impose its own request-body size limit.
+There is no `charset` parameter and no general JSON cache header. JSON request endpoints do not require or check a request `Content-Type`. JSON request bodies are limited to 1 MiB; oversized or otherwise invalid JSON returns the endpoint's documented JSON `400` error.
 
 Most expected client errors use:
 
@@ -187,7 +187,7 @@ A valid but nonexistent mailbox ID returns `200` with `{"messages":[]}`; the rou
 
 Returns parsed message detail and visible attachment metadata.
 
-**Read side effect:** after finding the message, this `GET` marks it read if it was unread, before decoding the stored recipient, header, or calendar JSON fields used in the response. The unread-to-read mutation emits `messages:changed` for the mailbox. If a later stored-JSON decode fails, the request returns plain-text `500` even though the read mutation and event have already occurred. Retrieving an already-read message does not emit that event. Clients and intermediaries must not treat this route as a side-effect-free read or assume an error response left state unchanged.
+**Read side effect:** after finding the message, this `GET` decodes every stored recipient, header, and calendar JSON projection and prepares the sanitized HTML and attachment metadata before marking an unread message read. The unread-to-read mutation emits `messages:changed` for the mailbox. If a stored projection fails to decode, the request returns plain-text `500` and leaves the message unread. Retrieving an already-read message does not emit that event. Clients and intermediaries must not treat this route as a side-effect-free read.
 
 Returns `200 OK`:
 
@@ -298,6 +298,22 @@ The response's `attachments` array omits:
 - when parsed calendar JSON exists for the message, non-CID parts recognized as calendar parts. Recognition is based on a content type containing `text/calendar` or `application/ics`, or a filename ending in `.ics`, case-insensitively.
 
 The underlying attachment remains addressable by its ID if a client already knows that ID.
+
+### `GET /api/messages/{id}/source`
+
+Returns the exact stored RFC 822 source bytes without parsing, sanitizing, or marking the message read. The response uses `Content-Type: message/rfc822`, `X-Content-Type-Options: nosniff`, and `Cache-Control: private, no-store`; clients and intermediaries must not cache it.
+
+Responses:
+
+| Status | Body | Condition |
+| --- | --- | --- |
+| `200` | raw RFC 822 bytes | Message exists and source was stored. |
+| `400` | JSON `Invalid message id` | Invalid path ID. |
+| `404` | JSON `Message not found` | No message exists for the ID. |
+| `500` | plain text | Storage failure. |
+
+The source endpoint does not change read state, emit `messages:changed`, or apply HTML/CID sanitization. It is intended for exact source inspection and should be treated as untrusted input.
+
 
 ### `GET /api/messages/{id}/inspect`
 
@@ -525,18 +541,19 @@ Successful inline-capable response example:
 Content-Type: text/plain
 Content-Length: 42
 Content-Disposition: inline; filename="note.txt"
-Cache-Control: private, max-age=3600
+Cache-Control: private, no-store
 X-Content-Type-Options: nosniff
 ```
 
 Behavior:
 
 - The stored content type is parsed, lowercased, and stripped of parameters. Missing, empty, or malformed values become `application/octet-stream`.
-- Only `image/png`, `image/jpeg`, `image/gif`, `image/webp`, `text/plain`, and `text/csv` are inline-capable. PDF, HTML/XHTML, SVG/XML, MHTML, JavaScript, unknown, and other active formats use `attachment`.
-- `?download=1` forces `attachment`; other `download` values do not.
+- PNG, JPEG, GIF, WebP, plain-text, and CSV attachments are inline-capable by default. PDF, HTML/XHTML, SVG/XML, MHTML, JavaScript, unknown, and other active formats use `attachment`.
+- The HTML sanitizer marks a resolved CID resource with `?inline=cid`. For `image/svg+xml` only, that marker returns a separately parsed, fail-closed static SVG allowlist with `Content-Disposition: inline` and a restrictive CSP. Scripts, event/style attributes, active or animation elements, XML directives/entities, and external/data/blob references are removed or rejected. Without the marker, the original SVG remains download-only.
+- `?download=1` forces `attachment`; other download values do not.
 - Every attachment response, including validation, missing-record, and storage-error responses from this route, includes `X-Content-Type-Options: nosniff`.
 - The filename is reduced to its basename and control/path-separator characters are removed; a missing or unusable value becomes `attachment-{id}`. `Content-Disposition` includes a safe ASCII quoted fallback and, for non-ASCII names, a UTF-8 `filename*` parameter.
-- The private cache lifetime is one hour. After message deletion or reset, a browser or intermediary may retain a previously fetched private response until its cache lifetime expires; clients should clear relevant local caches when invalidated.
+- Attachment responses are private and uncached (`Cache-Control: private, no-store`); clients must refetch after invalidation rather than relying on an intermediary cache.
 
 Responses:
 
@@ -673,7 +690,7 @@ SSE delivery is in-memory, best-effort, and non-replayable:
 - Each connected subscription has a 64-event channel buffer.
 - Broadcasts preserve enqueue order for a subscriber while its buffer has capacity.
 - Producers never wait for a slow subscriber. When its 64-slot buffer cannot accept the next event immediately, the hub removes that subscriber and closes its subscription channel.
-- Overflow handling is only best-effort at the HTTP layer. The stream handler reads the subscription channel without checking whether it was closed, so a closed-channel receive can be serialized as a JSON frame with an empty `type` instead of promptly ending the connection; repeated empty-type frames or a stalled stream are possible current edge behavior. Overflow therefore does not promise a clean disconnect or a distinguishable terminal signal.
+- On overflow the hub removes that subscriber and closes its subscription channel. The HTTP stream detects the closed channel and ends promptly without serializing an empty-type event.
 - The protocol provides no event ID, replay cursor, resume token, persisted event log, or acknowledgement.
 - Events emitted before subscription, during disconnect, after buffer overflow, or during process restart can be missed.
 

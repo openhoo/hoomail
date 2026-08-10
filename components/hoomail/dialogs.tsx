@@ -1,4 +1,4 @@
-import { useState } from 'preact/hooks'
+import { useRef, useState } from 'preact/hooks'
 import { Loader2, RotateCcw, Send } from '@/components/ui/icons'
 import { Button } from '@/components/ui/button'
 import {
@@ -24,8 +24,11 @@ export function SendTestDialog({
   const [kind, setKind] = useState<'plain' | 'invite' | 'update' | 'cancellation'>('plain')
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const sendingRef = useRef(false)
 
   const send = async () => {
+    if (sendingRef.current) return
+    sendingRef.current = true
     setSending(true)
     setError(null)
     try {
@@ -43,6 +46,7 @@ export function SendTestDialog({
       setError(err instanceof Error ? err.message : 'Send failed')
     } finally {
       setSending(false)
+      sendingRef.current = false
     }
   }
 
@@ -182,12 +186,20 @@ export function ResetDialog({
   onOpenChange: (open: boolean) => void
 }) {
   const [resetting, setResetting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   const reset = async () => {
     setResetting(true)
+    setError(null)
     try {
-      await fetch('/api/reset', { method: 'POST' })
+      const response = await fetch('/api/reset', { method: 'POST' })
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data.error || 'Reset failed')
+      }
       onOpenChange(false)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Reset failed')
     } finally {
       setResetting(false)
     }
@@ -203,6 +215,7 @@ export function ResetDialog({
             clean test run.
           </DialogDescription>
         </DialogHeader>
+        {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={resetting}>
             Cancel

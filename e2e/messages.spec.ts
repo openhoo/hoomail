@@ -135,6 +135,84 @@ test('searches messages and supports keyboard navigation, selection, bulk action
   await expect(page.getByRole('list', { name: 'Messages' }).getByRole('button')).toHaveCount(1)
 })
 
+test('does not expose old search rows while a new query is pending', async ({ page, request }) => {
+  const recipient = 'stale-search@hoomail.test'
+  const oldSubject = 'Old query result'
+  const newSubject = 'New query result'
+  await sendTestMessage(request, { to: recipient, subject: oldSubject, kind: 'plain' })
+  await expect(messageRow(page, oldSubject)).toBeVisible()
+  await sendTestMessage(request, { to: recipient, subject: newSubject, kind: 'plain' })
+  await expect(messageRow(page, newSubject)).toBeVisible()
+
+  let release!: () => void
+  let requestStarted!: () => void
+  const pending = new Promise<void>((resolve) => { release = resolve })
+  const started = new Promise<void>((resolve) => { requestStarted = resolve })
+  await page.route('**/api/mailboxes/*/messages*', async (route) => {
+    const url = new URL(route.request().url())
+    if (url.searchParams.get('q') === newSubject) {
+      requestStarted()
+      await pending
+      await route.continue()
+      return
+    }
+    await route.continue()
+  })
+
+  const search = page.getByRole('searchbox', { name: 'Search messages' })
+  await search.fill(newSubject)
+  await started
+  await expect(messageRow(page, oldSubject)).toBeHidden()
+  await expect(page.getByRole('list', { name: 'Messages' }).getByRole('button')).toHaveCount(0)
+  release()
+  await expect(messageRow(page, newSubject)).toBeVisible()
+})
+
+test('preserves a new selection when an old bulk action completes after mailbox change', async ({ page, request }) => {
+  const firstRecipient = 'bulk-old@hoomail.test'
+  const secondRecipient = 'bulk-new@hoomail.test'
+  const firstSubject = 'Old bulk selection'
+  const oldSecondSubject = 'Another old bulk selection'
+  const secondSubject = 'New bulk selection'
+  const thirdSubject = 'Another new bulk selection'
+  await sendTestMessage(request, { to: firstRecipient, subject: firstSubject, kind: 'plain' })
+  await expect(messageRow(page, firstSubject)).toBeVisible()
+  await sendTestMessage(request, { to: firstRecipient, subject: oldSecondSubject, kind: 'plain' })
+  await expect(messageRow(page, oldSecondSubject)).toBeVisible()
+  await sendTestMessage(request, { to: secondRecipient, subject: secondSubject, kind: 'plain' })
+  await sendTestMessage(request, { to: secondRecipient, subject: thirdSubject, kind: 'plain' })
+  const secondMailbox = mailboxButton(page, secondRecipient)
+  await expect(secondMailbox).toBeVisible()
+
+  let release!: () => void
+  let actionStarted!: () => void
+  const pending = new Promise<void>((resolve) => { release = resolve })
+  const started = new Promise<void>((resolve) => { actionStarted = resolve })
+  await page.route('**/api/messages/actions', async (route) => {
+    actionStarted()
+    await pending
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })
+  })
+
+  const oldRow = messageRow(page, firstSubject)
+  await oldRow.focus()
+  await oldRow.press('ControlOrMeta+A')
+  await page.getByRole('button', { name: 'Read', exact: true }).click()
+  await started
+
+  await secondMailbox.click()
+  const newRow = messageRow(page, secondSubject)
+  const anotherNewRow = messageRow(page, thirdSubject)
+  await expect(newRow).toBeVisible()
+  await newRow.click({ modifiers: ['ControlOrMeta'] })
+  await anotherNewRow.click({ modifiers: ['ControlOrMeta'] })
+  await expect(page.getByText('2 selected', { exact: true })).toBeVisible()
+  release()
+  await expect(page.getByText('2 selected', { exact: true })).toBeVisible()
+  await expect(newRow).toHaveAttribute('aria-pressed', 'true')
+  await expect(anotherNewRow).toHaveAttribute('aria-pressed', 'true')
+})
+
 test('supports keyboard context-menu navigation, dismissal, and single-row deletion', async ({ page, request }) => {
   const recipient = 'message-menu@hoomail.test'
   const subjects = ['Dawn menu row', 'Elm menu row', 'Frost menu row'] as const

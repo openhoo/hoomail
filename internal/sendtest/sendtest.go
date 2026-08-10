@@ -23,7 +23,7 @@ type Sender struct {
 	Now     func() time.Time
 }
 
-func (sender Sender) SendTest(ctx context.Context, request httpserver.SendTestRequest) error {
+func (sender Sender) SendTest(ctx context.Context, request httpserver.SendTestRequest) (err error) {
 	address := sender.Address
 	if address == "" {
 		address = "127.0.0.1:2525"
@@ -38,9 +38,28 @@ func (sender Sender) SendTest(ctx context.Context, request httpserver.SendTestRe
 	if err != nil {
 		return err
 	}
+	defer connection.Close()
+	stopCancellation := make(chan struct{})
+	defer close(stopCancellation)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = connection.Close()
+		case <-stopCancellation:
+		}
+	}()
+	if deadline, ok := ctx.Deadline(); ok {
+		if err = connection.SetDeadline(deadline); err != nil {
+			return err
+		}
+	}
+	defer func() {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			err = ctxErr
+		}
+	}()
 	client, err := smtp.NewClient(connection, host(address))
 	if err != nil {
-		connection.Close()
 		return err
 	}
 	defer client.Close()

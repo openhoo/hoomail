@@ -1,6 +1,9 @@
 package sendtest
 
 import (
+	"context"
+	"errors"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -54,5 +57,40 @@ func TestMessageEncodesUntrustedFields(t *testing.T) {
 	}
 	if !strings.Contains(sampleHTML("owl+<nest>@example.com"), "owl+&lt;nest&gt;@example.com") {
 		t.Fatal("HTML recipient was not escaped")
+	}
+}
+
+func TestSendTestCancelsStalledSMTPGreeting(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	accepted := make(chan error, 1)
+	go func() {
+		connection, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			accepted <- acceptErr
+			return
+		}
+		defer connection.Close()
+		buffer := make([]byte, 1)
+		_, readErr := connection.Read(buffer)
+		accepted <- readErr
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	err = (Sender{Address: listener.Addr().String()}).SendTest(ctx, httpserver.SendTestRequest{To: "test@example.com"})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("SendTest error = %v, want context deadline exceeded", err)
+	}
+	select {
+	case readErr := <-accepted:
+		if readErr == nil {
+			t.Fatal("stalled SMTP connection remained readable after cancellation")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stalled SMTP connection was not closed after cancellation")
 	}
 }

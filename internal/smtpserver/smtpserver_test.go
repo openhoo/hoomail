@@ -2,6 +2,7 @@ package smtpserver
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"net"
@@ -93,6 +94,25 @@ func TestAdvertisedAndActualOversizeRejection(t *testing.T) {
 	defer messageStore.mu.Unlock()
 	if len(messageStore.inputs) != 0 {
 		t.Fatalf("stored %d oversized messages", len(messageStore.inputs))
+	}
+}
+
+func TestSessionDataAcceptsExactConfiguredLimit(t *testing.T) {
+	messageStore := &recordingStore{}
+	session := &session{
+		store:      messageStore,
+		mailFrom:   "sender@example.test",
+		recipients: []string{"recipient@example.test"},
+	}
+	header := []byte("From: sender@example.test\r\nTo: recipient@example.test\r\nSubject: exact limit\r\n\r\n")
+	payload := append([]byte(nil), header...)
+	payload = append(payload, bytes.Repeat([]byte{'x'}, int(MaxMessageBytes)-len(header))...)
+
+	if err := session.Data(bytes.NewReader(payload)); err != nil {
+		t.Fatalf("Data at exact limit: %v", err)
+	}
+	if input := messageStore.last(t); len(input.Raw) != int(MaxMessageBytes) {
+		t.Fatalf("stored raw length = %d, want %d", len(input.Raw), MaxMessageBytes)
 	}
 }
 

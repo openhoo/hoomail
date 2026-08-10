@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"math"
 	"mime"
 	"net/http"
 	"path"
@@ -17,7 +16,9 @@ import (
 	"strings"
 	"time"
 	"unicode"
+)
 
+import (
 	"github.com/openhoo/hoomail/internal/calendar"
 	"github.com/openhoo/hoomail/internal/events"
 	"github.com/openhoo/hoomail/internal/inspect"
@@ -50,9 +51,10 @@ type StaticConfig struct {
 }
 
 type server struct {
-	store  *store.Store
-	static StaticConfig
-	sender TestSender
+	store     *store.Store
+	static    StaticConfig
+	sender    TestSender
+	subscribe func() (<-chan events.Event, func())
 }
 
 // New constructs the legacy-compatible API and SPA handler.
@@ -60,7 +62,7 @@ func New(data *store.Store, static StaticConfig, sender TestSender) http.Handler
 	if static.Index == "" {
 		static.Index = "index.html"
 	}
-	return &server{store: data, static: static, sender: sender}
+	return &server{store: data, static: static, sender: sender, subscribe: events.Subscribe}
 }
 
 func (s *server) ServeHTTP(response http.ResponseWriter, request *http.Request) {
@@ -107,11 +109,8 @@ func (s *server) ServeHTTP(response http.ResponseWriter, request *http.Request) 
 }
 
 func parseID(value string) (int64, bool) {
-	number, err := strconv.ParseFloat(value, 64)
-	if err != nil || math.IsInf(number, 0) || math.IsNaN(number) || math.Trunc(number) != number || number < math.MinInt64 || number > math.MaxInt64 {
-		return 0, false
-	}
-	return int64(number), true
+	number, err := strconv.ParseInt(value, 10, 64)
+	return number, err == nil
 }
 
 func writeJSON(response http.ResponseWriter, status int, value any) {
@@ -266,10 +265,6 @@ func (s *server) getMessage(response http.ResponseWriter, request *http.Request,
 		writeError(response, http.StatusNotFound, "Message not found")
 		return
 	}
-	if err := s.store.MarkRead(request.Context(), id, detail.Message.MailboxID, detail.Message.IsRead); err != nil {
-		internalError(response, err)
-		return
-	}
 	to, err := decodeJSONField(detail.Message.ToJSON)
 	if err != nil {
 		internalError(response, err)
@@ -322,6 +317,10 @@ func (s *server) getMessage(response http.ResponseWriter, request *http.Request,
 		attachments = append(attachments, attachmentInfoResponse{attachment.ID, attachment.Filename, attachment.ContentType, attachment.Size})
 	}
 	message := messageResponse{detail.Message.ID, detail.Message.MailboxID, detail.Message.FromAddress, detail.Message.FromName, to, cc, detail.Message.Subject, html, detail.Message.Text, headers, detail.Message.Size, detail.Message.ReceivedAt, iCalEvents}
+	if err := s.store.MarkRead(request.Context(), id, detail.Message.MailboxID, detail.Message.IsRead); err != nil {
+		internalError(response, err)
+		return
+	}
 	writeJSON(response, http.StatusOK, struct {
 		Message     messageResponse          `json:"message"`
 		Attachments []attachmentInfoResponse `json:"attachments"`
@@ -383,8 +382,11 @@ func (s *server) inspectMessage(response http.ResponseWriter, request *http.Requ
 	writeJSON(response, http.StatusOK, report)
 }
 
-func decodeBody(request *http.Request) (any, error) {
-	decoder := json.NewDecoder(request.Body)
+const maxJSONBodyBytes = 1 << 20
+
+func decodeBody(response http.ResponseWriter, request *http.Request) (any, error) {
+	decoder := json.NewDecoder(http.MaxBytesReader(response, request.Body, maxJSONBodyBytes))
+	decoder.UseNumber()
 	var value any
 	if err := decoder.Decode(&value); err != nil {
 		return nil, err
@@ -403,16 +405,20 @@ func validIDs(value any) []int64 {
 	}
 	ids := make([]int64, 0, len(values))
 	for _, value := range values {
-		number, ok := value.(float64)
-		if ok && math.Trunc(number) == number && number >= math.MinInt64 && number <= math.MaxInt64 {
-			ids = append(ids, int64(number))
+		number, ok := value.(json.Number)
+		if !ok {
+			continue
+		}
+		id, err := number.Int64()
+		if err == nil {
+			ids = append(ids, id)
 		}
 	}
 	return ids
 }
 
 func (s *server) messageActions(response http.ResponseWriter, request *http.Request) {
-	value, err := decodeBody(request)
+	value, err := decodeBody(response, request)
 	if err != nil {
 		writeError(response, http.StatusBadRequest, "Invalid JSON body")
 		return
@@ -560,15 +566,28 @@ func (s *server) getAttachment(response http.ResponseWriter, request *http.Reque
 	contentType := normalizeAttachmentContentType(attachment.ContentType)
 	filename := sanitizeAttachmentFilename(attachment.Filename, attachment.ID)
 	disposition := "attachment"
-	if request.URL.Query().Get("download") != "1" && inlineAttachmentTypes[contentType] {
+	content := attachment.Content
+	if contentType == "image/svg+xml" {
+		response.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'none'; style-src 'none'; img-src 'none'; object-src 'none'; base-uri 'none'")
+	}
+	inlineSVG := request.URL.Query().Get("inline") == "cid" && contentType == "image/svg+xml" && request.URL.Query().Get("download") != "1"
+	if inlineSVG {
+		sanitized, sanitizeErr := inspect.SanitizeSVG(content)
+		if sanitizeErr != nil {
+			writeError(response, http.StatusUnprocessableEntity, "SVG attachment is not safe to render inline")
+			return
+		}
+		content = sanitized
+		disposition = "inline"
+	} else if request.URL.Query().Get("download") != "1" && inlineAttachmentTypes[contentType] {
 		disposition = "inline"
 	}
 	response.Header().Set("Content-Type", contentType)
-	response.Header().Set("Content-Length", strconv.FormatInt(attachment.Size, 10))
+	response.Header().Set("Content-Length", strconv.Itoa(len(content)))
 	response.Header().Set("Content-Disposition", formatAttachmentDisposition(disposition, filename))
 	response.Header().Set("Cache-Control", "private, no-store")
 	response.WriteHeader(http.StatusOK)
-	_, _ = response.Write(attachment.Content)
+	_, _ = response.Write(content)
 }
 
 func (s *server) eventStream(response http.ResponseWriter, request *http.Request) {
@@ -583,7 +602,7 @@ func (s *server) eventStream(response http.ResponseWriter, request *http.Request
 	response.WriteHeader(http.StatusOK)
 	_, _ = io.WriteString(response, "data: {\"type\":\"connected\"}\n\n")
 	flusher.Flush()
-	stream, unsubscribe := events.Subscribe()
+	stream, unsubscribe := s.subscribe()
 	defer unsubscribe()
 	heartbeat := time.NewTicker(25 * time.Second)
 	defer heartbeat.Stop()
@@ -591,7 +610,10 @@ func (s *server) eventStream(response http.ResponseWriter, request *http.Request
 		select {
 		case <-request.Context().Done():
 			return
-		case event := <-stream:
+		case event, open := <-stream:
+			if !open {
+				return
+			}
 			body, err := json.Marshal(event)
 			if err != nil {
 				continue
@@ -621,7 +643,7 @@ var recipientPattern = regexp.MustCompile(`^[^\s@]+@[^\s@]+\.[^\s@]+$`)
 
 func (s *server) sendTest(response http.ResponseWriter, request *http.Request) {
 	body := map[string]any{}
-	if value, err := decodeBody(request); err == nil {
+	if value, err := decodeBody(response, request); err == nil {
 		body, _ = value.(map[string]any)
 	}
 	to, _ := body["to"].(string)

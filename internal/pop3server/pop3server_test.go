@@ -336,6 +336,25 @@ func TestMalformedAndStateInvalidCommandsReturnERR(t *testing.T) {
 	}
 }
 
+func TestCommandWithoutLFIsBounded(t *testing.T) {
+	server := startTestServer(t, &recordingStore{})
+	client := dialPOP3(t, server.address)
+	defer client.close()
+
+	if err := client.conn.SetDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.conn.Write([]byte(strings.Repeat("X", maxCommandBytes))); err != nil {
+		t.Fatal(err)
+	}
+	if response := client.readLine(); !strings.HasPrefix(response, "-ERR") {
+		t.Fatalf("response = %q, want -ERR", response)
+	}
+	if _, err := client.reader.ReadByte(); err == nil {
+		t.Fatal("connection remained open after oversized LF-less command")
+	}
+}
+
 func TestStoreFailuresReturnERR(t *testing.T) {
 	t.Run("open", func(t *testing.T) {
 		recording := &recordingStore{openErr: errors.New("failed")}

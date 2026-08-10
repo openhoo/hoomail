@@ -133,14 +133,21 @@ func TestParseICSFoldedLineTimezoneAndDuration(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("ParseICS returned %d events, want 1", len(events))
 	}
-	location, err := time.LoadLocation("Europe/Berlin")
-	if err != nil {
-		t.Fatal(err)
-	}
-	start := time.Date(2026, time.January, 15, 9, 0, 0, 0, location).UnixMilli()
-	end := time.Date(2026, time.January, 15, 10, 30, 0, 0, location).UnixMilli()
+	start := time.Date(2026, time.January, 15, 8, 0, 0, 0, time.UTC).UnixMilli()
+	end := time.Date(2026, time.January, 15, 9, 30, 0, 0, time.UTC).UnixMilli()
 	if events[0].DTStart != start || events[0].DTEnd == nil || *events[0].DTEnd != end || events[0].Summary == nil || *events[0].Summary != "Quarterly planning with a longagenda" {
 		t.Fatalf("timezone/duration/folding mismatch: %#v", events[0])
+	}
+}
+
+func TestParseICSNormalizesNegativeSequence(t *testing.T) {
+	ics := "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:negative-sequence@example.com\r\nSEQUENCE:-1\r\nDTSTART:20260723T100000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+	events := ParseICS(ics)
+	if len(events) != 1 {
+		t.Fatalf("ParseICS returned %d events, want 1", len(events))
+	}
+	if events[0].Sequence != 0 {
+		t.Fatalf("Sequence = %d, want 0", events[0].Sequence)
 	}
 }
 

@@ -148,7 +148,7 @@ All enabled tab buttons participate in normal sequential Tab navigation. The tab
 
 HTML email is a standards-valid message body, even when it uses elaborate tables, branding, colors, typography, spacing, and inline CSS. Hoomail preserves those sender choices when they are within its security allowlist. It is an inspection tool, not a pixel-perfect Outlook, Gmail, or Apple Mail emulator; rendering differences caused by each client's supported HTML/CSS subset remain compatibility differences.
 
-Before display, the server rewrites CID image references only from captured resources scoped to the selected multipart/related content represented by parser storage, then applies a Bluemonday parsed allowlist. Safe email tables, ordinary formatting, links, images, and a conservative set of inline presentation properties survive. Scripts, frames, forms, active embeds, event handlers, unsafe URL schemes, CSS URL/network functions, remote images, fonts, media, and other fetch initiators are removed. This parser-based policy replaces the former regex transformation as the security boundary.
+Before display, the server rewrites CID image references only from captured resources scoped to the selected multipart/related content represented by parser storage, then applies a Bluemonday parsed allowlist. Safe email tables, ordinary formatting, links, images, and a conservative set of inline presentation properties survive. Scripts, frames, forms, active embeds, event handlers, unsafe URL schemes, CSS URL/network functions, remote images, fonts, media, and other fetch initiators are removed. CID SVG resources pass through an additional fail-closed static-SVG parser that removes active content and every external fetch reference before the image endpoint can render them. This parser-based policy replaces the former regex transformation as the security boundary.
 
 The UI then adds only security and containment metadata: `html`/`body` maximum-width containment, responsive image maximum width, a restrictive Content Security Policy, and `no-referrer`. The message body keeps the browser-default outer margin; Hoomail does not override it. It does **not** impose Hoomail typography, foreground colors, background colors, link colors, or padding on the message. Consequently:
 
@@ -159,7 +159,7 @@ The UI then adds only security and containment metadata: `html`/`body` maximum-w
 
 Sanitization, CSP, and iframe sandboxing are separate defenses. The message is rendered in an iframe with an empty `sandbox` attribute, no scripts or same-origin permission, and no referrer. Only the visible email iframe is in the Tab order. The viewer keeps the previous frame visible until the replacement document is ready, preserving the stable viewer shell during message switches.
 
-Remote content is blocked by default and the preview never requests sender-controlled images, stylesheets, fonts, frames, media, or CSS resources. CID images can load only from Hoomail's own captured-attachment endpoint. This differs from mail clients that proxy or optionally load remote images; see [Gmail's image policy](https://support.google.com/mail/answer/145919) and [Outlook external-image protection](https://support.microsoft.com/en-us/outlook/external-image-protection-in-outlook-com-43c0c17e-8fd1-41c6-93fe-ffe54638e82b).
+Remote content is blocked by default and the preview never requests sender-controlled images, stylesheets, fonts, frames, media, or CSS resources. CID raster images and strictly sanitized static CID SVG images can load only from Hoomail's own captured-attachment endpoint. This differs from mail clients that proxy or optionally load remote images; see [Gmail's image policy](https://support.google.com/mail/answer/145919) and [Outlook external-image protection](https://support.microsoft.com/en-us/outlook/external-image-protection-in-outlook-com-43c0c17e-8fd1-41c6-93fe-ffe54638e82b).
 
 Safe absolute HTTP(S) and `mailto:` link destinations are preserved for inspection, but links do not navigate or open windows from the empty-sandbox preview. Review the destination in **Inspect** before opening it separately; Inspect's explicit open control uses a new tab with opener isolation.
 
@@ -171,7 +171,7 @@ Only regular attachments listed by the viewer have download controls; inline CID
 | --- | --- |
 | `image/png`, `image/jpeg`, `image/gif`, `image/webp` | Image preview dialog. |
 | `text/plain`, `text/csv` | Text preview dialog, limited to the first `100,000` characters. |
-| PDF, HTML/XHTML, SVG/XML, MHTML, JavaScript, any other active/unknown type | No inline preview; download only. |
+| PDF, HTML/XHTML, SVG/XML, MHTML, JavaScript, any other active/unknown type | No attachment preview; download only. A selected multipart/related CID SVG is a separate case: Hoomail sanitizes its static vector content and renders it inside the email body. |
 
 MIME parameters and case are normalized before this decision. Every successful attachment response has `X-Content-Type-Options: nosniff`; `?download=1` forces download for an otherwise inline-capable item. The UI shows **Loading…** while fetching a text preview and **Could not load preview.** if it fails. There is no embedded PDF preview.
 

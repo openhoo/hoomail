@@ -13,8 +13,10 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/openhoo/hoomail/internal/events"
 	"github.com/openhoo/hoomail/internal/inspect"
 	"github.com/openhoo/hoomail/internal/store"
+	"github.com/openhoo/hoomail/internal/version"
 )
 
 func testStore(t *testing.T) *store.Store {
@@ -56,14 +58,20 @@ func TestGeneratedOpenAPIAndSwaggerEndpoints(t *testing.T) {
 		t.Fatalf("openapi headers=%v", openAPI.Header())
 	}
 	var document struct {
-		OpenAPI string                    `json:"openapi"`
-		Paths   map[string]map[string]any `json:"paths"`
+		OpenAPI string `json:"openapi"`
+		Info    struct {
+			Version string `json:"version"`
+		} `json:"info"`
+		Paths map[string]map[string]any `json:"paths"`
 	}
 	if err := json.Unmarshal(openAPI.Body.Bytes(), &document); err != nil {
 		t.Fatal(err)
 	}
 	if document.OpenAPI != "3.0.3" {
 		t.Fatalf("openapi=%q", document.OpenAPI)
+	}
+	if document.Info.Version != version.Value {
+		t.Fatalf("openapi version=%q want=%q", document.Info.Version, version.Value)
 	}
 	expected := map[string]string{
 		"/api/mailboxes":                      "get",
@@ -125,6 +133,67 @@ func TestInvalidIDsJSONAndActions(t *testing.T) {
 	assertResponse(t, request(t, handler, http.MethodPost, "/api/messages/actions", `{`), 400, `{"error":"Invalid JSON body"}`)
 	assertResponse(t, request(t, handler, http.MethodPost, "/api/messages/actions", `{"action":"delete","ids":[1.2,"2"]}`), 400, `{"error":"No valid message ids provided"}`)
 	assertResponse(t, request(t, handler, http.MethodPost, "/api/messages/actions", `{"action":"wat","ids":[1,null,2.5]}`), 400, `{"error":"Unknown action"}`)
+	assertResponse(t, request(t, handler, http.MethodGet, "/api/messages/9223372036854775807", ""), 404, `{"error":"Message not found"}`)
+	assertResponse(t, request(t, handler, http.MethodGet, "/api/messages/9223372036854775808", ""), 400, `{"error":"Invalid message id"}`)
+}
+
+func TestJSONBodyLimitAndExactIntegerIDs(t *testing.T) {
+	handler := New(testStore(t), StaticConfig{}, nil)
+	oversized := `{"action":"read","ids":[1],"padding":"` + strings.Repeat("x", 1<<20) + `"}`
+	assertResponse(t, request(t, handler, http.MethodPost, "/api/messages/actions", oversized), http.StatusBadRequest, `{"error":"Invalid JSON body"}`)
+
+	data := testStore(t)
+	stored, err := data.StoreMessage(context.Background(), store.StoreMessageInput{
+		Recipients: []string{"exact@example.com"},
+		To:         []store.AddressEntry{},
+		CC:         []store.AddressEntry{},
+		Headers:    map[string]string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := stored[0].MessageID
+	if got := validIDs([]any{json.Number("9223372036854775807"), json.Number("9223372036854775808"), json.Number("9007199254740992.0"), json.Number("9007199254740993")}); !equalInt64s(got, []int64{9223372036854775807, 9007199254740993}) {
+		t.Fatalf("validIDs=%v", got)
+	}
+	assertResponse(t, request(t, New(data, StaticConfig{}, nil), http.MethodPost, "/api/messages/actions", `{"action":"read","ids":[`+jsonNumber(id)+`]}`), http.StatusOK, `{"ok":true}`)
+}
+
+func equalInt64s(left, right []int64) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func TestMessageDetailCorruptJSONDoesNotMarkRead(t *testing.T) {
+	data := testStore(t)
+	stored, err := data.StoreMessage(context.Background(), store.StoreMessageInput{
+		Recipients: []string{"corrupt@example.com"},
+		To:         []store.AddressEntry{},
+		CC:         []store.AddressEntry{},
+		Headers:    map[string]string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := stored[0].MessageID
+	if _, err := data.DB().Exec(`UPDATE messages SET to_json='{' WHERE id=?`, id); err != nil {
+		t.Fatal(err)
+	}
+	assertResponse(t, request(t, New(data, StaticConfig{}, nil), http.MethodGet, "/api/messages/"+jsonNumber(id), ""), http.StatusInternalServerError, "Internal Server Error\n")
+	var read int
+	if err := data.DB().QueryRow(`SELECT is_read FROM messages WHERE id=?`, id).Scan(&read); err != nil {
+		t.Fatal(err)
+	}
+	if read != 0 {
+		t.Fatalf("read=%d", read)
+	}
 }
 
 func pointer(value string) *string { return &value }
@@ -280,6 +349,45 @@ func TestAttachmentHeaders(t *testing.T) {
 	}
 }
 
+func TestMarkedInlineSVGIsSanitizedAndDirectDownloadRemainsRaw(t *testing.T) {
+	data := testStore(t)
+	raw := `<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"><script>alert(2)</script><style>*{background:url(https://evil.invalid/x)}</style><foreignObject><body>bad</body></foreignObject><rect id="safe" width="10" height="10" fill="red"/><use href="#safe"/><use href="https://evil.invalid/x"/></svg>`
+	attachmentID := storeAttachment(t, data, "vector.svg", "image/svg+xml", raw)
+	handler := New(data, StaticConfig{}, nil)
+
+	inline := request(t, handler, http.MethodGet, "/api/attachments/"+jsonNumber(attachmentID)+"?inline=cid", "")
+	if inline.Code != http.StatusOK {
+		t.Fatalf("inline status=%d body=%s", inline.Code, inline.Body.String())
+	}
+	body := inline.Body.String()
+	if strings.Contains(body, "<script") || strings.Contains(body, "<style") || strings.Contains(body, "foreignObject") || strings.Contains(body, "evil.invalid") || strings.Contains(body, "onload") {
+		t.Fatalf("unsafe SVG survived: %s", body)
+	}
+	if !strings.Contains(body, `id="safe"`) || !strings.Contains(body, `href="#safe"`) {
+		t.Fatalf("safe SVG content missing: %s", body)
+	}
+	if got := inline.Header().Get("Content-Type"); got != "image/svg+xml" {
+		t.Errorf("Content-Type=%q", got)
+	}
+	if got := inline.Header().Get("Content-Disposition"); !strings.HasPrefix(got, "inline;") {
+		t.Errorf("Content-Disposition=%q", got)
+	}
+	if got := inline.Header().Get("Content-Security-Policy"); !strings.Contains(got, "script-src 'none'") {
+		t.Errorf("CSP=%q", got)
+	}
+	if got := inline.Header().Get("Cache-Control"); got != "private, no-store" {
+		t.Errorf("Cache-Control=%q", got)
+	}
+
+	download := request(t, handler, http.MethodGet, "/api/attachments/"+jsonNumber(attachmentID), "")
+	if download.Body.String() != raw {
+		t.Fatalf("direct SVG was sanitized: %q", download.Body.String())
+	}
+	if got := download.Header().Get("Content-Disposition"); !strings.HasPrefix(got, "attachment;") {
+		t.Errorf("direct Content-Disposition=%q", got)
+	}
+}
+
 func TestAttachmentDownloadAndSafeUnicodeFilename(t *testing.T) {
 	data := testStore(t)
 	attachmentID := storeAttachment(t, data, "../ignored/\x00Résumé Q.txt", "text/plain", "hoot")
@@ -345,6 +453,32 @@ func TestSSEHello(t *testing.T) {
 	}
 	if response.Header.Get("Content-Type") != "text/event-stream" || response.Header.Get("Cache-Control") != "no-cache, no-transform" {
 		t.Fatalf("headers=%v", response.Header)
+	}
+}
+
+func TestSSEClosedSubscriptionReturns(t *testing.T) {
+	stream := make(chan events.Event)
+	handler := &server{
+		store: testStore(t),
+		subscribe: func() (<-chan events.Event, func()) {
+			return stream, func() {}
+		},
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/events", nil)
+	recorder := httptest.NewRecorder()
+	close(stream)
+	done := make(chan struct{})
+	go func() {
+		handler.ServeHTTP(recorder, request)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("SSE handler did not return after subscription closed")
+	}
+	if !strings.HasPrefix(recorder.Body.String(), "data: {\"type\":\"connected\"}\n\n") {
+		t.Fatalf("body=%q", recorder.Body.String())
 	}
 }
 

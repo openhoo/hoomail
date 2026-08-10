@@ -91,7 +91,9 @@ func newEmailHTMLPolicy() *bluemonday.Policy {
 			parsed.Scheme = ""
 			parsed.Path = "/api/attachments/" + parsed.Opaque
 			parsed.Opaque = ""
-			parsed.RawQuery = ""
+			if parsed.RawQuery != "inline=cid" {
+				parsed.RawQuery = ""
+			}
 			parsed.Fragment = ""
 		}
 	})
@@ -410,7 +412,7 @@ func rewriteAnchorAttrs(token *html.Token) {
 }
 
 func rewriteImageAttrs(token *html.Token, cidMap map[string]int64, enforceSafety bool) {
-	attrs := make([]html.Attribute, 0, len(token.Attr))
+	attrs := make([]html.Attribute, 0, len(token.Attr)+1)
 	source := ""
 	for _, attr := range token.Attr {
 		switch strings.ToLower(attr.Key) {
@@ -429,13 +431,18 @@ func rewriteImageAttrs(token *html.Token, cidMap map[string]int64, enforceSafety
 	if attachmentID, ok := cidAttachmentID(source, cidMap); ok {
 		value := "/api/attachments/" + strconv.FormatInt(attachmentID, 10)
 		if enforceSafety {
-			value = "attachment:" + strconv.FormatInt(attachmentID, 10)
+			value = "attachment:" + strconv.FormatInt(attachmentID, 10) + "?inline=cid"
 		}
 		attrs = append(attrs, html.Attribute{Key: "src", Val: value})
 	} else if !enforceSafety && source != "" {
 		attrs = append(attrs, html.Attribute{Key: "src", Val: source})
 	}
 	token.Attr = attrs
+}
+
+func isSenderAttachmentURL(source string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(source))
+	return err == nil && parsed.Scheme == "attachment"
 }
 
 func cidAttachmentID(source string, cidMap map[string]int64) (int64, bool) {

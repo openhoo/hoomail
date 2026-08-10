@@ -68,7 +68,7 @@ func Parse(raw []byte, limits Limits) (Document, error) {
 			return document, nil
 		}
 	}
-	root, semanticErr, parsedPath, invariantErr := readSemanticNode(entity, entityErr, "1", rawRoot, indexed)
+	root, semanticErr, parsedPath, invariantErr := readSemanticNode(entity, entityErr, "1", rawRoot, indexed, false)
 	if invariantErr != nil {
 		return Document{}, invariantErr
 	}
@@ -86,12 +86,26 @@ func Parse(raw []byte, limits Limits) (Document, error) {
 	return document, nil
 }
 
-func readSemanticNode(entity *message.Entity, entityErr error, path string, rawNode *Node, index *rawIndex) (*Node, error, string, error) {
+func readSemanticNode(entity *message.Entity, entityErr error, path string, rawNode *Node, index *rawIndex, digestChild bool) (*Node, error, string, error) {
 	if entity == nil {
 		return nil, entityErr, "", nil
 	}
+	if digestChild && rawNode == nil && entity.Header.Get("Content-Type") == "" {
+		node := &Node{Path: path, MediaType: "message/rfc822"}
+		child, childErr, childComplete, invariantErr := readSemanticNode(entity, entityErr, path+".1", nil, index, false)
+		if invariantErr != nil {
+			return nil, nil, "", invariantErr
+		}
+		if child != nil {
+			node.Children = append(node.Children, child)
+		}
+		return node, childErr, childComplete, nil
+	}
 	mediaType, mediaParams, contentTypeErr := entity.Header.ContentType()
 	disposition, dispositionParams, dispositionErr := entity.Header.ContentDisposition()
+	if digestChild && entity.Header.Get("Content-Type") == "" {
+		mediaType = "message/rfc822"
+	}
 	node := &Node{
 		Path:                 path,
 		Header:               entity.Header,
@@ -147,7 +161,11 @@ func readSemanticNode(entity *message.Entity, entityErr error, path string, rawN
 			}
 			return node, childEntityErr, "", nil
 		}
-		child, childErr, childComplete, invariantErr := readSemanticNode(childEntity, childEntityErr, path+".1", rawNode.Children[0], index)
+		var rawChild *Node
+		if rawNode != nil {
+			rawChild = rawNode.Children[0]
+		}
+		child, childErr, childComplete, invariantErr := readSemanticNode(childEntity, childEntityErr, path+".1", rawChild, index, false)
 		if invariantErr != nil {
 			return nil, nil, "", invariantErr
 		}
@@ -192,7 +210,7 @@ func readSemanticNode(entity *message.Entity, entityErr error, path string, rawN
 			rawChild = rawNode.Children[childIndex-1]
 		}
 		childPath := path + "." + itoa(childIndex)
-		child, childErr, childComplete, invariantErr := readSemanticNode(part, partErr, childPath, rawChild, index)
+		child, childErr, childComplete, invariantErr := readSemanticNode(part, partErr, childPath, rawChild, index, strings.EqualFold(node.MediaType, "multipart/digest"))
 		if invariantErr != nil {
 			return nil, nil, "", invariantErr
 		}

@@ -158,19 +158,19 @@ func (service *Service) serveConn(conn net.Conn) {
 }
 
 func readCommand(reader *bufio.Reader) (string, error) {
-	line, err := reader.ReadString('\n')
+	line, err := reader.ReadSlice('\n')
 	if err != nil {
 		return "", err
 	}
 	if len(line) > maxCommandBytes {
 		return "", errors.New("command too long")
 	}
-	line = strings.TrimSuffix(line, "\n")
-	line = strings.TrimSuffix(line, "\r")
-	if strings.IndexByte(line, 0) >= 0 {
+	command := strings.TrimSuffix(string(line), "\n")
+	command = strings.TrimSuffix(command, "\r")
+	if strings.IndexByte(command, 0) >= 0 {
 		return "", errors.New("command contains NUL")
 	}
-	return line, nil
+	return command, nil
 }
 
 type state uint8

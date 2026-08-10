@@ -291,7 +291,7 @@ func (store *Store) StoreMessage(ctx context.Context, input StoreMessageInput) (
 			return nil, lookupErr
 		}
 		var mailboxID int64
-		err = tx.QueryRowContext(ctx, `INSERT INTO mailboxes(address,created_at,last_message_at) VALUES(?,?,?) ON CONFLICT(address) DO UPDATE SET last_message_at=excluded.last_message_at RETURNING id`, address, now, now).Scan(&mailboxID)
+		err = tx.QueryRowContext(ctx, `INSERT INTO mailboxes(address,created_at,last_message_at) VALUES(?,?,?) ON CONFLICT(address) DO UPDATE SET last_message_at=CASE WHEN mailboxes.last_message_at IS NULL THEN excluded.last_message_at WHEN excluded.last_message_at IS NULL THEN mailboxes.last_message_at WHEN mailboxes.last_message_at >= excluded.last_message_at THEN mailboxes.last_message_at ELSE excluded.last_message_at END RETURNING id`, address, now, now).Scan(&mailboxID)
 		if err != nil {
 			return nil, err
 		}

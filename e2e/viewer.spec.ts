@@ -249,7 +249,7 @@ test('HTML preview applies its canvas while preserving sender content styling an
     'Content-Type: text/html; charset=utf-8',
     'Content-ID: <root@example.test>',
     '',
-    '<!doctype html><html><head><link rel="stylesheet" href="https://remote.invalid/email.css"></head><body style="color:rgb(12,34,56)"><table style="border-collapse:collapse"><tr><td style="padding:7px">Sender table</td><td style="padding:7px"><img alt="CID logo" src="cid:logo@example.test"><img alt="Remote tracking pixel" src="https://remote.invalid/pixel.png"></td></tr></table></body></html>',
+    '<!doctype html><html><head><link rel="stylesheet" href="https://remote.invalid/email.css"></head><body style="color:rgb(12,34,56)"><table style="border-collapse:collapse"><tr><td style="padding:7px">Sender table</td><td style="padding:7px"><img alt="CID logo" src="cid:logo@example.test"><img alt="CID vector" src="cid:vector@example.test"><img alt="Remote tracking pixel" src="https://remote.invalid/pixel.png"></td></tr></table></body></html>',
     '--related',
     'Content-Type: image/png; name="logo.png"',
     'Content-Disposition: inline; filename="logo.png"',
@@ -257,6 +257,12 @@ test('HTML preview applies its canvas while preserving sender content styling an
     'Content-Transfer-Encoding: base64',
     '',
     png,
+    '--related',
+    'Content-Type: image/svg+xml; name="vector.svg"',
+    'Content-Disposition: inline; filename="vector.svg"',
+    'Content-ID: <vector@example.test>',
+    '',
+    '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="8" viewBox="0 0 12 8" onload="fetch(\'https://remote.invalid/svg-onload\')"><style>@import url(https://remote.invalid/svg-style.css)</style><script>fetch(\'https://remote.invalid/svg-script\')</script><foreignObject><iframe src="https://remote.invalid/svg-frame"></iframe></foreignObject><rect width="12" height="8" fill="#336699"/></svg>',
     '--related--',
     '--outer',
     'Content-Type: application/pdf; name="report.pdf"',
@@ -288,10 +294,13 @@ test('HTML preview applies its canvas while preserving sender content styling an
   const senderTable = frame.getByRole('table').filter({ hasText: 'Sender table' })
   const senderCell = frame.getByRole('cell', { name: 'Sender table' })
   const cidLogo = frame.getByRole('img', { name: 'CID logo' })
+  const cidVector = frame.getByRole('img', { name: 'CID vector' })
   await expect(senderTable).toBeVisible()
   await expect(senderCell).toBeVisible()
   await expect(cidLogo).toBeVisible()
   await expect.poll(() => cidLogo.evaluate((image: HTMLImageElement) => image.naturalWidth)).toBe(1)
+  await expect(cidVector).toBeVisible()
+  await expect.poll(() => cidVector.evaluate((image: HTMLImageElement) => image.naturalWidth)).toBe(12)
   const senderStyles = await frame.locator('body').evaluate((body) => {
     const style = getComputedStyle(body)
     const table = body.querySelector('table')

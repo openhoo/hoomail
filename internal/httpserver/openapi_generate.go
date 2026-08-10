@@ -146,14 +146,22 @@ func main() {
 	getMessage := operation("Messages", "Get a message and mark it read", withSuccess(errorResponses("400", "404"), "200", "Message detail", object([]string{"message", "attachments"}, map[string]any{"message": ref("Message"), "attachments": array(ref("AttachmentInfo"))})))
 	getMessage["parameters"] = []any{pathParameter("messageId", "Message ID")}
 	getSource := operation("Messages", "Get exact stored RFC 822 source without marking read", errorResponses("400", "404"))
-	getSource["responses"].(map[string]any)["200"] = map[string]any{"description": "Raw message source", "content": map[string]any{"message/rfc822": map[string]any{"schema": map[string]any{"type": "string", "format": "binary"}}}}
+	getSource["responses"].(map[string]any)["200"] = map[string]any{
+		"description": "Raw message source. The response is private and must not be cached; it does not mark the message read.",
+		"headers": map[string]any{
+			"Cache-Control":          map[string]any{"schema": map[string]any{"type": "string", "example": "private, no-store"}},
+			"Content-Type":           map[string]any{"schema": map[string]any{"type": "string", "example": "message/rfc822"}},
+			"X-Content-Type-Options": map[string]any{"schema": map[string]any{"type": "string", "example": "nosniff"}},
+		},
+		"content": map[string]any{"message/rfc822": map[string]any{"schema": map[string]any{"type": "string", "format": "binary"}}},
+	}
 	getSource["parameters"] = []any{pathParameter("messageId", "Message ID")}
 	inspectMessage := operation("Messages", "Analyze a stored message offline", withSuccess(errorResponses("400", "404"), "200", "Inspection report", ref("InspectionReport")))
 	inspectMessage["parameters"] = []any{pathParameter("messageId", "Message ID")}
 	actions := operation("Messages", "Apply an action to messages", withSuccess(errorResponses("400"), "200", "Action applied", ref("Success")))
 	actions["requestBody"] = map[string]any{"required": true, "content": map[string]any{"application/json": map[string]any{"schema": ref("MessageAction")}}}
 	attachment := operation("Attachments", "Download or display an attachment", errorResponses("400", "404"))
-	attachment["responses"].(map[string]any)["200"] = map[string]any{"description": "Attachment bytes", "content": map[string]any{"application/octet-stream": map[string]any{"schema": map[string]any{"type": "string", "format": "binary"}}}}
+	attachment["responses"].(map[string]any)["200"] = map[string]any{"description": "Attachment bytes. The response uses the stored safe media type and private no-store caching.", "content": map[string]any{"*/*": map[string]any{"schema": map[string]any{"type": "string", "format": "binary"}}}}
 	attachment["parameters"] = []any{pathParameter("attachmentId", "Attachment ID"), map[string]any{"name": "download", "in": "query", "description": "Set to 1 to force attachment disposition", "schema": map[string]any{"type": "string", "enum": []string{"1"}}}}
 	stream := operation("Events", "Stream live mailbox events", map[string]any{"200": map[string]any{"description": "Server-sent events. Each data field contains an Event JSON object.", "content": map[string]any{"text/event-stream": map[string]any{"schema": map[string]any{"type": "string"}, "example": "data: {\"type\":\"connected\"}\n\n"}}}, "500": errorResponses()["500"]})
 	reset := operation("System", "Delete all stored mailboxes and messages", withSuccess(errorResponses(), "200", "Store reset", ref("Success")))
