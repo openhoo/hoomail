@@ -73,7 +73,7 @@ Unexpected storage, decoding, or response-encoding failures return Go's plain-te
 Internal Server Error
 ```
 
-Unknown routes similarly return a plain-text `404`, not the JSON error shape.
+Unknown routes similarly return a plain-text `404`, not the JSON error shape. The built-in `POST /api/send-test` endpoint is the documented exception for malformed or otherwise unusable JSON request bodies: it treats them as an empty object and applies its defaults instead of returning `400`.
 
 ### Values and timestamps
 
@@ -452,7 +452,7 @@ Body handling is intentionally permissive in some places and strict in others:
 
 - The body must contain exactly one valid JSON value. Malformed JSON, an empty body, or a trailing second JSON value returns `400 Invalid JSON body`.
 - The decoded top-level value is treated as an object; another JSON type consequently has no usable IDs or action.
-- `ids` is useful only when it is an array. JSON numbers are decoded as binary64 (`float64`) values; entries are retained when the rounded value is integer-valued and passes the same imprecise `int64` boundary comparisons as path IDs. JSON permits decimal and exponent forms, but not the hexadecimal forms accepted in paths. Precision is lost above $2^{53}$: for example, `9007199254740993` becomes `9007199254740992`, and the current boundary behavior can convert `9223372036854775807` or `9223372036854775808` to `-9223372036854775808`. Strings, fractional numbers, booleans, objects, arrays, and `null` entries are silently ignored. Clients should send ordinary base-10 JSON integers no greater than $2^{53}$ if exact parsing matters.
+- `ids` is useful only when it is an array. Each entry must be an exact decimal integer token accepted by `json.Number.Int64()` and within the signed 64-bit range `[-9223372036854775808, 9223372036854775807]`. Fractional values, exponent notation, values outside that range, strings, booleans, objects, arrays, and `null` entries are silently ignored. Hexadecimal forms are not valid JSON numbers.
 - At least one valid numeric ID must remain. This check happens before action validation.
 - `action` must be one of the exact lowercase strings above.
 
@@ -562,6 +562,7 @@ Responses:
 | `200` | raw bytes | Attachment exists and its content is non-null. |
 | `400` | JSON `Invalid attachment id` | Invalid path ID. |
 | `404` | JSON `Attachment not found` | Attachment is missing or has null content. |
+| `422` | JSON `SVG attachment is not safe to render inline` | `inline=cid` was requested for an SVG attachment, but sanitizer validation rejected the content. |
 | `500` | plain text | Storage failure. |
 
 Attachment bytes are not content-sanitized. The narrow inline allowlist, forced download for active/unknown formats, and `nosniff` reduce browser execution risk; Hoomail still must run on an isolated development origin.

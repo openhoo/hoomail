@@ -67,59 +67,95 @@ func (store *Store) GetMessageSource(ctx context.Context, id int64) ([]byte, boo
 	return raw, true, nil
 }
 
-func (store *Store) OpenPOP3Mailbox(ctx context.Context, rawAddress string) ([]POP3Message, error) {
+func (store *Store) OpenPOP3Mailbox(ctx context.Context, rawAddress string) (POP3MailboxSnapshot, error) {
 	address := strings.TrimSpace(strings.ToLower(rawAddress))
 	if address == "" {
-		return nil, errors.New("mailbox address is empty")
+		return POP3MailboxSnapshot{}, errors.New("mailbox address is empty")
 	}
+
+	store.pop3Mu.Lock()
+	var mailboxID int64
+	isNew := false
+	committed := false
+	defer func() {
+		store.pop3Mu.Unlock()
+		if isNew && committed {
+			store.emit(events.MailboxNew(mailboxID, address))
+		}
+	}()
+
 	now := store.now().UnixMilli()
 	tx, err := store.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, err
+		return POP3MailboxSnapshot{}, err
 	}
 	defer tx.Rollback()
-	var mailboxID int64
 	lookupErr := tx.QueryRowContext(ctx, `SELECT id FROM mailboxes WHERE address=?`, address).Scan(&mailboxID)
-	isNew := errors.Is(lookupErr, sql.ErrNoRows)
+	isNew = errors.Is(lookupErr, sql.ErrNoRows)
 	if lookupErr != nil && !isNew {
-		return nil, lookupErr
+		return POP3MailboxSnapshot{}, lookupErr
 	}
 	if isNew {
 		result, insertErr := tx.ExecContext(ctx, `INSERT INTO mailboxes(address,created_at,last_message_at) VALUES(?,?,NULL)`, address, now)
 		if insertErr != nil {
-			return nil, insertErr
+			return POP3MailboxSnapshot{}, insertErr
 		}
 		mailboxID, err = result.LastInsertId()
 		if err != nil {
-			return nil, err
+			return POP3MailboxSnapshot{}, err
 		}
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT id,raw FROM messages WHERE mailbox_id=? ORDER BY received_at ASC,id ASC`, mailboxID)
 	if err != nil {
-		return nil, err
+		return POP3MailboxSnapshot{}, err
 	}
 	messages := []POP3Message{}
 	for rows.Next() {
 		var message POP3Message
 		if err := rows.Scan(&message.ID, &message.Raw); err != nil {
 			rows.Close()
-			return nil, err
+			return POP3MailboxSnapshot{}, err
 		}
 		messages = append(messages, message)
 	}
 	if err := rows.Close(); err != nil {
-		return nil, err
+		return POP3MailboxSnapshot{}, err
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return POP3MailboxSnapshot{}, err
 	}
 	if err := tx.Commit(); err != nil {
+		return POP3MailboxSnapshot{}, err
+	}
+	committed = true
+	return POP3MailboxSnapshot{Messages: messages, Generation: store.pop3Generation}, nil
+}
+
+func (store *Store) DeletePOP3Messages(ctx context.Context, generation uint64, ids []int64) ([]int64, error) {
+	store.pop3Mu.Lock()
+	var affected []int64
+	deleted := false
+	defer func() {
+		store.pop3Mu.Unlock()
+		if deleted {
+			for _, id := range affected {
+				store.emit(events.MessagesChanged(id))
+			}
+		}
+	}()
+	if generation != store.pop3Generation || len(ids) == 0 {
+		return []int64{}, nil
+	}
+	var err error
+	affected, err = store.affectedMailboxes(ctx, ids)
+	if err != nil {
 		return nil, err
 	}
-	if isNew {
-		store.emit(events.MailboxNew(mailboxID, address))
+	if _, err = store.db.ExecContext(ctx, `DELETE FROM messages WHERE id IN (`+placeholders(len(ids))+`)`, intArgs(ids)...); err != nil {
+		return nil, err
 	}
-	return messages, nil
+	deleted = true
+	return affected, nil
 }
 
 func (store *Store) MarkRead(ctx context.Context, id, mailboxID int64, wasRead int) error {
@@ -233,6 +269,15 @@ func (store *Store) DeleteMailbox(ctx context.Context, id int64) (bool, error) {
 }
 
 func (store *Store) WipeAll(ctx context.Context) error {
+	store.pop3Mu.Lock()
+	reset := false
+	defer func() {
+		store.pop3Mu.Unlock()
+		if reset {
+			store.emit(events.Reset())
+		}
+	}()
+
 	tx, err := store.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -246,7 +291,8 @@ func (store *Store) WipeAll(ctx context.Context) error {
 	if err = tx.Commit(); err != nil {
 		return err
 	}
-	store.emit(events.Reset())
+	store.pop3Generation++
+	reset = true
 	return nil
 }
 

@@ -160,9 +160,14 @@ func main() {
 	inspectMessage["parameters"] = []any{pathParameter("messageId", "Message ID")}
 	actions := operation("Messages", "Apply an action to messages", withSuccess(errorResponses("400"), "200", "Action applied", ref("Success")))
 	actions["requestBody"] = map[string]any{"required": true, "content": map[string]any{"application/json": map[string]any{"schema": ref("MessageAction")}}}
-	attachment := operation("Attachments", "Download or display an attachment", errorResponses("400", "404"))
+	attachment := operation("Attachments", "Download or display an attachment", errorResponses("400", "404", "422"))
+	attachment["responses"].(map[string]any)["422"] = jsonResponse("SVG attachment is not safe to render inline", ref("Error"))
 	attachment["responses"].(map[string]any)["200"] = map[string]any{"description": "Attachment bytes. The response uses the stored safe media type and private no-store caching.", "content": map[string]any{"*/*": map[string]any{"schema": map[string]any{"type": "string", "format": "binary"}}}}
-	attachment["parameters"] = []any{pathParameter("attachmentId", "Attachment ID"), map[string]any{"name": "download", "in": "query", "description": "Set to 1 to force attachment disposition", "schema": map[string]any{"type": "string", "enum": []string{"1"}}}}
+	attachment["parameters"] = []any{
+		pathParameter("attachmentId", "Attachment ID"),
+		map[string]any{"name": "download", "in": "query", "description": "Set to 1 to force attachment disposition", "schema": map[string]any{"type": "string", "enum": []string{"1"}}},
+		map[string]any{"name": "inline", "in": "query", "description": "Set to cid for sanitized inline rendering of a resolved CID SVG resource", "schema": map[string]any{"type": "string", "enum": []string{"cid"}}},
+	}
 	stream := operation("Events", "Stream live mailbox events", map[string]any{"200": map[string]any{"description": "Server-sent events. Each data field contains an Event JSON object.", "content": map[string]any{"text/event-stream": map[string]any{"schema": map[string]any{"type": "string"}, "example": "data: {\"type\":\"connected\"}\n\n"}}}, "500": errorResponses()["500"]})
 	reset := operation("System", "Delete all stored mailboxes and messages", withSuccess(errorResponses(), "200", "Store reset", ref("Success")))
 	sendTest := operation("System", "Send a built-in test message through Hoomail SMTP", withSuccess(errorResponses("400", "502"), "200", "Test message sent", ref("Success")))

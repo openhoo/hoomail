@@ -27,10 +27,10 @@ The subcommand names are exact and case-sensitive.
 
 ```console
 $ hoomail version
-0.8.2
+0.8.3
 ```
 
-`internal/version.Value` starts as `"dev"`. During package initialization, an unchanged `"dev"` value is replaced with the trimmed contents of the compile-time embedded [`internal/version/version`](../internal/version/version) file, currently `0.8.2`. Release builds can replace `internal/version.Value` through Go linker flags; when replaced with a value other than `"dev"`, that linker-provided value is printed instead.
+`internal/version.Value` starts as `"dev"`. During package initialization, an unchanged `"dev"` value is replaced with the trimmed contents of the compile-time embedded [`internal/version/version`](../internal/version/version) file, currently `0.8.3`. Release builds can replace `internal/version.Value` through Go linker flags; when replaced with a value other than `"dev"`, that linker-provided value is printed instead.
 
 The command prints only the resolved value and a newline. It does not open the database or bind any listener.
 
@@ -105,13 +105,13 @@ The built-in send-test API targets `127.0.0.1:<HOOMAIL_SMTP_PORT>`, so generated
 
 The process listens for `SIGINT` and `SIGTERM`. Receipt of either signal starts graceful shutdown. The first service exit also causes the process to shut down the remaining services.
 
-Shutdown creates one shared context with a ten-second deadline, then calls the services **sequentially** in this order:
+Shutdown creates one shared context with a ten-second deadline, then calls all three services **in parallel**:
 
 1. HTTP
 2. SMTP
 3. POP3
 
-Because all three calls share the same context, time spent shutting down an earlier service reduces the time available to later services. All three shutdown calls are attempted even if an earlier one returns an error. Afterward, errors are reported with HTTP taking precedence, followed by an unexpected SMTP error, then an unexpected POP3 error. Recognized server-closed results are not treated as shutdown failures.
+The function waits for all three shutdown calls to return. Afterward, errors are reported with HTTP taking precedence, followed by an unexpected SMTP error, then an unexpected POP3 error. Recognized server-closed results are not treated as shutdown failures.
 
 The SQLite store remains open while the services shut down and is closed when the runtime function returns. An error from closing the store is not surfaced.
 

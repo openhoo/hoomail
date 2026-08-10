@@ -125,6 +125,48 @@ func TestGeneratedOpenAPIAndSwaggerEndpoints(t *testing.T) {
 	}
 }
 
+func TestGeneratedOpenAPIAttachmentContract(t *testing.T) {
+	var document struct {
+		Paths map[string]map[string]struct {
+			Parameters []struct {
+				Name   string `json:"name"`
+				In     string `json:"in"`
+				Schema struct {
+					Enum []string `json:"enum"`
+				} `json:"schema"`
+			} `json:"parameters"`
+			Responses map[string]struct {
+				Content map[string]struct {
+					Schema struct {
+						Ref string `json:"$ref"`
+					} `json:"schema"`
+				} `json:"content"`
+			} `json:"responses"`
+		} `json:"paths"`
+	}
+	if err := json.Unmarshal(generatedOpenAPI, &document); err != nil {
+		t.Fatal(err)
+	}
+	operation := document.Paths["/api/attachments/{attachmentId}"]["get"]
+	var inlineValues []string
+	for _, parameter := range operation.Parameters {
+		if parameter.Name == "inline" && parameter.In == "query" {
+			inlineValues = parameter.Schema.Enum
+			break
+		}
+	}
+	if len(inlineValues) != 1 || inlineValues[0] != "cid" {
+		t.Fatalf("inline query enum=%v, want [cid]", inlineValues)
+	}
+	response, ok := operation.Responses["422"]
+	if !ok {
+		t.Fatal("attachment GET has no 422 response")
+	}
+	if got := response.Content["application/json"].Schema.Ref; got != "#/components/schemas/Error" {
+		t.Fatalf("attachment 422 schema ref=%q, want Error", got)
+	}
+}
+
 func TestInvalidIDsJSONAndActions(t *testing.T) {
 	handler := New(testStore(t), StaticConfig{}, nil)
 	assertResponse(t, request(t, handler, http.MethodDelete, "/api/mailboxes/nope", ""), 400, `{"error":"Invalid mailbox id"}`)

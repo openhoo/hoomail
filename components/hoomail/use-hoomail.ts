@@ -233,7 +233,7 @@ export function useRealtime(options: { selectedMailboxId: number | null; onReset
         case 'reset':
           mutateCache('/api/mailboxes')
           mutateCache(
-            (key) => /^\/api\/mailboxes\/\d+\/(?:messages|events)(?:\?|$)/.test(key) || /^\/api\/messages\/\d+(?:\/(?:inspect|source))?$/.test(key),
+            (key) => /^\/api\/mailboxes\/\d+\/(?:messages|events)(?:\?|$)/.test(key) || /^\/api\/messages\/\d+(?:\/(?:inspect|source))?$/.test(key) || /^\/api\/attachments\/[^/?]+(?:\?.*)?$/.test(key),
             () => undefined,
             false,
           )

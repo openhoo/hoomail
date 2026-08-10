@@ -530,3 +530,68 @@ test('responsive viewport persists across HTML message switches', async ({ page 
   await expect(sizeSelect).toHaveValue('mobile-m')
   await expect(iframe).toHaveCSS('width', '390px')
 })
+
+test('attachment preview refetches reused attachment IDs after reset', async ({ page }) => {
+  const recipient = 'viewer-reset-attachment@hoomail.test'
+  const filename = 'reused.txt'
+  const firstSubject = 'Attachment before reset'
+  const secondSubject = 'Attachment after reset'
+  const firstText = 'Attachment content before reset.'
+  const secondText = 'Different attachment content after reset.'
+  const messageList = page.getByRole('list', { name: 'Messages' })
+  const attachmentResponse = () => page.waitForResponse((response) => {
+    const url = new URL(response.url())
+    return response.status() === 200
+      && response.request().method() === 'GET'
+      && /^\/api\/attachments\/\d+$/.test(url.pathname)
+      && !url.search
+  })
+  const sendAttachment = (subject: string, text: string) => sendRawMessage([
+    'From: sender@example.test',
+    `To: ${recipient}`,
+    `Subject: ${subject}`,
+    'MIME-Version: 1.0',
+    'Content-Type: multipart/mixed; boundary="reset-attachment"',
+    '',
+    '--reset-attachment',
+    'Content-Type: text/plain; charset=utf-8',
+    '',
+    'Message body.',
+    '--reset-attachment',
+    `Content-Type: text/plain; name="${filename}"`,
+    `Content-Disposition: attachment; filename="${filename}"`,
+    '',
+    text,
+    '--reset-attachment--',
+  ].join('\n'), recipient)
+
+  await sendAttachment(firstSubject, firstText)
+  const firstRow = messageList.getByRole('button').filter({ hasText: firstSubject }).last()
+  await expect(firstRow).toBeVisible()
+  await firstRow.click()
+
+  const firstFetch = attachmentResponse()
+  await page.getByRole('button', { name: `Preview ${filename}` }).click()
+  const previewDialog = page.getByRole('dialog', { name: filename })
+  await expect(previewDialog).toContainText(firstText)
+  const firstResponse = await firstFetch
+  await page.keyboard.press('Escape')
+
+  await page.getByRole('button', { name: 'Reset', exact: true }).click()
+  const resetDialog = page.getByRole('dialog', { name: 'Reset hoomail?' })
+  await resetDialog.getByRole('button', { name: 'Wipe everything' }).click()
+  await expect(page.getByRole('heading', { name: 'No inbox selected' })).toBeVisible()
+
+  await sendAttachment(secondSubject, secondText)
+  const secondRow = messageList.getByRole('button').filter({ hasText: secondSubject }).last()
+  await expect(secondRow).toBeVisible()
+  await secondRow.click()
+
+  const secondFetch = attachmentResponse()
+  await page.getByRole('button', { name: `Preview ${filename}` }).click()
+  await expect(previewDialog).toContainText(secondText)
+  await expect(previewDialog).not.toContainText(firstText)
+  const secondResponse = await secondFetch
+
+  expect(new URL(secondResponse.url()).pathname).toBe(new URL(firstResponse.url()).pathname)
+})

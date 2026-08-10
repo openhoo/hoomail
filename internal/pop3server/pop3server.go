@@ -21,8 +21,8 @@ var ErrServerClosed = errors.New("pop3server: server closed")
 
 // Store is the narrow persistence contract required by the POP3 server.
 type Store interface {
-	OpenPOP3Mailbox(context.Context, string) ([]store.POP3Message, error)
-	DeleteMessages(context.Context, []int64) ([]int64, error)
+	OpenPOP3Mailbox(context.Context, string) (store.POP3MailboxSnapshot, error)
+	DeletePOP3Messages(context.Context, uint64, []int64) ([]int64, error)
 }
 
 type Service struct {
@@ -181,11 +181,12 @@ const (
 )
 
 type session struct {
-	store    Store
-	state    state
-	user     string
-	messages []store.POP3Message
-	deleted  map[int]bool
+	store      Store
+	state      state
+	user       string
+	messages   []store.POP3Message
+	generation uint64
+	deleted    map[int]bool
 }
 
 func (session *session) execute(line string, writer *bufio.Writer) bool {
@@ -209,7 +210,7 @@ func (session *session) execute(line string, writer *bufio.Writer) bool {
 		if session.state == stateTransaction {
 			ids := session.deletedIDs()
 			if len(ids) > 0 {
-				if _, err := session.store.DeleteMessages(context.Background(), ids); err != nil {
+				if _, err := session.store.DeletePOP3Messages(context.Background(), session.generation, ids); err != nil {
 					_ = writeLine(writer, "-ERR unable to delete messages")
 					return true
 				}
@@ -233,15 +234,16 @@ func (session *session) execute(line string, writer *bufio.Writer) bool {
 		if session.user == "" || !hasArgument {
 			return session.badSyntax(writer)
 		}
-		messages, err := session.store.OpenPOP3Mailbox(context.Background(), session.user)
+		snapshot, err := session.store.OpenPOP3Mailbox(context.Background(), session.user)
 		if err != nil {
 			_ = writeLine(writer, "-ERR unable to open mailbox")
 			return false
 		}
-		session.messages = cloneMessages(messages)
+		session.messages = cloneMessages(snapshot.Messages)
+		session.generation = snapshot.Generation
 		session.deleted = make(map[int]bool)
 		session.state = stateTransaction
-		_ = writeLine(writer, fmt.Sprintf("+OK mailbox locked and ready, %d messages", len(messages)))
+		_ = writeLine(writer, fmt.Sprintf("+OK mailbox locked and ready, %d messages", len(snapshot.Messages)))
 	default:
 		if session.state != stateTransaction {
 			return session.wrongState(writer)

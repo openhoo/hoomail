@@ -119,12 +119,12 @@ func TestOpenPOP3MailboxCreatesMissingInboxAndReturnsRawMessages(t *testing.T) {
 		emitted = append(emitted, event)
 	}))
 	ctx := context.Background()
-	messages, err := store.OpenPOP3Mailbox(ctx, " New@Example.com ")
+	snapshot, err := store.OpenPOP3Mailbox(ctx, " New@Example.com ")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(messages) != 0 {
-		t.Fatalf("messages=%v", messages)
+	if len(snapshot.Messages) != 0 {
+		t.Fatalf("messages=%v", snapshot.Messages)
 	}
 	mailboxes, err := store.ListMailboxes(ctx)
 	if err != nil {
@@ -140,12 +140,12 @@ func TestOpenPOP3MailboxCreatesMissingInboxAndReturnsRawMessages(t *testing.T) {
 	if _, err := store.StoreMessage(ctx, StoreMessageInput{Recipients: []string{"new@example.com"}, Headers: map[string]string{}, Raw: raw}); err != nil {
 		t.Fatal(err)
 	}
-	messages, err = store.OpenPOP3Mailbox(ctx, "NEW@example.com")
+	snapshot, err = store.OpenPOP3Mailbox(ctx, "NEW@example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(messages) != 1 || string(messages[0].Raw) != string(raw) {
-		t.Fatalf("messages=%v", messages)
+	if len(snapshot.Messages) != 1 || string(snapshot.Messages[0].Raw) != string(raw) {
+		t.Fatalf("messages=%v", snapshot.Messages)
 	}
 	if len(emitted) != 2 || emitted[1].Type != events.TypeMessageNew {
 		t.Fatalf("duplicate mailbox event: %v", emitted)

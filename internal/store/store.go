@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/openhoo/hoomail/internal/calendar"
@@ -20,6 +21,9 @@ type Store struct {
 	db        *sql.DB
 	broadcast func(events.Event)
 	now       func() time.Time
+
+	pop3Mu         sync.Mutex
+	pop3Generation uint64
 }
 
 type Option func(*Store)
@@ -241,6 +245,11 @@ type StoredMessage struct {
 type POP3Message struct {
 	ID  int64
 	Raw []byte
+}
+
+type POP3MailboxSnapshot struct {
+	Messages   []POP3Message
+	Generation uint64
 }
 
 func (store *Store) ListMailboxes(ctx context.Context) ([]Mailbox, error) {

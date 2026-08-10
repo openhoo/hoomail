@@ -12,7 +12,7 @@ export default {
     },
   ],
   hooks: {
-    afterVersion: ["bun scripts/sync-chart-version.ts"],
+    afterVersion: ["bun scripts/sync-chart-version.ts", "go generate ./internal/httpserver"],
   },
   github: {
     releases: true,

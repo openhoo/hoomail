@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/openhoo/hoomail/internal/events"
 	"github.com/openhoo/hoomail/internal/store"
 )
 
@@ -24,14 +26,14 @@ type recordingStore struct {
 	deleteErr   error
 }
 
-func (recording *recordingStore) OpenPOP3Mailbox(_ context.Context, address string) ([]store.POP3Message, error) {
+func (recording *recordingStore) OpenPOP3Mailbox(_ context.Context, address string) (store.POP3MailboxSnapshot, error) {
 	recording.mu.Lock()
 	defer recording.mu.Unlock()
 	recording.openCalls = append(recording.openCalls, address)
-	return recording.messages, recording.openErr
+	return store.POP3MailboxSnapshot{Messages: recording.messages}, recording.openErr
 }
 
-func (recording *recordingStore) DeleteMessages(_ context.Context, ids []int64) ([]int64, error) {
+func (recording *recordingStore) DeletePOP3Messages(_ context.Context, _ uint64, ids []int64) ([]int64, error) {
 	recording.mu.Lock()
 	defer recording.mu.Unlock()
 	recording.deleteCalls = append(recording.deleteCalls, append([]int64(nil), ids...))
@@ -249,6 +251,47 @@ func TestDeleteCommitsOnlyOnQUITAndRSETRestores(t *testing.T) {
 	_, deletes := recording.snapshot()
 	if want := [][]int64{{20}}; !reflect.DeepEqual(deletes, want) {
 		t.Fatalf("delete calls = %v, want %v", deletes, want)
+	}
+}
+
+func TestStalePOP3QuitDoesNotDeleteReusedMessageIDAfterWipe(t *testing.T) {
+	messageStore, err := store.Open(filepath.Join(t.TempDir(), "hoomail.db"), store.WithBroadcaster(func(events.Event) {}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer messageStore.Close()
+	ctx := context.Background()
+	raw := []byte("Subject: old\r\n\r\nold\r\n")
+	if _, err := messageStore.StoreMessage(ctx, store.StoreMessageInput{Recipients: []string{"box@example.test"}, Headers: map[string]string{}, Raw: raw}); err != nil {
+		t.Fatal(err)
+	}
+	server := startTestServer(t, messageStore)
+	client := dialPOP3(t, server.address)
+	defer client.close()
+	login(t, client, "box@example.test")
+	if response := client.command("DELE 1"); !strings.HasPrefix(response, "+OK") {
+		t.Fatalf("DELE = %q", response)
+	}
+	if err := messageStore.WipeAll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	replacement := []byte("Subject: new\r\n\r\nnew\r\n")
+	stored, err := messageStore.StoreMessage(ctx, store.StoreMessageInput{Recipients: []string{"box@example.test"}, Headers: map[string]string{}, Raw: replacement})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) != 1 || stored[0].MessageID != 1 {
+		t.Fatalf("replacement IDs = %+v, want message ID 1", stored)
+	}
+	if response := client.command("QUIT"); response != "+OK goodbye" {
+		t.Fatalf("stale QUIT = %q", response)
+	}
+	snapshot, err := messageStore.OpenPOP3Mailbox(ctx, "box@example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Messages) != 1 || snapshot.Messages[0].ID != 1 || string(snapshot.Messages[0].Raw) != string(replacement) {
+		t.Fatalf("replacement after stale QUIT = %+v", snapshot.Messages)
 	}
 }
 
