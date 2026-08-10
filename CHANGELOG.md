@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.3 (2026-08-10)
+
+### Bug Fixes
+
+- harden mail handling and UI races (e858969)
+- **sendtest:** map deadline socket timeout (0e0c7f8)
+
 ## 0.8.2 (2026-07-24)
 
 ### Bug Fixes
