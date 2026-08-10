@@ -62,6 +62,9 @@ test('message viewer tabs, inspection, and attachments expose the complete plain
   const inspectTab = page.getByRole('tab', { name: 'Inspect' })
 
   await expect(htmlTab).toHaveAttribute('aria-selected', 'true')
+  expect(await page.evaluate(() =>
+    performance.getEntriesByType('resource').some((entry) => entry.name.includes('inspect-panel')),
+  )).toBe(false)
 
   await htmlTab.focus()
   await page.keyboard.press('Tab')
@@ -93,6 +96,9 @@ test('message viewer tabs, inspection, and attachments expose the complete plain
   await expect(inspectTab).toBeFocused()
   await expect(inspectTab).toHaveAttribute('aria-selected', 'true')
   await expect(page.getByRole('status').filter({ hasText: 'Message analysis complete' })).toBeVisible()
+  expect(await page.evaluate(() =>
+    performance.getEntriesByType('resource').some((entry) => entry.name.includes('inspect-panel')),
+  )).toBe(true)
 
   const summary = page.getByRole('region', { name: 'Inspection summary' })
   const linksAndImages = page.getByRole('region', { name: 'Links and images' })

@@ -223,19 +223,19 @@ func (s *server) listCalendarEvents(response http.ResponseWriter, request *http.
 }
 
 type messageResponse struct {
-	ID          int64   `json:"id"`
-	MailboxID   int64   `json:"mailboxId"`
-	FromAddress *string `json:"fromAddress"`
-	FromName    *string `json:"fromName"`
-	To          any     `json:"to"`
-	CC          any     `json:"cc"`
-	Subject     *string `json:"subject"`
-	HTML        *string `json:"html"`
-	Text        *string `json:"text"`
-	Headers     any     `json:"headers"`
-	Size        int64   `json:"size"`
-	ReceivedAt  int64   `json:"receivedAt"`
-	ICalEvents  any     `json:"icalEvents"`
+	ID          int64           `json:"id"`
+	MailboxID   int64           `json:"mailboxId"`
+	FromAddress *string         `json:"fromAddress"`
+	FromName    *string         `json:"fromName"`
+	To          json.RawMessage `json:"to"`
+	CC          json.RawMessage `json:"cc"`
+	Subject     *string         `json:"subject"`
+	HTML        *string         `json:"html"`
+	Text        *string         `json:"text"`
+	Headers     json.RawMessage `json:"headers"`
+	Size        int64           `json:"size"`
+	ReceivedAt  int64           `json:"receivedAt"`
+	ICalEvents  json.RawMessage `json:"icalEvents"`
 }
 type attachmentInfoResponse struct {
 	ID          int64   `json:"id"`
@@ -244,10 +244,12 @@ type attachmentInfoResponse struct {
 	Size        int64   `json:"size"`
 }
 
-func decodeJSONField(value string) (any, error) {
-	var result any
-	err := json.Unmarshal([]byte(value), &result)
-	return result, err
+func rawJSONField(value string) (json.RawMessage, error) {
+	raw := json.RawMessage(value)
+	if !json.Valid(raw) {
+		return nil, errors.New("invalid stored JSON")
+	}
+	return raw, nil
 }
 
 func (s *server) getMessage(response http.ResponseWriter, request *http.Request, rawID string) {
@@ -265,24 +267,24 @@ func (s *server) getMessage(response http.ResponseWriter, request *http.Request,
 		writeError(response, http.StatusNotFound, "Message not found")
 		return
 	}
-	to, err := decodeJSONField(detail.Message.ToJSON)
+	to, err := rawJSONField(detail.Message.ToJSON)
 	if err != nil {
 		internalError(response, err)
 		return
 	}
-	cc, err := decodeJSONField(detail.Message.CCJSON)
+	cc, err := rawJSONField(detail.Message.CCJSON)
 	if err != nil {
 		internalError(response, err)
 		return
 	}
-	headers, err := decodeJSONField(detail.Message.HeadersJSON)
+	headers, err := rawJSONField(detail.Message.HeadersJSON)
 	if err != nil {
 		internalError(response, err)
 		return
 	}
-	var iCalEvents any = []any{}
+	iCalEvents := json.RawMessage("[]")
 	if detail.Message.ICalJSON != nil {
-		iCalEvents, err = decodeJSONField(*detail.Message.ICalJSON)
+		iCalEvents, err = rawJSONField(*detail.Message.ICalJSON)
 		if err != nil {
 			internalError(response, err)
 			return
@@ -364,9 +366,8 @@ func (s *server) inspectMessage(response http.ResponseWriter, request *http.Requ
 		writeError(response, http.StatusNotFound, "Message not found")
 		return
 	}
-	var headers map[string]string
-	if err := json.Unmarshal([]byte(row.HeadersJSON), &headers); err != nil {
-		internalError(response, err)
+	if !json.Valid([]byte(row.HeadersJSON)) {
+		internalError(response, errors.New("invalid stored headers JSON"))
 		return
 	}
 	report, err := inspect.Analyze(inspect.Input{
@@ -690,6 +691,11 @@ func (s *server) serveStatic(response http.ResponseWriter, request *http.Request
 	}
 	if contentType := mime.TypeByExtension(path.Ext(name)); contentType != "" {
 		response.Header().Set("Content-Type", contentType)
+	}
+	if strings.HasPrefix(name, "assets/") {
+		response.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	} else {
+		response.Header().Set("Cache-Control", "no-cache")
 	}
 	http.ServeContent(response, request, name, time.Time{}, bytes.NewReader(data))
 }

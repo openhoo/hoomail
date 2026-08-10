@@ -527,11 +527,18 @@ func TestSSEClosedSubscriptionReturns(t *testing.T) {
 func TestStaticSPAFallback(t *testing.T) {
 	static := fstest.MapFS{"index.html": {Data: []byte("<main>app</main>")}, "assets/app.js": {Data: []byte("js")}}
 	handler := New(testStore(t), StaticConfig{FS: static}, nil)
-	assertResponse(t, request(t, handler, http.MethodGet, "/assets/app.js", ""), 200, "js")
+	asset := request(t, handler, http.MethodGet, "/assets/app.js", "")
+	assertResponse(t, asset, 200, "js")
+	if got := asset.Header().Get("Cache-Control"); got != "public, max-age=31536000, immutable" {
+		t.Fatalf("asset cache control=%q", got)
+	}
 	fallback := request(t, handler, http.MethodGet, "/mailboxes/12", "")
 	assertResponse(t, fallback, 200, "<main>app</main>")
 	if !strings.HasPrefix(fallback.Header().Get("Content-Type"), "text/html") {
 		t.Fatalf("content type=%q", fallback.Header().Get("Content-Type"))
+	}
+	if got := fallback.Header().Get("Cache-Control"); got != "no-cache" {
+		t.Fatalf("fallback cache control=%q", got)
 	}
 	assertResponse(t, request(t, handler, http.MethodGet, "/api/not-real", ""), 404, "404 page not found\n")
 }

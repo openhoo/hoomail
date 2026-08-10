@@ -17,3 +17,13 @@ hoomail
 playwright-report
 test-results
 .e2e-runtime
+
+coverage.*
+docs
+e2e
+charts
+scripts
+README.md
+components.json
+gitleaks-report.json
+playwright.config.ts

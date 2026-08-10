@@ -296,7 +296,7 @@ export function MessageViewer({
         </TabsContent>
 
         <TabsContent value="inspect" className="min-h-0 flex-1 data-[state=inactive]:hidden">
-          <InspectPanel messageId={message.id} active={activeTab === 'inspect'} />
+          {activeTab === 'inspect' && <InspectPanel messageId={message.id} active />}
         </TabsContent>
       </Tabs>
     </section>
