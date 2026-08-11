@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.7 (2026-08-11)
+
+### Bug Fixes
+
+- **rendering:** show mixed inline images (687e483)
+
 ## 0.8.6 (2026-08-11)
 
 ### Bug Fixes
