@@ -502,7 +502,7 @@ function HtmlFrame({
       className={
         viewport
           ? 'relative mx-auto shrink-0 overflow-hidden rounded-lg bg-card shadow-sm ring-1 ring-border'
-          : 'relative mx-auto h-full max-h-[30rem] w-full overflow-hidden rounded-lg bg-card shadow-sm ring-1 ring-border'
+          : 'relative mx-auto h-full w-full overflow-hidden rounded-lg bg-card shadow-sm ring-1 ring-border'
       }
       style={viewport ? { width: `${viewport.width}px`, height: `${viewport.height}px` } : undefined}
     >

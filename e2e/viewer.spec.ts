@@ -350,7 +350,7 @@ test('HTML preview applies its canvas while preserving sender content styling an
 })
 
 test('HTML preview supports mobile presets, custom dimensions, rotation, and panel fit', async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 720 })
+  await page.setViewportSize({ width: 1280, height: 1000 })
   const subject = 'Responsive email viewport'
   const raw = [
     'From: Responsive Sender <responsive@example.test>',
@@ -385,6 +385,22 @@ test('HTML preview supports mobile presets, custom dimensions, rotation, and pan
   await expect(page.getByLabel('Email preview canvas')).toHaveCount(0)
   await expect(page.getByRole('group', { name: 'Email viewport' })).toBeVisible()
   await iframe.evaluate((element) => element.setAttribute('data-viewport-identity', 'stable'))
+  const fitSizing = await iframe.evaluate((element) => {
+    const frame = element.parentElement
+    const canvas = frame?.parentElement
+    if (!frame || !canvas) throw new Error('Fit preview structure is unavailable')
+    const canvasStyle = getComputedStyle(canvas)
+    return {
+      frameHeight: frame.getBoundingClientRect().height,
+      availableHeight:
+        canvas.clientHeight -
+        Number.parseFloat(canvasStyle.paddingTop) -
+        Number.parseFloat(canvasStyle.paddingBottom),
+    }
+  })
+  expect(fitSizing.frameHeight).toBeCloseTo(fitSizing.availableHeight, 0)
+  expect(fitSizing.frameHeight).toBeGreaterThan(480)
+  await page.setViewportSize({ width: 1280, height: 720 })
 
   for (const preset of [
     { id: 'mobile-s', width: 375, height: 667 },
