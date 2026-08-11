@@ -284,7 +284,7 @@ Attachment metadata fields are `id` (integer), `filename` (string or `null`), `c
 
 The `html` field is a safe display projection, not a raw copy:
 
-1. MIME ingestion recursively selects the supported `multipart/alternative` representation and the `multipart/related` root (`start` Content-ID, or the first part), with CID resources scoped to that selected related branch.
+1. MIME ingestion recursively selects the supported `multipart/alternative` representation and the `multipart/related` root (`start` Content-ID, or the first part). CID resources include that selected related branch and parts explicitly marked `Content-Disposition: inline` elsewhere in the selected message structure.
 2. Matching `cid:` image URLs are percent-decoded and rewritten to `/api/attachments/{attachmentId}`.
 3. A Bluemonday policy parses and allowlists the rewritten HTML. Safe email tables, ordinary text formatting, links, images, and conservative inline presentation properties remain; active elements/attributes, unsafe schemes, CSS network functions, remote subresources, fonts, frames, forms, media, and other fetch initiators are removed.
 

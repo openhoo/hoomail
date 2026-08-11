@@ -81,8 +81,8 @@ Hoomail retains the complete raw message while deriving one practical display mo
 ### Display-body selection
 
 - `multipart/alternative` is evaluated recursively and the last supported alternative wins, following the sender-preference order in [RFC 2046 section 5.1.4](https://www.rfc-editor.org/rfc/rfc2046#section-5.1.4). When that selected alternative provides HTML but no plain text, Hoomail may retain the nearest earlier supported plain-text-only alternative as its text fallback. That fallback contributes only text: related resources and ordinary attachments remain scoped to the selected branch.
-- `multipart/related` selects the part named by its `start` parameter, matching the part's normalized `Content-ID`; without `start`, the first part is the root. Hoomail recursively selects the display body from that root and associates inline resources only from the selected related branch. If `start` names no child, that related container supplies no display body.
-- `multipart/mixed` and other multipart containers use the first supported body aggregate. Remaining leaves are stored as attachments rather than replacing the selected body.
+- `multipart/related` selects the part named by its `start` parameter, matching the part's normalized `Content-ID`; without `start`, the first part is the root. Hoomail recursively selects the display body from that root and associates resources from the selected related branch. If `start` names no child, that related container supplies no display body.
+- `multipart/mixed` and other multipart containers use the first supported body aggregate. Remaining leaves are stored as attachments rather than replacing the selected body; a remaining part explicitly marked `Content-Disposition: inline` retains its Content-ID so selected HTML can resolve it.
 - A named `text/plain` or `text/html` leaf, or a leaf explicitly marked `Content-Disposition: attachment`, is an attachment rather than a display body.
 - HTML is retained for safe sender-faithful rendering and later sanitized by the HTTP display projection. The original MIME bytes remain unchanged for POP3 and inspection.
 
@@ -103,9 +103,9 @@ If no supported body exists, all leaves are retained as attachments. The resolve
 
 ### Inline CID resources
 
-For a resource with `Content-ID`, Hoomail trims whitespace and surrounding angle brackets before storing the identifier. Within the selected `multipart/related` branch, an HTML `cid:` URL is percent-decoded and matched to that identifier; a match is rewritten to Hoomail's attachment endpoint before the parsed HTML allowlist performs its final sanitization. Unresolved or out-of-branch CID references do not become network fallbacks.
+For a resource with `Content-ID`, Hoomail trims whitespace and surrounding angle brackets before storing the identifier. Within the selected `multipart/related` branch, or for a part explicitly marked `Content-Disposition: inline` elsewhere in the selected message structure, an HTML `cid:` URL is percent-decoded and matched to that identifier. A match is rewritten to Hoomail's attachment endpoint before the parsed HTML allowlist performs its final sanitization. Unresolved references and identifiers on ordinary out-of-branch attachments do not become network fallbacks.
 
-CID-bearing parts are not listed as ordinary attachments. The association follows [RFC 2387](https://www.rfc-editor.org/rfc/rfc2387) root selection and [RFC 2392](https://www.rfc-editor.org/rfc/rfc2392) Content-ID URL semantics; malformed, duplicate, or cross-branch identifiers have no guaranteed resolution.
+CID-bearing inline parts are not listed as ordinary attachments. The primary association follows [RFC 2387](https://www.rfc-editor.org/rfc/rfc2387) root selection and [RFC 2392](https://www.rfc-editor.org/rfc/rfc2392) Content-ID URL semantics; explicit inline disposition also supports common messages that place embedded resources beside the selected body in `multipart/mixed`. Malformed, duplicate, or unscoped identifiers have no guaranteed resolution.
 
 ### Calendar boundaries
 

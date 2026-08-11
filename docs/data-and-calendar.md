@@ -69,7 +69,7 @@ There are three related but intentionally different views of attachment data:
 | Message-list attachment count | Counts every row with no Content-ID. Inline CID images do not increase the count, but a recognized calendar part without a Content-ID does. |
 | Message detail attachment list | Always omits CID resources. It omits recognized calendar parts only when the message has non-null parsed iCalendar JSON. Unparseable calendar parts, and parts whose events were all incomplete, can therefore remain downloadable; when any event was parsed, every recognized calendar part in that message is hidden. All records remain stored. |
 
-For HTML preview, Hoomail resolves matching `cid:` references against resources from the selected `multipart/related` branch, then passes the rewritten document through the parsed HTML allowlist. Content-ID values are normalized, and percent-encoded `cid:` references are decoded before matching. Unresolved or out-of-branch references are removed rather than fetched remotely.
+For HTML preview, Hoomail resolves matching `cid:` references against resources from the selected `multipart/related` branch and parts explicitly marked `Content-Disposition: inline` elsewhere in the selected message structure, then passes the rewritten document through the parsed HTML allowlist. Content-ID values are normalized, and percent-encoded `cid:` references are decoded before matching. Unresolved references and identifiers on ordinary out-of-branch attachments are removed rather than fetched remotely.
 
 ## Search boundaries
 

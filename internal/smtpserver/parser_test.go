@@ -221,8 +221,8 @@ func TestParseMIMEPreservesMetadataAttachmentsAndCalendarDeduplication(t *testin
 	if len(input.Attachments) != 3 {
 		t.Fatalf("attachments = %d, want 3", len(input.Attachments))
 	}
-	if image := input.Attachments[0]; image.Filename == nil || *image.Filename != "logo.png" || image.ContentID != nil || string(image.Content) != "image" {
-		t.Fatalf("mixed attachment = %#v", image)
+	if image := input.Attachments[0]; image.Filename == nil || *image.Filename != "logo.png" || image.ContentID == nil || *image.ContentID != "logo@example.test" || string(image.Content) != "image" {
+		t.Fatalf("mixed inline resource = %#v", image)
 	}
 	if len(input.ICalEvents) != 1 || input.ICalEvents[0].UID != "meeting-1" || input.ICalEvents[0].Sequence != 2 {
 		t.Fatalf("calendar events = %#v", input.ICalEvents)

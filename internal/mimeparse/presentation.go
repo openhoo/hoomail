@@ -135,7 +135,10 @@ func appendAttachments(attachments []AttachmentCandidate, node *Node, mode attac
 		}
 		return attachments
 	}
-	return append(attachments, AttachmentCandidate{Node: node, ExposeContentID: mode == attachmentCollectionSelectedRelated})
+	return append(attachments, AttachmentCandidate{
+		Node:            node,
+		ExposeContentID: mode == attachmentCollectionSelectedRelated || strings.EqualFold(node.Disposition, "inline"),
+	})
 }
 
 func appendCalendarAttachments(attachments []AttachmentCandidate, node *Node) []AttachmentCandidate {
