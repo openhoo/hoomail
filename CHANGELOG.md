@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.6 (2026-08-11)
+
+### Bug Fixes
+
+- **rendering:** restore email fidelity (7b1e32c)
+
 ## 0.8.5 (2026-08-10)
 
 ### Performance
