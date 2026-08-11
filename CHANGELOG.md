@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.0 (2026-08-11)
+
+### Features
+
+- **inspect:** add Mailpit parity tools (24eda7d)
+
+### Bug Fixes
+
+- **inspect:** scope checksum scan exceptions (2cc5a49)
+
 ## 0.8.9 (2026-08-11)
 
 ### Bug Fixes
