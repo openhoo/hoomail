@@ -13,9 +13,10 @@ import (
 const svgNamespace = "http://www.w3.org/2000/svg"
 
 var (
-	svgFragmentURLPattern = regexp.MustCompile(`(?i)^url\(\s*['"]?#[A-Za-z_][A-Za-z0-9_.:-]*['"]?\s*\)$`)
-	svgFragmentPattern    = regexp.MustCompile(`^#[A-Za-z_][A-Za-z0-9_.:-]*$`)
-	svgElements           = stringSet(
+	svgFragmentURLPattern    = regexp.MustCompile(`(?i)^url\(\s*['"]?#[A-Za-z_][A-Za-z0-9_.:-]*['"]?\s*\)$`)
+	svgXMLDeclarationPattern = regexp.MustCompile(`^\s*version\s*=\s*(?:"1\.0"|'1\.0')(?:\s+encoding\s*=\s*(?:"UTF-8"|'UTF-8'|"utf-8"|'utf-8'))?(?:\s+standalone\s*=\s*(?:"yes"|'yes'|"no"|'no'))?\s*$`)
+	svgFragmentPattern       = regexp.MustCompile(`^#[A-Za-z_][A-Za-z0-9_.:-]*$`)
+	svgElements              = stringSet(
 		"svg", "g", "defs", "symbol", "use", "path", "rect", "circle", "ellipse", "line", "polyline", "polygon",
 		"text", "tspan", "textPath", "title", "desc", "clipPath", "mask", "pattern", "linearGradient", "radialGradient",
 		"stop", "marker", "filter", "feBlend", "feColorMatrix", "feComponentTransfer", "feComposite", "feConvolveMatrix",
@@ -65,8 +66,12 @@ func SanitizeSVG(raw []byte) ([]byte, error) {
 			return nil, fmt.Errorf("parse SVG: %w", err)
 		}
 		switch value := token.(type) {
-		case xml.Directive, xml.ProcInst:
-			return nil, errors.New("SVG directives and processing instructions are not allowed")
+		case xml.Directive:
+			return nil, errors.New("SVG directives are not allowed")
+		case xml.ProcInst:
+			if value.Target != "xml" || seenRoot || closedRoot || depth != 0 || !svgXMLDeclarationPattern.Match(value.Inst) {
+				return nil, errors.New("SVG processing instructions are not allowed")
+			}
 		case xml.StartElement:
 			depth++
 			if droppedDepth != 0 {

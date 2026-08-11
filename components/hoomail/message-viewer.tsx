@@ -30,7 +30,6 @@ const InspectPanel = asyncComponent(
 const IFRAME_CONTAINMENT_STYLES = `
   <style>
     html, body { max-width: 100%; }
-    body { background-color: #efebe5; box-sizing: border-box; margin: 0 !important; padding: 16px !important; }
     img { max-width: 100%; }
   </style>
 `

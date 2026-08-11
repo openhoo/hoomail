@@ -35,7 +35,7 @@ func TestRewriteCIDURLsParsesQuotedAndUnquotedSources(t *testing.T) {
 }
 
 func TestSanitizeSVGStaticAllowlistFailsClosed(t *testing.T) {
-	raw := []byte(`<svg xmlns="http://www.w3.org/2000/svg" onload="bad()"><defs><linearGradient id="paint"><stop offset="0" stop-color="red"/></linearGradient></defs><rect id="safe" width="10" height="10" fill="url(#paint)"/><use href="#safe"/><use href="https://evil.invalid/x"/><script>alert(1)</script><style>*{background:url(https://evil.invalid/x)}</style><foreignObject><div>bad</div></foreignObject></svg>`)
+	raw := []byte(`<?xml version="1.0" encoding="UTF-8"?><svg xmlns="http://www.w3.org/2000/svg" onload="bad()"><defs><linearGradient id="paint"><stop offset="0" stop-color="red"/></linearGradient></defs><rect id="safe" width="10" height="10" fill="url(#paint)"/><use href="#safe"/><use href="https://evil.invalid/x"/><script>alert(1)</script><style>*{background:url(https://evil.invalid/x)}</style><foreignObject><div>bad</div></foreignObject></svg>`)
 	got, err := SanitizeSVG(raw)
 	if err != nil {
 		t.Fatal(err)
@@ -55,6 +55,7 @@ func TestSanitizeSVGStaticAllowlistFailsClosed(t *testing.T) {
 		[]byte(`<svg><path>`),
 		[]byte(`<!DOCTYPE svg [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><svg>&xxe;</svg>`),
 		[]byte(`<html><svg></svg></html>`),
+		[]byte(`<?xml-stylesheet href="https://evil.invalid/x"?><svg xmlns="http://www.w3.org/2000/svg"></svg>`),
 	} {
 		if _, err := SanitizeSVG(malformed); err == nil {
 			t.Fatalf("unsafe or malformed SVG accepted: %q", malformed)

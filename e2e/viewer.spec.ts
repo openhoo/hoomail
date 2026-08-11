@@ -268,7 +268,7 @@ test('HTML preview applies its canvas while preserving sender content styling an
     'Content-Disposition: inline; filename="vector.svg"',
     'Content-ID: <vector@example.test>',
     '',
-    '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="8" viewBox="0 0 12 8" onload="fetch(\'https://remote.invalid/svg-onload\')"><style>@import url(https://remote.invalid/svg-style.css)</style><script>fetch(\'https://remote.invalid/svg-script\')</script><foreignObject><iframe src="https://remote.invalid/svg-frame"></iframe></foreignObject><rect width="12" height="8" fill="#336699"/></svg>',
+    '<?xml version="1.0" encoding="UTF-8"?><svg xmlns="http://www.w3.org/2000/svg" width="12" height="8" viewBox="0 0 12 8" onload="fetch(\'https://remote.invalid/svg-onload\')"><style>@import url(https://remote.invalid/svg-style.css)</style><script>fetch(\'https://remote.invalid/svg-script\')</script><foreignObject><iframe src="https://remote.invalid/svg-frame"></iframe></foreignObject><rect width="12" height="8" fill="#336699"/></svg>',
     '--related--',
     '--outer',
     'Content-Type: application/pdf; name="report.pdf"',
@@ -323,9 +323,9 @@ test('HTML preview applies its canvas while preserving sender content styling an
   })
   expect(senderStyles).toEqual({
     color: 'rgb(12, 34, 56)',
-    margin: '0px',
-    padding: '16px',
-    background: 'rgb(239, 235, 229)',
+    margin: '8px',
+    padding: '0px',
+    background: 'rgba(0, 0, 0, 0)',
     fontFamily: '"Times New Roman"',
     tableBorderCollapse: 'collapse',
     cellPadding: '7px',
@@ -366,7 +366,7 @@ test('HTML preview supports mobile presets, custom dimensions, rotation, and pan
   const frame = page.frameLocator('iframe[title="Email HTML content"]')
   const fluidContent = frame.getByText('Fluid email content')
   await expect(fluidContent).toBeVisible()
-  await expect(frame.locator('body')).toHaveCSS('background-color', 'rgb(239, 235, 229)')
+  await expect(frame.locator('body')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
   const fitDocumentWidth = await frame.locator('html').evaluate((element) => element.clientWidth)
   const fitContentWidth = await fluidContent.evaluate((element) => element.getBoundingClientRect().width)
   expect(fitDocumentWidth).toBeGreaterThan(375)
@@ -402,7 +402,7 @@ test('HTML preview supports mobile presets, custom dimensions, rotation, and pan
     .evaluate((element) => element.clientWidth)
   expect(mobileDocumentWidth).toBe(375)
   const mobileContentWidth = await fluidContent.evaluate((element) => element.getBoundingClientRect().width)
-  expect(mobileContentWidth).toBe(mobileDocumentWidth - 32)
+  expect(mobileContentWidth).toBe(mobileDocumentWidth - 16)
   expect(mobileContentWidth).toBeLessThan(fitContentWidth)
 
   const canvas = page.getByRole('region', { name: 'Email preview canvas' })
@@ -426,7 +426,7 @@ test('HTML preview supports mobile presets, custom dimensions, rotation, and pan
   const customDocumentWidth = await frame.locator('html').evaluate((element) => element.clientWidth)
   const customContentWidth = await fluidContent.evaluate((element) => element.getBoundingClientRect().width)
   expect(customDocumentWidth).toBe(320)
-  expect(customContentWidth).toBe(customDocumentWidth - 32)
+  expect(customContentWidth).toBe(customDocumentWidth - 16)
 
   await page.getByRole('button', { name: 'Rotate preview' }).click()
   await expect(page.getByLabel('Preview width')).toHaveValue('667')

@@ -393,7 +393,7 @@ func TestAttachmentHeaders(t *testing.T) {
 
 func TestMarkedInlineSVGIsSanitizedAndDirectDownloadRemainsRaw(t *testing.T) {
 	data := testStore(t)
-	raw := `<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"><script>alert(2)</script><style>*{background:url(https://evil.invalid/x)}</style><foreignObject><body>bad</body></foreignObject><rect id="safe" width="10" height="10" fill="red"/><use href="#safe"/><use href="https://evil.invalid/x"/></svg>`
+	raw := `<?xml version="1.0" encoding="UTF-8"?><svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"><script>alert(2)</script><style>*{background:url(https://evil.invalid/x)}</style><foreignObject><body>bad</body></foreignObject><rect id="safe" width="10" height="10" fill="red"/><use href="#safe"/><use href="https://evil.invalid/x"/></svg>`
 	attachmentID := storeAttachment(t, data, "vector.svg", "image/svg+xml", raw)
 	handler := New(data, StaticConfig{}, nil)
 
