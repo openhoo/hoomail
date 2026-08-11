@@ -1,6 +1,7 @@
 package inspect
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"reflect"
@@ -25,6 +26,41 @@ func TestSanitizeEmailHTMLUsesParserAllowlist(t *testing.T) {
 	}
 }
 
+func TestSanitizeEmailHTMLAllowsOnlyValidatedEmbeddedDataImages(t *testing.T) {
+	svg := `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="9" onload="bad()"><script>bad()</script><rect width="14" height="9" fill="#004b76"/></svg>`
+	svgURL := "data:image/svg+xml;base64," + base64.StdEncoding.EncodeToString([]byte(svg))
+	pngURL := "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+	got := SanitizeEmailHTML(`<img alt="svg" src="` + svgURL + `"><img alt="png" src="` + pngURL + `"><img alt="spoofed" src="data:image/png;base64,c2NyaXB0"><img alt="remote" src="https://evil.invalid/x.png">`)
+
+	if !strings.Contains(got, `src="`+pngURL+`"`) {
+		t.Fatalf("validated PNG data URL missing: %s", got)
+	}
+	prefix := `src="data:image/svg+xml;base64,`
+	start := strings.Index(got, prefix)
+	if start < 0 {
+		t.Fatalf("sanitized SVG data URL missing: %s", got)
+	}
+	start += len(prefix)
+	end := strings.IndexByte(got[start:], '"')
+	if end < 0 {
+		t.Fatalf("unterminated SVG data URL: %s", got)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(got[start : start+end])
+	if err != nil {
+		t.Fatal(err)
+	}
+	sanitizedSVG := string(decoded)
+	if strings.Contains(sanitizedSVG, "onload") || strings.Contains(sanitizedSVG, "<script") {
+		t.Fatalf("active SVG data content survived: %s", sanitizedSVG)
+	}
+	if !strings.Contains(sanitizedSVG, `xmlns="http://www.w3.org/2000/svg"`) || !strings.Contains(sanitizedSVG, `<rect`) {
+		t.Fatalf("safe SVG data content missing: %s", sanitizedSVG)
+	}
+	if strings.Contains(got, "c2NyaXB0") || strings.Contains(got, "evil.invalid") {
+		t.Fatalf("unsafe embedded image survived: %s", got)
+	}
+}
+
 func TestRewriteCIDURLsParsesQuotedAndUnquotedSources(t *testing.T) {
 	input := `<img src=cid:logo%40example><img src='cid:%3Chero%40example%3E'><img src="cid:missing@example">`
 	got := RewriteCIDURLs(input, map[string]int64{"logo@example": 12, "hero@example": 34})
@@ -46,10 +82,17 @@ func TestSanitizeSVGStaticAllowlistFailsClosed(t *testing.T) {
 			t.Fatalf("unsafe SVG content retained %q: %s", removed, output)
 		}
 	}
-	for _, retained := range []string{`id="safe"`, `fill="url(#paint)"`, `href="#safe"`} {
+	for _, retained := range []string{`xmlns="http://www.w3.org/2000/svg"`, `id="safe"`, `fill="url(#paint)"`, `href="#safe"`} {
 		if !strings.Contains(output, retained) {
 			t.Fatalf("safe SVG content missing %q: %s", retained, output)
 		}
+	}
+	withoutNamespace, err := SanitizeSVG([]byte(`<svg width="7" height="5"><rect width="7" height="5" fill="red"/></svg>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(withoutNamespace), `<svg width="7" height="5" xmlns="http://www.w3.org/2000/svg">`) {
+		t.Fatalf("namespace-less SVG was not normalized: %s", withoutNamespace)
 	}
 	for _, malformed := range [][]byte{
 		[]byte(`<svg><path>`),

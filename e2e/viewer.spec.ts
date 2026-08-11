@@ -241,6 +241,9 @@ test('HTML preview applies its canvas while preserving sender content styling an
   })
 
   const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
+  const embeddedSvg = Buffer.from(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="9" viewBox="0 0 14 9"><rect width="14" height="9" fill="#004b76"/></svg>',
+  ).toString('base64')
   const raw = [
     'From: Sender <sender@example.test>',
     'To: privacy-viewer@hoomail.test',
@@ -255,7 +258,7 @@ test('HTML preview applies its canvas while preserving sender content styling an
     'Content-Type: text/html; charset=utf-8',
     'Content-ID: <root@example.test>',
     '',
-    '<!doctype html><html><head><link rel="stylesheet" href="https://remote.invalid/email.css"></head><body style="color:rgb(12,34,56)"><table style="border-collapse:collapse"><tr><td style="padding:7px">Sender table</td><td style="padding:7px"><img alt="CID logo" src="cid:logo@example.test"><img alt="CID vector" src="cid:vector@example.test"><img alt="Mixed CID logo" src="cid:mixed-logo@example.test"><img alt="Remote tracking pixel" src="https://remote.invalid/pixel.png"></td></tr></table></body></html>',
+    `<!doctype html><html><head><link rel="stylesheet" href="https://remote.invalid/email.css"></head><body style="color:rgb(12,34,56)"><table style="border-collapse:collapse"><tr><td style="padding:7px">Sender table</td><td style="padding:7px"><img alt="CID logo" src="cid:logo@example.test"><img alt="CID vector" src="cid:vector@example.test"><img alt="Embedded data vector" src="data:image/svg+xml;base64,${embeddedSvg}"><img alt="Mixed CID logo" src="cid:mixed-logo@example.test"><img alt="Remote tracking pixel" src="https://remote.invalid/pixel.png"></td></tr></table></body></html>`,
     '--related',
     'Content-Type: image/png; name="logo.png"',
     'Content-Disposition: inline; filename="logo.png"',
@@ -308,6 +311,7 @@ test('HTML preview applies its canvas while preserving sender content styling an
   const senderCell = frame.getByRole('cell', { name: 'Sender table' })
   const cidLogo = frame.getByRole('img', { name: 'CID logo', exact: true })
   const cidVector = frame.getByRole('img', { name: 'CID vector' })
+  const embeddedDataVector = frame.getByRole('img', { name: 'Embedded data vector' })
   const mixedCidLogo = frame.getByRole('img', { name: 'Mixed CID logo' })
   await expect(senderTable).toBeVisible()
   await expect(senderCell).toBeVisible()
@@ -315,6 +319,8 @@ test('HTML preview applies its canvas while preserving sender content styling an
   await expect.poll(() => cidLogo.evaluate((image: HTMLImageElement) => image.naturalWidth)).toBe(1)
   await expect(cidVector).toBeVisible()
   await expect.poll(() => cidVector.evaluate((image: HTMLImageElement) => image.naturalWidth)).toBe(12)
+  await expect(embeddedDataVector).toBeVisible()
+  await expect.poll(() => embeddedDataVector.evaluate((image: HTMLImageElement) => image.naturalWidth)).toBe(14)
   await expect(mixedCidLogo).toBeVisible()
   await expect.poll(() => mixedCidLogo.evaluate((image: HTMLImageElement) => image.naturalWidth)).toBe(1)
   const senderStyles = await frame.locator('body').evaluate((body) => {

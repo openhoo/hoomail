@@ -52,7 +52,7 @@ function iframeDocumentPrefix(): string {
   const attachmentSource = new URL('/api/attachments/', window.location.href).href
   const policy = [
     "default-src 'none'",
-    `img-src ${attachmentSource}`,
+    `img-src ${attachmentSource} data:`,
     "style-src 'unsafe-inline'",
     "script-src 'none'",
     "object-src 'none'",

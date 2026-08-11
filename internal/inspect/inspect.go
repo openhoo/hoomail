@@ -86,8 +86,12 @@ func newEmailHTMLPolicy() *bluemonday.Policy {
 	policy.AllowURLSchemeWithCustomPolicy("attachment", func(parsed *url.URL) bool {
 		return parsed.Opaque != "" && positiveDecimal(parsed.Opaque)
 	})
+	policy.AllowURLSchemeWithCustomPolicy("embedded", func(parsed *url.URL) bool {
+		return parsed.Opaque != "" && parsed.RawQuery == "" && parsed.Fragment == "" && isNormalizedEmbeddedImage(parsed.Opaque)
+	})
 	policy.RewriteSrc(func(parsed *url.URL) {
-		if parsed.Scheme == "attachment" && positiveDecimal(parsed.Opaque) {
+		switch {
+		case parsed.Scheme == "attachment" && positiveDecimal(parsed.Opaque):
 			parsed.Scheme = ""
 			parsed.Path = "/api/attachments/" + parsed.Opaque
 			parsed.Opaque = ""
@@ -95,6 +99,8 @@ func newEmailHTMLPolicy() *bluemonday.Policy {
 				parsed.RawQuery = ""
 			}
 			parsed.Fragment = ""
+		case parsed.Scheme == "embedded" && isNormalizedEmbeddedImage(parsed.Opaque):
+			parsed.Scheme = "data"
 		}
 	})
 	configureEmailStyles(policy)
@@ -434,6 +440,8 @@ func rewriteImageAttrs(token *html.Token, cidMap map[string]int64, enforceSafety
 			value = "attachment:" + strconv.FormatInt(attachmentID, 10) + "?inline=cid"
 		}
 		attrs = append(attrs, html.Attribute{Key: "src", Val: value})
+	} else if embedded, ok := sanitizeEmbeddedImageDataURL(source); enforceSafety && ok {
+		attrs = append(attrs, html.Attribute{Key: "src", Val: "embedded:" + strings.TrimPrefix(embedded, "data:")})
 	} else if !enforceSafety && source != "" {
 		attrs = append(attrs, html.Attribute{Key: "src", Val: source})
 	}

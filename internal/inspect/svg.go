@@ -86,8 +86,17 @@ func SanitizeSVG(raw []byte) ([]byte, error) {
 			}
 			if depth == 1 {
 				seenRoot = true
+				value.Attr = append(sanitizeSVGAttributes(value.Attr), xml.Attr{
+					Name:  xml.Name{Local: "xmlns"},
+					Value: svgNamespace,
+				})
+			} else {
+				value.Attr = sanitizeSVGAttributes(value.Attr)
 			}
-			value.Attr = sanitizeSVGAttributes(value.Attr)
+			// Emit local names beneath an explicit default namespace. Keeping
+			// encoding/xml's expanded Name.Space alone does not reliably retain
+			// the SVG namespace declaration in the serialized document.
+			value.Name.Space = ""
 			if err := encoder.EncodeToken(value); err != nil {
 				return nil, fmt.Errorf("encode SVG: %w", err)
 			}
@@ -102,6 +111,7 @@ func SanitizeSVG(raw []byte) ([]byte, error) {
 			if depth == 0 {
 				return nil, errors.New("unexpected SVG closing element")
 			}
+			value.Name.Space = ""
 			if err := encoder.EncodeToken(value); err != nil {
 				return nil, fmt.Errorf("encode SVG: %w", err)
 			}
@@ -146,8 +156,13 @@ func sanitizeSVGAttributes(attributes []xml.Attr) []xml.Attr {
 		if strings.HasPrefix(lowerName, "on") || lowerName == "style" || !svgAttributes[name] {
 			continue
 		}
-		if attribute.Name.Space != "" && !(attribute.Name.Space == "http://www.w3.org/1999/xlink" && name == "href") {
-			continue
+		if attribute.Name.Space != "" {
+			if attribute.Name.Space != "http://www.w3.org/1999/xlink" || name != "href" {
+				continue
+			}
+			// SVG 2 accepts an unqualified href, avoiding an undeclared xlink
+			// prefix after the document is normalized to one default namespace.
+			attribute.Name.Space = ""
 		}
 		value := strings.TrimSpace(attribute.Value)
 		if value == "" || strings.ContainsAny(value, "\x00\r\n") {
