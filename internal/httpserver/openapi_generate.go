@@ -122,15 +122,42 @@ func main() {
 		"Resource": object([]string{"kind", "path", "url", "text", "occurrenceCount"}, map[string]any{
 			"kind": stringSchema, "path": nullable(stringSchema), "url": stringSchema, "text": stringSchema, "occurrenceCount": map[string]any{"type": "integer"},
 		}),
+		"InspectionHeader": object([]string{"name", "value", "occurrence", "line"}, map[string]any{
+			"name": stringSchema, "value": stringSchema, "occurrence": map[string]any{"type": "integer"}, "line": map[string]any{"type": "integer"},
+		}),
+		"Checksums": object([]string{"md5", "sha1", "sha256"}, map[string]any{
+			"md5": stringSchema, "sha1": stringSchema, "sha256": stringSchema,
+		}),
+		"CompatibilityScore": object([]string{"supported", "partial", "unsupported"}, map[string]any{
+			"supported": map[string]any{"type": "number"}, "partial": map[string]any{"type": "number"}, "unsupported": map[string]any{"type": "number"},
+		}),
+		"CompatibilityClient": object([]string{"name", "family", "platform", "version", "support", "note"}, map[string]any{
+			"name": stringSchema, "family": stringSchema, "platform": stringSchema, "version": stringSchema,
+			"support": map[string]any{"type": "string", "enum": []string{"yes", "partial", "no"}}, "note": nullable(stringSchema),
+		}),
+		"CompatibilityWarning": object([]string{"slug", "title", "category", "description", "url", "occurrences", "score", "clients"}, map[string]any{
+			"slug": stringSchema, "title": stringSchema, "category": stringSchema, "description": stringSchema, "url": map[string]any{"type": "string", "format": "uri"},
+			"occurrences": map[string]any{"type": "integer"}, "score": ref("CompatibilityScore"), "clients": array(ref("CompatibilityClient")),
+		}),
+		"CompatibilityPlatform": object([]string{"family", "platform", "label"}, map[string]any{
+			"family": stringSchema, "platform": stringSchema, "label": stringSchema,
+		}),
+		"HTMLCompatibility": object([]string{"dataVersion", "dataUpdated", "nodes", "tests", "score", "platforms", "warnings"}, map[string]any{
+			"dataVersion": stringSchema, "dataUpdated": stringSchema, "nodes": map[string]any{"type": "integer"}, "tests": map[string]any{"type": "integer"},
+			"score": ref("CompatibilityScore"), "platforms": array(ref("CompatibilityPlatform")), "warnings": array(ref("CompatibilityWarning")),
+			"warningsTruncated": map[string]any{"type": "boolean"}, "clientsTruncated": map[string]any{"type": "boolean"}, "truncated": map[string]any{"type": "boolean"},
+		}),
 		"MimeNode": object([]string{"path", "contentType", "charset", "encoding", "disposition", "filename", "contentId", "rawSize", "decodedSize", "children"}, map[string]any{
 			"path": stringSchema, "contentType": stringSchema, "charset": nullable(stringSchema), "encoding": nullable(stringSchema), "disposition": nullable(stringSchema),
-			"filename": nullable(stringSchema), "contentId": nullable(stringSchema), "rawSize": nullable(map[string]any{"type": "integer"}), "decodedSize": nullable(map[string]any{"type": "integer"}), "children": array(ref("MimeNode")),
+			"filename": nullable(stringSchema), "contentId": nullable(stringSchema), "rawSize": nullable(map[string]any{"type": "integer"}), "decodedSize": nullable(map[string]any{"type": "integer"}),
+			"checksums": ref("Checksums"), "children": array(ref("MimeNode")),
 		}),
-		"InspectionReport": object([]string{"analysis", "summary", "findings", "resources", "mimeTree"}, map[string]any{
-			"analysis": ref("Analysis"), "summary": ref("InspectionSummary"), "findings": array(ref("Finding")), "resources": array(ref("Resource")), "mimeTree": nullable(ref("MimeNode")),
+		"InspectionReport": object([]string{"analysis", "summary", "findings", "headers", "resources", "mimeTree", "htmlCompatibility"}, map[string]any{
+			"analysis": ref("Analysis"), "summary": ref("InspectionSummary"), "findings": array(ref("Finding")), "headers": array(ref("InspectionHeader")),
+			"resources": array(ref("Resource")), "mimeTree": nullable(ref("MimeNode")), "htmlCompatibility": nullable(ref("HTMLCompatibility")),
 		}),
 		"Event": object([]string{"type"}, map[string]any{
-			"type":    map[string]any{"type": "string", "enum": []string{"mailbox:new", "mailbox:deleted", "messages:changed", "calendar:changed", "message:new", "reset"}},
+			"type":    map[string]any{"type": "string", "enum": []string{"connected", "mailbox:new", "mailbox:deleted", "messages:changed", "calendar:changed", "message:new", "reset"}},
 			"mailbox": object([]string{"id", "address"}, map[string]any{"id": integer, "address": stringSchema}), "mailboxId": integer,
 			"message": object([]string{"id", "subject", "fromAddress", "fromName"}, map[string]any{"id": integer, "subject": nullable(stringSchema), "fromAddress": nullable(stringSchema), "fromName": nullable(stringSchema)}),
 		}),

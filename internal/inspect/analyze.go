@@ -2,10 +2,16 @@ package inspect
 
 import (
 	"bytes"
+	"crypto/md5"
+	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	messagemail "github.com/emersion/go-message/mail"
+	"github.com/openhoo/hoomail/internal/mimeparse"
 	"io"
 	"mime/quotedprintable"
 	"net/mail"
@@ -16,9 +22,6 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
-
-	messagemail "github.com/emersion/go-message/mail"
-	"github.com/openhoo/hoomail/internal/mimeparse"
 )
 
 var (
@@ -31,6 +34,11 @@ var (
 	textResourceRE  = regexp.MustCompile(`(?i)https?://[^\s<>"')\]]+`)
 )
 
+const (
+	maxSearchableHeaderValueBytes  = 8 << 10
+	searchableHeaderTruncationMark = " … [truncated]"
+)
+
 var categoryOrder = map[string]int{
 	"analysis": 0, "message": 1, "mime": 2, "authentication": 3,
 	"unsubscribe": 4, "content": 5, "privacy": 6, "compatibility": 7,
@@ -39,7 +47,7 @@ var categoryOrder = map[string]int{
 var truncationOrder = []string{
 	"raw bytes", "MIME depth", "MIME parts", "header fields", "header bytes",
 	"physical lines", "legacy body bytes", "HTML nodes", "HTML token bytes",
-	"resource values", "resources", "findings", "evidence", "report bytes",
+	"compatibility warnings", "resource values", "resources", "findings", "evidence", "report bytes",
 }
 
 var unavailableOrder = []string{"message", "mime", "authentication", "unsubscribe", "content", "privacy", "compatibility"}
@@ -77,8 +85,14 @@ func Analyze(input Input) (Report, error) {
 		return Report{}, err
 	}
 	a := analyzer{
-		input: input, doc: doc, resourceMap: make(map[string]int), causes: make(map[string]struct{}),
-		unavailable: make(map[string]struct{}), rawPresent: len(input.Raw) != 0,
+		input:       input,
+		doc:         doc,
+		findings:    make([]Finding, 0),
+		resources:   make([]Resource, 0),
+		resourceMap: make(map[string]int),
+		causes:      make(map[string]struct{}),
+		unavailable: make(map[string]struct{}),
+		rawPresent:  len(input.Raw) != 0,
 	}
 	for _, cause := range doc.TruncationCauses {
 		a.addCause(normalizeCause(cause))
@@ -1046,11 +1060,26 @@ func (a *analyzer) finishReport() Report {
 		a.findings = a.findings[:MaxFindings-1]
 		a.addCause("findings")
 	}
-	if len(a.causes) > 0 {
-		a.ensureTruncationFinding()
-	}
 	sort.SliceStable(a.findings, func(i, j int) bool { return findingLess(a.findings[i], a.findings[j]) })
-	report := Report{Analysis: Analysis{Version: AnalysisVersion, State: "complete", ParsedThroughPath: a.doc.ParsedThroughPath, UnavailableRuleFamilies: a.unavailableFamilies(), Truncated: len(a.causes) > 0}, Findings: a.findings, Resources: a.resources, MIMETree: buildMIMETree(a.doc.Root, a.doc.Raw)}
+	compatibility := analyzeHTMLCompatibility(a.html)
+	if compatibility != nil {
+		if compatibility.Truncated {
+			a.addCause("HTML token bytes")
+			a.addUnavailable("compatibility")
+		}
+		if compatibility.WarningsTruncated {
+			a.addCause("compatibility warnings")
+			a.addUnavailable("compatibility")
+		}
+	}
+	report := Report{
+		Analysis:          Analysis{Version: AnalysisVersion, State: "complete", ParsedThroughPath: a.doc.ParsedThroughPath, UnavailableRuleFamilies: a.unavailableFamilies(), Truncated: len(a.causes) > 0},
+		Headers:           a.searchableHeaders(),
+		Findings:          a.findings,
+		Resources:         a.resources,
+		MIMETree:          buildMIMETree(a.doc.Root, a.doc.Raw),
+		HTMLCompatibility: compatibility,
+	}
 	if !a.rawPresent || a.doc.SemanticError != nil || len(a.causes) > 0 {
 		report.Analysis.State = "partial"
 	}
@@ -1182,6 +1211,25 @@ func (a *analyzer) headerOccurrences(node *mimeparse.Node) []headerOccurrence {
 	return out
 }
 
+func (a *analyzer) searchableHeaders() []Header {
+	out := make([]Header, 0)
+	if !a.rawPresent || a.doc.Root == nil {
+		return out
+	}
+	for _, item := range a.headerOccurrences(a.doc.Root) {
+		if !validRange(item.field.RawValue, len(a.doc.Raw)) {
+			continue
+		}
+		out = append(out, Header{
+			Name:       item.name,
+			Value:      searchableHeaderValue(item.value),
+			Occurrence: item.occurrence,
+			Line:       item.line,
+		})
+	}
+	return out
+}
+
 func finding(id, category, outcome, severity, basis, applicability, label, detail string, evidence []Evidence, reference *Reference) Finding {
 	return Finding{ID: id, Category: category, Outcome: outcome, Severity: severity, Basis: basis, Applicability: applicability, Label: label, Detail: detail, Evidence: evidence, Reference: reference}
 }
@@ -1225,6 +1273,13 @@ func normalizeCause(value string) string {
 func evidenceValue(value string) string {
 	value = strings.Join(strings.Fields(value), " ")
 	return truncateUTF8(value, 200)
+}
+func searchableHeaderValue(value string) string {
+	if len(value) <= maxSearchableHeaderValueBytes {
+		return value
+	}
+	contentLimit := maxSearchableHeaderValueBytes - len(searchableHeaderTruncationMark)
+	return truncateUTF8(value, contentLimit) + searchableHeaderTruncationMark
 }
 func truncateUTF8(value string, limit int) string {
 	if len(value) <= limit {
@@ -1860,6 +1915,14 @@ func buildMIMETree(root *mimeparse.Node, raw []byte) *MimeNode {
 		if len(node.Children) == 0 && node.DecodeError == nil {
 			size := len(node.DecodedBody)
 			item.DecodedSize = &size
+			md5Sum := md5.Sum(node.DecodedBody)
+			sha1Sum := sha1.Sum(node.DecodedBody)
+			sha256Sum := sha256.Sum256(node.DecodedBody)
+			item.Checksums = &Checksums{
+				MD5:    hex.EncodeToString(md5Sum[:]),
+				SHA1:   hex.EncodeToString(sha1Sum[:]),
+				SHA256: hex.EncodeToString(sha256Sum[:]),
+			}
 		}
 		for _, child := range node.Children {
 			item.Children = append(item.Children, convert(child))
@@ -1918,6 +1981,17 @@ func findingLess(a, b Finding) bool {
 func trimReport(report *Report) {
 	measure := func() int { encoded, _ := json.Marshal(report); return len(encoded) }
 	if measure() <= MaxReportBytes {
+		return
+	}
+	if report.HTMLCompatibility != nil {
+		for index := range report.HTMLCompatibility.Warnings {
+			report.HTMLCompatibility.Warnings[index].Clients = []CompatibilityClient{}
+		}
+		report.HTMLCompatibility.ClientsTruncated = true
+		report.HTMLCompatibility.Platforms = []CompatibilityPlatform{}
+	}
+	if measure() <= MaxReportBytes {
+		report.Summary = summarize(report.Findings)
 		return
 	}
 	report.Resources = []Resource{}

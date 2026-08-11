@@ -166,6 +166,97 @@ func TestAnalyzeCompleteReportOrderingResourcesAndOfflineWording(t *testing.T) {
 	}
 }
 
+func TestAnalyzeExposesMailpitParityMetadataOffline(t *testing.T) {
+	raw := []byte(strings.Join([]string{
+		`Received: by first.example.test`,
+		`Received: by second.example.test`,
+		`Date: Fri, 24 Jul 2026 12:00:00 +0000`,
+		`From: Alice <alice@example.test>`,
+		`To: Bob <bob@example.test>`,
+		`Message-ID: <parity@example.test>`,
+		`MIME-Version: 1.0`,
+		`Content-Type: text/html; charset=utf-8`,
+		`Content-Transfer-Encoding: 7bit`,
+		``,
+		`<html><body><div style="display:grid">hello</div></body></html>`,
+		``,
+	}, "\r\n"))
+	report, err := Analyze(Input{Raw: raw, StoredSize: int64(len(raw))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Headers) < 2 || report.Headers[0].Name != "Received" || report.Headers[0].Occurrence != 1 || report.Headers[1].Occurrence != 2 {
+		t.Fatalf("headers=%#v", report.Headers)
+	}
+	if report.HTMLCompatibility == nil || len(report.HTMLCompatibility.Warnings) == 0 {
+		t.Fatalf("htmlCompatibility=%#v", report.HTMLCompatibility)
+	}
+	foundGrid := false
+	for _, warning := range report.HTMLCompatibility.Warnings {
+		if warning.Slug == "css-display-grid" {
+			foundGrid = warning.Occurrences == 1 && len(warning.Clients) > 0
+		}
+	}
+	if !foundGrid {
+		t.Fatalf("grid warning missing: %#v", report.HTMLCompatibility.Warnings)
+	}
+	if report.MIMETree == nil || report.MIMETree.Checksums == nil {
+		t.Fatalf("mimeTree=%#v", report.MIMETree)
+	}
+	wantBody := "<html><body><div style=\"display:grid\">hello</div></body></html>\r\n"
+	if report.MIMETree.Checksums.MD5 != "877ecb572c060b534d65761d6bc46738" {
+		t.Fatalf("MD5=%s body=%q", report.MIMETree.Checksums.MD5, wantBody)
+	}
+	repeated, err := Analyze(Input{Raw: raw, StoredSize: int64(len(raw))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(report.HTMLCompatibility, repeated.HTMLCompatibility) {
+		t.Fatal("HTML compatibility output is not deterministic")
+	}
+	encoded, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{`"headers":[`, `"checksums":{`, `"htmlCompatibility":{`} {
+		if !strings.Contains(string(encoded), expected) {
+			t.Fatalf("JSON missing %s", expected)
+		}
+	}
+}
+
+func TestAnalyzeSearchableHeaderFidelityAndBound(t *testing.T) {
+	longValue := strings.Repeat("x", maxSearchableHeaderValueBytes+256)
+	raw := []byte("X-Duplicate: first   value\r\n" +
+		"X-Duplicate: second value\r\n" +
+		"X-Folded: left   \r\n" +
+		"\t right\r\n" +
+		"X-Long: " + longValue + "\r\n\r\nbody")
+	report, err := Analyze(Input{Raw: raw, StoredSize: int64(len(raw))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Headers) != 4 {
+		t.Fatalf("headers=%#v", report.Headers)
+	}
+	if report.Headers[0].Name != "X-Duplicate" || report.Headers[0].Occurrence != 1 || report.Headers[0].Value != "first   value" {
+		t.Fatalf("first duplicate=%#v", report.Headers[0])
+	}
+	if report.Headers[1].Name != "X-Duplicate" || report.Headers[1].Occurrence != 2 || report.Headers[1].Value != "second value" {
+		t.Fatalf("second duplicate=%#v", report.Headers[1])
+	}
+	if got, want := report.Headers[2].Value, "left     right"; got != want {
+		t.Fatalf("folded header=%q, want %q", got, want)
+	}
+	long := report.Headers[3].Value
+	if len(long) != maxSearchableHeaderValueBytes || !strings.HasSuffix(long, searchableHeaderTruncationMark) {
+		t.Fatalf("long header length/suffix=%d/%q", len(long), long[len(long)-len(searchableHeaderTruncationMark):])
+	}
+	if !strings.HasPrefix(long, strings.Repeat("x", 64)) {
+		t.Fatalf("long header lost prefix: %q", long[:64])
+	}
+}
+
 func TestAnalyzeRawlessPartialUsesFallbackOnce(t *testing.T) {
 	oldParse, oldHTML := parseMIME, analyzeHTMLPass
 	t.Cleanup(func() { parseMIME, analyzeHTMLPass = oldParse, oldHTML })
@@ -230,7 +321,7 @@ func TestAnalyzeHTMLPassZeroWithoutHTML(t *testing.T) {
 }
 
 func TestHTMLFactsAggregatesOccurrencesAndCapsNodes(t *testing.T) {
-	htmlBody := `<html lang="en"><body><a href="https://example.test"><img src="https://img.test/a.png" alt="Named"></a><a href="https://example.test"></a><img src="https://img.test/a.png" alt="Named"><img src="cid:logo"><img src="data:image/png;base64,AA=="></body></html>`
+	htmlBody := `<html lang="en"><head><link rel="alternate stylesheet" href="http://css.example.test/mail.css"></head><body><a href="https://example.test"><img src="https://img.test/a.png" alt="Named"></a><a href="https://example.test"></a><img src="https://img.test/a.png" alt="Named"><img src="cid:logo"><img src="data:image/png;base64,AA=="></body></html>`
 	facts, causes := analyzeHTML([]byte(htmlBody), new("1.2"))
 	if len(causes) != 0 || facts.anchorCount != 2 || facts.unnamedLinks != 1 || facts.imageCount != 4 || facts.externalImages != 2 {
 		t.Fatalf("facts=%#v causes=%#v", facts, causes)
@@ -239,14 +330,17 @@ func TestHTMLFactsAggregatesOccurrencesAndCapsNodes(t *testing.T) {
 	for _, item := range facts.resources {
 		a.addResource(item.kind, item.path, item.url, item.text)
 	}
-	found := false
+	foundImage, foundStylesheet := false, false
 	for _, item := range a.resources {
 		if item.Kind == "image" && item.URL == "https://img.test/a.png" {
-			found = item.OccurrenceCount == 2
+			foundImage = item.OccurrenceCount == 2
+		}
+		if item.Kind == "link" && item.URL == "http://css.example.test/mail.css" && item.Text == "stylesheet" {
+			foundStylesheet = true
 		}
 	}
-	if !found {
-		t.Fatalf("resources=%#v", a.resources)
+	if !foundImage || !foundStylesheet || facts.insecure != 1 {
+		t.Fatalf("resources=%#v facts=%#v", a.resources, facts)
 	}
 
 	var huge strings.Builder
@@ -401,5 +495,49 @@ func sortFindings(items []Finding) {
 		for current := index; current > 0 && findingLess(items[current], items[current-1]); current-- {
 			items[current], items[current-1] = items[current-1], items[current]
 		}
+	}
+}
+
+func TestCompatibilityAnalyzerParityContracts(t *testing.T) {
+	raw := []byte(`<html><head><meta charset="utf-8"></head><body><table bgcolor="#fff" border="1" width="600"><img usemap="#menu"><style>.card { display:grid; border-radius: 8px; }</style><div class="card">x</div></body></html>`)
+	result := analyzeHTMLCompatibility(raw)
+	if result == nil {
+		t.Fatal("compatibility result is nil")
+	}
+	if result.Nodes != 4 {
+		t.Fatalf("nodes=%d want 4 content nodes", result.Nodes)
+	}
+	for _, slug := range []string{"css-background-color", "css-border", "css-width", "css-display-grid", "css-border-radius", "html-image-maps"} {
+		found := false
+		for _, warning := range result.Warnings {
+			if warning.Slug == slug {
+				found = warning.Occurrences > 0
+				break
+			}
+		}
+		if !found {
+			t.Errorf("missing compatibility warning %q", slug)
+		}
+	}
+
+	clean := analyzeHTMLCompatibility([]byte(`<p>Hello</p>`))
+	if clean.Score.Supported != 100 || clean.Score.Partial != 0 || clean.Score.Unsupported != 0 {
+		t.Fatalf("clean score=%#v", clean.Score)
+	}
+	if clean.Tests == 0 {
+		t.Fatal("clean compatibility run did not report executed tests")
+	}
+
+	note := "final note"
+	support, gotNote := compatibilitySupport(json.RawMessage(`"a #4 #5"`), map[string]string{"4": "first note", "5": note})
+	if support != "partial" || gotNote == nil || !strings.Contains(*gotNote, "first note") || !strings.Contains(*gotNote, note) {
+		t.Fatalf("multi-note support=%q note=%v", support, gotNote)
+	}
+}
+
+func TestCompatibilityTokenizerTruncationIsReported(t *testing.T) {
+	result := analyzeHTMLCompatibility([]byte("<div>" + strings.Repeat("x", MaxHTMLTokenBytes+1) + "</div>"))
+	if result == nil || !result.Truncated {
+		t.Fatalf("compatibility truncation=%#v", result)
 	}
 }

@@ -119,7 +119,23 @@ test('message viewer tabs, inspection, and attachments expose the complete plain
   await expect(linksAndImages).toContainText('https://example.com')
   await expect(linksAndImages).toContainText('hoot.txt')
   await expect(mimeStructure).toBeVisible()
+  const compatibility = page.getByRole('region', { name: 'HTML compatibility' })
+  await expect(compatibility).toBeVisible()
+  await expect(compatibility).toContainText('Can I Email')
+  const headers = page.getByRole('region', { name: 'Message headers' })
+  await expect(headers).toBeVisible()
+  await headers.getByRole('searchbox', { name: 'Filter headers' }).fill('subject')
+  await expect(headers).toContainText(`Subject`)
+  await expect(headers).toContainText(subject)
+  await headers.getByRole('searchbox', { name: 'Filter headers' }).fill('definitely-missing-header')
+  await expect(headers).toContainText('No headers match')
+  await expect(headers.getByRole('status')).toHaveText(/0 of \d+ headers match/)
+  await expect(page.getByRole('region', { name: 'Unavailable checks' })).toContainText('Link status & redirects')
+  await expect(page.getByRole('region', { name: 'Unavailable checks' })).toContainText('SpamAssassin')
+  await expect(mimeStructure).toContainText('md5')
+  await expect(mimeStructure).toContainText('sha256')
 
+  await inspectTab.focus()
   await page.keyboard.press('Home')
   await expect(htmlTab).toBeFocused()
   await expect(htmlTab).toHaveAttribute('aria-selected', 'true')
@@ -244,6 +260,9 @@ test('HTML preview applies its canvas while preserving sender content styling an
   const embeddedSvg = Buffer.from(
     '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="9" viewBox="0 0 14 9"><rect width="14" height="9" fill="#004b76"/></svg>',
   ).toString('base64')
+  const hostileDataSvg = Buffer.from(
+    '<svg xmlns="http://www.w3.org/2000/svg"><image href="https://remote.invalid/data-svg.png"/></svg>',
+  ).toString('base64')
   const raw = [
     'From: Sender <sender@example.test>',
     'To: privacy-viewer@hoomail.test',
@@ -258,7 +277,7 @@ test('HTML preview applies its canvas while preserving sender content styling an
     'Content-Type: text/html; charset=utf-8',
     'Content-ID: <root@example.test>',
     '',
-    `<!doctype html><html><head><link rel="stylesheet" href="https://remote.invalid/email.css"></head><body style="color:rgb(12,34,56)"><table style="border-collapse:collapse"><tr><td style="padding:7px">Sender table</td><td style="padding:7px"><img alt="CID logo" src="cid:logo@example.test"><img alt="CID vector" src="cid:vector@example.test"><img alt="Embedded data vector" src="data:image/svg+xml;base64,${embeddedSvg}"><img alt="Mixed CID logo" src="cid:mixed-logo@example.test"><img alt="Remote tracking pixel" src="https://remote.invalid/pixel.png"></td></tr></table></body></html>`,
+    `<!doctype html><html><head><link rel="stylesheet" href="https://remote.invalid/email.css"><style>@import "https://remote.invalid/import.css";@font-face{font-family:Remote;src:u/**/rl(https://remote.invalid/font.woff2)}.remote{background-image:u/**/rl(https://remote.invalid/background.png)}</style></head><body style="color:rgb(12,34,56)"><table style="border-collapse:collapse"><tr><td style="padding:7px">Sender table</td><td class="remote" style="padding:7px"><img alt="CID logo" src="cid:logo@example.test"><img alt="CID vector" src="cid:vector@example.test"><img alt="Embedded data vector" src="data:image/svg+xml;base64,${embeddedSvg}"><img alt="Hostile data vector" src="data:image/svg+xml;base64,${hostileDataSvg}"><img alt="Mixed CID logo" src="cid:mixed-logo@example.test"><img alt="Remote tracking pixel" src="https://remote.invalid/pixel.png" srcset="https://remote.invalid/pixel-2x.png 2x"><img alt="Arbitrary same-origin path" src="/api/reset"></td></tr></table></body></html>`,
     '--related',
     'Content-Type: image/png; name="logo.png"',
     'Content-Disposition: inline; filename="logo.png"',
@@ -346,13 +365,157 @@ test('HTML preview applies its canvas while preserving sender content styling an
     tableBorderCollapse: 'collapse',
     cellPadding: '7px',
   })
-  await page.waitForTimeout(100)
+  const appOrigin = new URL(page.url()).origin
+  const previewMetrics = await frame.locator('html').evaluate((root) => ({
+    width: root.clientWidth,
+    height: root.clientHeight,
+  }))
+  const screenshotRequests: string[] = []
+  const captureScreenshotRequest = (request: { url(): string }) => {
+    const url = new URL(request.url())
+    if (url.protocol === 'http:' || url.protocol === 'https:') screenshotRequests.push(url.href)
+  }
+  page.on('request', captureScreenshotRequest)
+  const downloadPromise = page.waitForEvent('download')
+  await page.getByRole('button', { name: 'Download HTML screenshot' }).click()
+  const screenshot = await downloadPromise
+  page.off('request', captureScreenshotRequest)
+  expect(screenshot.suggestedFilename()).toMatch(/^message-\d+\.png$/)
+  const screenshotStream = await screenshot.createReadStream()
+  if (!screenshotStream) throw new Error('Screenshot download has no stream')
+  const chunks: Buffer[] = []
+  for await (const chunk of screenshotStream) chunks.push(Buffer.from(chunk))
+  const screenshotBytes = Buffer.concat(chunks)
+  expect(screenshotBytes.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+  const screenshotInfo = await page.evaluate((base64) => new Promise<{
+    width: number
+    height: number
+    hasCidColor: boolean
+    hasOpaquePixel: boolean
+    topLeft: [number, number, number, number]
+  }>((resolve, reject) => {
+    const image = new Image()
+    image.onload = () => {
+      const canvas = document.createElement('canvas')
+      canvas.width = image.naturalWidth
+      canvas.height = image.naturalHeight
+      const context = canvas.getContext('2d')
+      if (!context) return reject(new Error('Canvas unavailable'))
+      context.drawImage(image, 0, 0)
+      const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data
+      let hasCidColor = false
+      let hasOpaquePixel = false
+      for (let index = 0; index < pixels.length; index += 4) {
+        if (pixels[index + 3] !== 0) hasOpaquePixel = true
+        if (pixels[index] === 51 && pixels[index + 1] === 102 && pixels[index + 2] === 153 && pixels[index + 3] === 255) {
+          hasCidColor = true
+          break
+        }
+      }
+      resolve({
+        width: image.naturalWidth,
+        height: image.naturalHeight,
+        hasCidColor,
+        hasOpaquePixel,
+        topLeft: [pixels[0], pixels[1], pixels[2], pixels[3]],
+      })
+    }
+    image.onerror = () => reject(new Error('PNG decode failed'))
+    image.src = `data:image/png;base64,${base64}`
+  }), screenshotBytes.toString('base64'))
+  expect(screenshotInfo.width).toBe(previewMetrics.width)
+  expect(screenshotInfo.height).toBe(previewMetrics.height)
+  expect(screenshotInfo.width * screenshotInfo.height).toBeLessThanOrEqual(16_000_000)
+  expect(screenshotInfo.hasOpaquePixel).toBe(true)
+  expect(screenshotInfo.topLeft).toEqual([255, 255, 255, 255])
+  expect(screenshotInfo.hasCidColor).toBe(true)
+  const requestURLs = screenshotRequests.map((value) => new URL(value))
+  const cidRequests = requestURLs.filter((url) => (
+    url.origin === appOrigin
+    && /^\/api\/attachments\/[1-9]\d*$/.test(url.pathname)
+    && url.search === '?inline=cid'
+  ))
+  expect(cidRequests).toHaveLength(3)
+  const unexpectedRequests = requestURLs.filter((url) => !(
+    url.origin === appOrigin
+    && /^\/api\/attachments\/[1-9]\d*$/.test(url.pathname)
+    && url.search === '?inline=cid'
+  ))
+  expect(unexpectedRequests.map((url) => url.href)).toEqual([])
   expect(remoteRequests).toEqual([])
 
   for (const name of ['report.pdf', 'active.svg']) {
     await expect(page.getByRole('link', { name: `Download ${name}` })).toBeVisible()
     await expect(page.getByRole('button', { name: `Preview ${name}` })).toHaveCount(0)
   }
+})
+
+test('switching messages aborts screenshot export and re-enables download', async ({ page }) => {
+  const recipient = 'screenshot-switch@hoomail.test'
+  const firstSubject = 'Screenshot export source'
+  const secondSubject = 'Screenshot export replacement'
+  const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
+  await sendRawMessage([
+    'From: Sender <sender@example.test>',
+    `To: ${recipient}`,
+    `Subject: ${firstSubject}`,
+    'MIME-Version: 1.0',
+    'Content-Type: multipart/related; boundary="related"',
+    '',
+    '--related',
+    'Content-Type: text/html; charset=utf-8',
+    '',
+    '<html><body><img src="cid:logo@example.test" alt="Export logo"></body></html>',
+    '--related',
+    'Content-Type: image/png',
+    'Content-ID: <logo@example.test>',
+    'Content-Transfer-Encoding: base64',
+    '',
+    png,
+    '--related--',
+  ].join('\r\n'), recipient)
+  await sendRawMessage([
+    'From: Sender <sender@example.test>',
+    `To: ${recipient}`,
+    `Subject: ${secondSubject}`,
+    'MIME-Version: 1.0',
+    'Content-Type: text/html; charset=utf-8',
+    '',
+    '<html><body>Replacement content</body></html>',
+  ].join('\r\n'), recipient)
+
+  const messageList = page.getByRole('list', { name: 'Messages' })
+  const firstRow = messageList.getByRole('button').filter({ hasText: firstSubject }).last()
+  const secondRow = messageList.getByRole('button').filter({ hasText: secondSubject }).last()
+  await expect(firstRow).toBeVisible()
+  await expect(secondRow).toBeVisible()
+  await firstRow.click()
+  await expect(page.getByRole('status').filter({ hasText: `Message loaded: ${firstSubject}` })).toBeVisible()
+
+  let releaseAttachment = () => {}
+  const attachmentGate = new Promise<void>((resolve) => {
+    releaseAttachment = resolve
+  })
+  let markAttachmentBlocked = () => {}
+  const attachmentBlocked = new Promise<void>((resolve) => {
+    markAttachmentBlocked = resolve
+  })
+  const attachmentPattern = '**/api/attachments/*?inline=cid'
+  await page.route(attachmentPattern, async (route) => {
+    markAttachmentBlocked()
+    await attachmentGate
+    await route.continue().catch(() => undefined)
+  })
+
+  const downloadButton = page.locator('button[aria-label="Download HTML screenshot"]')
+  await downloadButton.click()
+  await attachmentBlocked
+  await expect(downloadButton).toBeDisabled()
+  await secondRow.click()
+  await expect(page.getByRole('status').filter({ hasText: `Message loaded: ${secondSubject}` })).toBeVisible()
+  await expect(downloadButton).toBeEnabled()
+  releaseAttachment()
+  await page.unroute(attachmentPattern)
 })
 
 test('HTML preview supports mobile presets, custom dimensions, rotation, and panel fit', async ({ page }) => {

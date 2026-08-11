@@ -109,6 +109,15 @@ func analyzeHTML(raw []byte, path *string) (HTMLFacts, []string) {
 				anchor = &htmlAnchor{href: strings.TrimSpace(attrs["href"]), ariaLabel: strings.TrimSpace(attrs["aria-label"]), title: strings.TrimSpace(attrs["title"])}
 				anchor.labelledBy = strings.Fields(attrs["aria-labelledby"])
 			}
+			if name == "link" && containsHTMLToken(attrs["rel"], "stylesheet") {
+				if stylesheet, ok := inspectionHTTPURL(attrs["href"]); ok {
+					facts.resources = append(facts.resources, htmlResourceOccurrence{kind: "link", path: path, url: stylesheet, text: "stylesheet"})
+					if strings.HasPrefix(strings.ToLower(stylesheet), "http://") {
+						facts.insecure++
+						facts.insecureEvidence = append(facts.insecureEvidence, Evidence{Source: "html", Path: path, Value: new(evidenceValue(stylesheet))})
+					}
+				}
+			}
 			if name == "img" {
 				facts.imageCount++
 				alt, hasAlt := attrs["alt"]
@@ -320,6 +329,24 @@ func inspectionAnchorURL(value string) (string, bool) {
 		return "", false
 	}
 	return value, true
+}
+
+func inspectionHTTPURL(value string) (string, bool) {
+	safe, ok := inspectionAnchorURL(value)
+	if !ok {
+		return "", false
+	}
+	parsed, err := url.Parse(safe)
+	return safe, err == nil && (strings.EqualFold(parsed.Scheme, "http") || strings.EqualFold(parsed.Scheme, "https"))
+}
+
+func containsHTMLToken(value, expected string) bool {
+	for _, token := range strings.Fields(value) {
+		if strings.EqualFold(token, expected) {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeHTMLText(value string) string {

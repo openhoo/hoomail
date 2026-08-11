@@ -69,6 +69,18 @@ type Resource struct {
 	Text            string  `json:"text"`
 	OccurrenceCount int     `json:"occurrenceCount"`
 }
+type Header struct {
+	Name       string `json:"name"`
+	Value      string `json:"value"`
+	Occurrence int    `json:"occurrence"`
+	Line       int    `json:"line"`
+}
+
+type Checksums struct {
+	MD5    string `json:"md5"`
+	SHA1   string `json:"sha1"`
+	SHA256 string `json:"sha256"`
+}
 
 type MimeNode struct {
 	Path        string     `json:"path"`
@@ -80,13 +92,16 @@ type MimeNode struct {
 	ContentID   *string    `json:"contentId"`
 	RawSize     *int       `json:"rawSize"`
 	DecodedSize *int       `json:"decodedSize"`
+	Checksums   *Checksums `json:"checksums,omitempty"`
 	Children    []MimeNode `json:"children"`
 }
 
 type Report struct {
-	Analysis  Analysis   `json:"analysis"`
-	Summary   Summary    `json:"summary"`
-	Findings  []Finding  `json:"findings"`
-	Resources []Resource `json:"resources"`
-	MIMETree  *MimeNode  `json:"mimeTree"`
+	Analysis          Analysis           `json:"analysis"`
+	Summary           Summary            `json:"summary"`
+	Findings          []Finding          `json:"findings"`
+	Headers           []Header           `json:"headers"`
+	Resources         []Resource         `json:"resources"`
+	MIMETree          *MimeNode          `json:"mimeTree"`
+	HTMLCompatibility *HTMLCompatibility `json:"htmlCompatibility"`
 }

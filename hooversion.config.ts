@@ -9,6 +9,7 @@ export default {
       changelog: "CHANGELOG.md",
       scopes: ["hoomail", "client", "server", "smtp", "docker", "ghcr", "image", "helm", "chart", "release"],
       dependencies: [],
+      assets: ["internal/inspect/LICENSE.mailpit", "internal/inspect/LICENSE.can-i-email"],
     },
   ],
   hooks: {

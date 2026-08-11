@@ -62,7 +62,12 @@ func TestGeneratedOpenAPIAndSwaggerEndpoints(t *testing.T) {
 		Info    struct {
 			Version string `json:"version"`
 		} `json:"info"`
-		Paths map[string]map[string]any `json:"paths"`
+		Paths      map[string]map[string]any `json:"paths"`
+		Components struct {
+			Schemas map[string]struct {
+				Properties map[string]any `json:"properties"`
+			} `json:"schemas"`
+		} `json:"components"`
 	}
 	if err := json.Unmarshal(openAPI.Body.Bytes(), &document); err != nil {
 		t.Fatal(err)
@@ -87,6 +92,28 @@ func TestGeneratedOpenAPIAndSwaggerEndpoints(t *testing.T) {
 		"/api/reset":                          "post",
 		"/api/send-test":                      "post",
 	}
+	eventSchema, ok := document.Components.Schemas["Event"]
+	if !ok {
+		t.Fatal("openapi Event schema missing")
+	}
+	typeSchema, ok := eventSchema.Properties["type"].(map[string]any)
+	if !ok {
+		t.Fatalf("Event.type schema=%#v", eventSchema.Properties["type"])
+	}
+	enum, ok := typeSchema["enum"].([]any)
+	if !ok {
+		t.Fatalf("Event.type enum=%#v", typeSchema["enum"])
+	}
+	foundConnected := false
+	for _, value := range enum {
+		if value == "connected" {
+			foundConnected = true
+			break
+		}
+	}
+	if !foundConnected {
+		t.Fatalf("Event.type enum missing connected: %#v", enum)
+	}
 	if len(document.Paths) != len(expected) {
 		t.Fatalf("documented paths=%d want=%d", len(document.Paths), len(expected))
 	}
@@ -94,6 +121,16 @@ func TestGeneratedOpenAPIAndSwaggerEndpoints(t *testing.T) {
 		if document.Paths[path][method] == nil {
 			t.Errorf("missing %s %s", method, path)
 		}
+	}
+	reportSchema := document.Components.Schemas["InspectionReport"]
+	for _, property := range []string{"headers", "htmlCompatibility", "mimeTree"} {
+		if reportSchema.Properties[property] == nil {
+			t.Errorf("inspection report schema missing %s", property)
+		}
+	}
+	mimeSchema := document.Components.Schemas["MimeNode"]
+	if mimeSchema.Properties["checksums"] == nil {
+		t.Error("MIME node schema missing checksums")
 	}
 
 	head := request(t, handler, http.MethodHead, "/openapi.json", "")
@@ -579,8 +616,8 @@ func TestInspectNotFoundAndReportShape(t *testing.T) {
 		To:         []store.AddressEntry{},
 		CC:         []store.AddressEntry{},
 		Headers:    map[string]string{"subject": "Hello"},
-		Text:       pointer("visit https://example.com"),
-		Raw:        []byte("Date: Thu, 24 Jul 2026 12:00:00 +0000\r\nFrom: sender@example.com\r\nTo: inspect@example.com\r\nMessage-ID: <inspect@example.com>\r\nSubject: Hello\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nvisit https://example.com"),
+		HTML:       pointer(`<a href="https://example.com" style="display:grid">visit</a>`),
+		Raw:        []byte("Date: Thu, 24 Jul 2026 12:00:00 +0000\r\nFrom: sender@example.com\r\nTo: inspect@example.com\r\nMessage-ID: <inspect@example.com>\r\nSubject: Hello\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<a href=\"https://example.com\" style=\"display:grid\">visit</a>"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -599,7 +636,7 @@ func TestInspectNotFoundAndReportShape(t *testing.T) {
 	if report.Analysis.Version != 1 || report.Analysis.State != "complete" {
 		t.Fatalf("analysis=%+v", report.Analysis)
 	}
-	if report.MIMETree == nil || len(report.Findings) == 0 || report.Resources == nil {
+	if report.MIMETree == nil || report.MIMETree.Checksums == nil || len(report.Findings) == 0 || report.Resources == nil || len(report.Headers) == 0 || report.HTMLCompatibility == nil || len(report.HTMLCompatibility.Warnings) == 0 {
 		t.Fatalf("report shape=%+v", report)
 	}
 	var read int

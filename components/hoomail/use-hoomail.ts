@@ -67,6 +67,12 @@ export interface InspectionResource {
   occurrenceCount: number
 }
 
+export interface MimeNodeChecksums {
+  md5: string
+  sha1: string
+  sha256: string
+}
+
 export interface MimeNode {
   path: string
   contentType: string
@@ -77,7 +83,64 @@ export interface MimeNode {
   contentId: string | null
   rawSize: number | null
   decodedSize: number | null
+  // Additive: present only on leaf parts when the backend computes digests.
+  checksums?: MimeNodeChecksums
   children: MimeNode[]
+}
+
+export interface InspectionHeader {
+  name: string
+  value: string
+  occurrence: number
+  line: number
+}
+
+export type CompatibilitySupport = 'yes' | 'partial' | 'no'
+
+export interface CompatibilityClient {
+  name: string
+  family: string
+  platform: string
+  version: string
+  support: CompatibilitySupport | string
+  note: string | null
+}
+
+export interface CompatibilityScore {
+  supported: number
+  partial: number
+  unsupported: number
+}
+
+export interface CompatibilityWarning {
+  slug: string
+  title: string
+  category: string
+  description: string
+  url: string
+  occurrences: number
+  score: CompatibilityScore
+  clients: CompatibilityClient[]
+}
+
+export interface CompatibilityPlatform {
+  family: string
+  platform: string
+  label: string
+}
+
+// Can I Email data (caniemail.com, MIT) reported as an additive static dataset.
+export interface HTMLCompatibility {
+  dataVersion: string
+  dataUpdated: string
+  nodes: number
+  tests: number
+  score: CompatibilityScore
+  platforms: CompatibilityPlatform[]
+  warnings: CompatibilityWarning[]
+  warningsTruncated?: boolean
+  clientsTruncated?: boolean
+  truncated?: boolean
 }
 
 export interface InspectionReport {
@@ -86,6 +149,9 @@ export interface InspectionReport {
   findings: InspectionFinding[]
   resources: InspectionResource[]
   mimeTree: MimeNode | null
+  // Additive fields below: absent on older cached responses; renderers must tolerate undefined.
+  headers?: InspectionHeader[]
+  htmlCompatibility?: HTMLCompatibility | null
 }
 
 type CacheEntry = { data?: unknown; error?: unknown; promise?: Promise<void>; revalidateAfter?: boolean; generation: number; listeners: Set<() => void> }

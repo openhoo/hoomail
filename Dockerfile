@@ -36,6 +36,8 @@ ENV PORT=3000 \
     HOOMAIL_POP3_PORT=3110 \
     HOOMAIL_DB_PATH=/app/data/hoomail.db
 COPY --from=server /hoomail /hoomail
+COPY --from=server /src/internal/inspect/LICENSE.mailpit /licenses/LICENSE.mailpit
+COPY --from=server /src/internal/inspect/LICENSE.can-i-email /licenses/LICENSE.can-i-email
 USER 65532:65532
 VOLUME ["/app/data"]
 EXPOSE 3000 2525 3110

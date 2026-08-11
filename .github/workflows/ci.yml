@@ -307,6 +307,14 @@ jobs:
           docker logs hoomail-ci
           exit 1
 
+      - name: Verify bundled third-party notices
+        run: |
+          set -euo pipefail
+          docker cp hoomail-ci:/licenses/LICENSE.mailpit "$RUNNER_TEMP/LICENSE.mailpit"
+          docker cp hoomail-ci:/licenses/LICENSE.can-i-email "$RUNNER_TEMP/LICENSE.can-i-email"
+          cmp internal/inspect/LICENSE.mailpit "$RUNNER_TEMP/LICENSE.mailpit"
+          cmp internal/inspect/LICENSE.can-i-email "$RUNNER_TEMP/LICENSE.can-i-email"
+
       - name: Remove CI container and image
         if: always()
         run: |

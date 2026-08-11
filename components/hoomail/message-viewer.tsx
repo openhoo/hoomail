@@ -1,5 +1,6 @@
 import type { ComponentChildren } from 'preact'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks'
+import { createHtmlScreenshot, downloadScreenshotBlob } from './html-screenshot'
 import { Download, FileText, Paperclip, RefreshCw, Smartphone } from '@/components/ui/icons'
 import { asyncComponent } from '@/components/ui/async-component'
 import { Button } from '@/components/ui/button'
@@ -107,7 +108,28 @@ export function MessageViewer({
   const [readyMessageId, setReadyMessageId] = useState<number | null>(null)
   const [viewportPreset, setViewportPreset] = useState<ViewportPreset>('fit')
   const [viewport, setViewport] = useState<ViewportSize>({ width: 390, height: 844 })
+  const [screenshotSize, setScreenshotSize] = useState<ViewportSize>({ width: 390, height: 844 })
+  const [screenshotState, setScreenshotState] = useState<'idle' | 'loading' | 'error'>('idle')
+  const screenshotMountedRef = useRef(true)
+  const screenshotOperationRef = useRef(0)
+  const latestMessageIdRef = useRef<number | null>(message?.id ?? null)
+  latestMessageIdRef.current = message?.id ?? null
+  const screenshotAbortRef = useRef<AbortController | null>(null)
   const previewViewport = viewportPreset === 'fit' ? null : viewport
+  useEffect(() => {
+    screenshotMountedRef.current = true
+    return () => {
+      screenshotMountedRef.current = false
+      screenshotAbortRef.current?.abort()
+      screenshotAbortRef.current = null
+    }
+  }, [])
+  useEffect(() => {
+    screenshotAbortRef.current?.abort()
+    screenshotAbortRef.current = null
+    screenshotOperationRef.current += 1
+    setScreenshotState('idle')
+  }, [message?.id])
   const selectViewportPreset = (preset: ViewportPreset) => {
     setViewportPreset(preset)
     const selected = VIEWPORT_PRESETS.find((candidate) => candidate.id === preset)
@@ -128,6 +150,41 @@ export function MessageViewer({
     setViewportPreset('custom')
   }
   const selectedDetailPending = selectedMessageId != null && message?.id !== selectedMessageId
+  const handleDownloadScreenshot = useCallback(async () => {
+    if (!message?.html || screenshotState === 'loading') return
+    const operation = screenshotOperationRef.current + 1
+    screenshotOperationRef.current = operation
+    const controller = new AbortController()
+    screenshotAbortRef.current?.abort()
+    screenshotAbortRef.current = controller
+    const messageId = message.id
+    setScreenshotState('loading')
+    try {
+      const png = await createHtmlScreenshot(
+        message.html,
+        screenshotSize.width,
+        screenshotSize.height,
+        controller.signal,
+      )
+      if (
+        !screenshotMountedRef.current
+        || controller.signal.aborted
+        || screenshotOperationRef.current !== operation
+        || latestMessageIdRef.current !== messageId
+      ) return
+      downloadScreenshotBlob(png, messageId)
+      setScreenshotState('idle')
+    } catch (error) {
+      if (
+        !screenshotMountedRef.current
+        || controller.signal.aborted
+        || screenshotOperationRef.current !== operation
+      ) return
+      setScreenshotState('error')
+    } finally {
+      if (screenshotAbortRef.current === controller) screenshotAbortRef.current = null
+    }
+  }, [message?.html, message?.id, screenshotSize.height, screenshotSize.width, screenshotState])
   const detailReady = !selectedDetailPending && (!htmlDoc || readyMessageId === message?.id)
   const markHtmlReady = useCallback(() => {
     if (message) setReadyMessageId(message.id)
@@ -147,7 +204,6 @@ export function MessageViewer({
           <p role="status" className="text-sm text-muted-foreground">Loading message…</p>
         ) : (
           <>
-            {/* Static local asset. */}
             <img
               src="/hoomail-logo.png"
               alt=""
@@ -254,8 +310,15 @@ export function MessageViewer({
                 onPresetChange={selectViewportPreset}
                 onViewportChange={updateViewport}
                 onRotate={rotateViewport}
+                onDownload={handleDownloadScreenshot}
+                downloadState={screenshotState}
               />
-              <HtmlFrame doc={htmlDoc} viewport={previewViewport} onReady={markHtmlReady} />
+              <HtmlFrame
+                doc={htmlDoc}
+                viewport={previewViewport}
+                onReady={markHtmlReady}
+                onSizeChange={setScreenshotSize}
+              />
             </>
           )}
         </TabsContent>
@@ -308,12 +371,16 @@ function ViewportToolbar({
   onPresetChange,
   onViewportChange,
   onRotate,
+  onDownload,
+  downloadState,
 }: {
   preset: ViewportPreset
   viewport: ViewportSize
   onPresetChange: (preset: ViewportPreset) => void
   onViewportChange: (dimension: keyof ViewportSize, value: number) => number
   onRotate: () => void
+  onDownload: () => void
+  downloadState: 'idle' | 'loading' | 'error'
 }) {
   const dimensionFieldClass =
     'h-7 w-[4.5rem] rounded-md border border-input bg-background px-2 text-center font-mono text-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40'
@@ -339,6 +406,17 @@ function ViewportToolbar({
         ))}
         <option value="custom">Custom</option>
       </select>
+      <Button
+        variant="outline"
+        size="sm"
+        aria-label="Download HTML screenshot"
+        aria-busy={downloadState === 'loading' || undefined}
+        disabled={downloadState === 'loading'}
+        onClick={onDownload}
+      >
+        <Download className="size-3.5" aria-hidden="true" />
+        {downloadState === 'loading' ? 'Preparing…' : 'Download HTML screenshot'}
+      </Button>
 
       {preset !== 'fit' && (
         <div role="group" className="flex min-w-0 flex-wrap items-center gap-1" aria-label="Custom viewport dimensions">
@@ -373,6 +451,12 @@ function ViewportToolbar({
       <span className="ml-auto hidden text-xs text-muted-foreground lg:inline">
         Email viewport
       </span>
+      {downloadState === 'loading' && (
+        <span role="status" aria-live="polite" className="text-xs text-muted-foreground">Preparing screenshot…</span>
+      )}
+      {downloadState === 'error' && (
+        <span role="alert" className="text-xs text-destructive">Could not download HTML screenshot.</span>
+      )}
     </div>
   )
 }
@@ -444,15 +528,18 @@ function HtmlFrame({
   doc,
   viewport,
   onReady,
+  onSizeChange,
 }: {
   doc: string
   viewport: ViewportSize | null
   onReady: () => void
+  onSizeChange: (size: ViewportSize) => void
 }) {
   const [prevDoc, setPrevDoc] = useState<string | null>(null)
   const [visibleDoc, setVisibleDoc] = useState<string | null>(null)
   const lastDocRef = useRef(doc)
   const canvasRef = useRef<HTMLDivElement>(null)
+  const frameRef = useRef<HTMLDivElement>(null)
   const [canvasScrollable, setCanvasScrollable] = useState(false)
 
   if (doc !== lastDocRef.current) {
@@ -474,21 +561,28 @@ function HtmlFrame({
 
   useEffect(() => {
     const canvas = canvasRef.current
-    if (!canvas || !viewport) {
+    const frameElement = frameRef.current
+    if (!canvas || !frameElement) {
       setCanvasScrollable(false)
       return
     }
 
-    const updateScrollable = () => {
+    const updateSize = () => {
       setCanvasScrollable(
-        canvas.scrollWidth > canvas.clientWidth || canvas.scrollHeight > canvas.clientHeight,
+        viewport !== null &&
+          (canvas.scrollWidth > canvas.clientWidth || canvas.scrollHeight > canvas.clientHeight),
       )
+      onSizeChange({
+        width: Math.max(1, frameElement.clientWidth),
+        height: Math.max(1, frameElement.clientHeight),
+      })
     }
-    updateScrollable()
-    const observer = new ResizeObserver(updateScrollable)
+    updateSize()
+    const observer = new ResizeObserver(updateSize)
     observer.observe(canvas)
+    observer.observe(frameElement)
     return () => observer.disconnect()
-  }, [viewport?.height, viewport?.width])
+  }, [onSizeChange, viewport?.height, viewport?.width])
 
   const reveal = () => {
     setVisibleDoc(doc)
@@ -498,6 +592,7 @@ function HtmlFrame({
 
   const frame = (
     <div
+      ref={frameRef}
       aria-label={viewport ? `${viewport.width} × ${viewport.height} pixel email preview` : undefined}
       className={
         viewport
@@ -513,7 +608,7 @@ function HtmlFrame({
         sandbox=""
         referrerPolicy="no-referrer"
         tabIndex={visibleDoc === doc ? 0 : -1}
-        aria-hidden={visibleDoc === doc ? undefined : "true"}
+        aria-hidden={visibleDoc === doc ? undefined : 'true'}
         onLoad={reveal}
         className={`absolute inset-0 size-full border-0 ${visibleDoc === doc ? 'opacity-100' : 'opacity-0'}`}
       />
