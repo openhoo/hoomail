@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.9 (2026-08-11)
+
+### Bug Fixes
+
+- **viewer:** render safe embedded data images (c074462)
+
 ## 0.8.8 (2026-08-11)
 
 ### Bug Fixes
