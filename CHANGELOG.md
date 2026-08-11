@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.8 (2026-08-11)
+
+### Bug Fixes
+
+- **viewer:** fill fit preview height (686f883)
+
 ## 0.8.7 (2026-08-11)
 
 ### Bug Fixes
