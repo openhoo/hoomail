@@ -2,8 +2,8 @@ package inspect
 
 import (
 	"bytes"
-	"crypto/md5"
-	"crypto/sha1"
+	"crypto/md5"  // #nosec G501 -- MD5 is exposed only as a compatibility checksum.
+	"crypto/sha1" // #nosec G505 -- SHA-1 is exposed only as a compatibility checksum.
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -1915,8 +1915,8 @@ func buildMIMETree(root *mimeparse.Node, raw []byte) *MimeNode {
 		if len(node.Children) == 0 && node.DecodeError == nil {
 			size := len(node.DecodedBody)
 			item.DecodedSize = &size
-			md5Sum := md5.Sum(node.DecodedBody)
-			sha1Sum := sha1.Sum(node.DecodedBody)
+			md5Sum := md5.Sum(node.DecodedBody)   // #nosec G401 -- Compatibility checksum, not a security primitive.
+			sha1Sum := sha1.Sum(node.DecodedBody) // #nosec G401 -- Compatibility checksum, not a security primitive.
 			sha256Sum := sha256.Sum256(node.DecodedBody)
 			item.Checksums = &Checksums{
 				MD5:    hex.EncodeToString(md5Sum[:]),
