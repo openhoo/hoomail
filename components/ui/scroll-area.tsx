@@ -68,29 +68,5 @@ function ScrollArea({
   )
 }
 
-function ScrollBar({
-  className,
-  orientation = "vertical",
-  ...props
-}: JSX.HTMLAttributes<HTMLDivElement> & {
-  orientation?: "horizontal" | "vertical"
-}) {
-  return (
-    <div
-      data-slot="scroll-area-scrollbar"
-      data-orientation={orientation}
-      className={cn(
-        "hidden touch-none p-px transition-colors select-none data-[orientation=horizontal]:h-2.5 data-[orientation=horizontal]:flex-col data-[orientation=horizontal]:border-t data-[orientation=horizontal]:border-t-transparent data-[orientation=vertical]:h-full data-[orientation=vertical]:w-2.5 data-[orientation=vertical]:border-l data-[orientation=vertical]:border-l-transparent",
-        className
-      )}
-      {...props}
-    >
-      <div
-        data-slot="scroll-area-thumb"
-        className="relative flex-1 rounded-full bg-border"
-      />
-    </div>
-  )
-}
 
-export { ScrollArea, ScrollBar }
+export { ScrollArea }

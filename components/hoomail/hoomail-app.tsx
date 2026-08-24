@@ -42,7 +42,7 @@ export function HoomailApp() {
 
   const { mailboxes } = useMailboxes()
   const { messages } = useMessages(selectedMailboxId, searchQuery)
-  const { detail, isLoading: messageLoading } = useMessage(selectedMessageId)
+  const { detail, isLoading: messageLoading, error: messageError } = useMessage(selectedMessageId)
   const { events } = useCalendarEvents(selectedMailboxId, view === 'calendar')
   const openMessageStateRef = useRef({ messages, selectedMailboxId })
   openMessageStateRef.current = { messages, selectedMailboxId }
@@ -87,10 +87,15 @@ export function HoomailApp() {
     },
   })
 
+  // The sidebar stays interactive while a deletion is pending, so long-lived
+  // handlers must compare against the latest selection, not the captured one.
+  const selectedMailboxIdRef = useRef(selectedMailboxId)
+  selectedMailboxIdRef.current = selectedMailboxId
+
   const handleDeleteMailbox = async (id: number) => {
     const ok = await deleteMailboxRequest(id)
     if (!ok) return
-    if (selectedMailboxId === id) {
+    if (selectedMailboxIdRef.current === id) {
       setSelectedMailboxId(null)
       setSelectedMessageId(null)
       setSelectedIds(new Set())
@@ -154,9 +159,11 @@ export function HoomailApp() {
       false
     )
 
-    void runMessageAction('read', [id]).then((ok) => {
-      if (!ok) refreshAfterRead(selectedMailboxId)
-    })
+    void runMessageAction('read', [id])
+      .catch(() => false)
+      .then((ok) => {
+        if (!ok) refreshAfterRead(selectedMailboxId)
+      })
   }, [])
 
   useEffect(() => {
@@ -226,7 +233,7 @@ export function HoomailApp() {
       setSelectedIds(new Set())
     }
 
-    const ok = await runMessageAction(action, ids)
+    const ok = await runMessageAction(action, ids).catch(() => false)
     if (!ok) {
       // Revert the optimistic update by revalidating from the server
       if (selectedMailboxId != null) refreshAfterRead(selectedMailboxId)
@@ -316,7 +323,20 @@ export function HoomailApp() {
       }
 
       if (event.key === 'Delete' || event.key === 'Backspace') {
-        const targets = selectedIds.size > 0 ? [...selectedIds] : selectedMessageId != null ? [selectedMessageId] : []
+        let targets: number[] = []
+        if (selectedIds.size > 0) {
+          targets = [...selectedIds]
+        } else {
+          // Under an active search the roving tab stop can sit on a visible
+          // row other than the hidden opened message; delete what is focused.
+          const focusedId = Number(
+            (document.activeElement as HTMLElement | null)?.closest<HTMLButtonElement>(
+              'button.reactive-message[data-message-id]'
+            )?.dataset.messageId
+          )
+          if (Number.isInteger(focusedId)) targets = [focusedId]
+          else if (selectedMessageId != null) targets = [selectedMessageId]
+        }
         if (targets.length > 0) {
           event.preventDefault()
           handleActionRef.current('delete', targets)
@@ -403,6 +423,7 @@ export function HoomailApp() {
                 attachments={displayedDetail?.attachments ?? []}
                 selectedMessageId={selectedMessageId}
                 isLoading={messageLoading}
+                detailError={messageError}
               />
             </>
           ) : (

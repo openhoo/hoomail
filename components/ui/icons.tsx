@@ -76,22 +76,6 @@ export function ChevronRight(props: IconProps) {
   )
 }
 
-export function ChevronRightIcon(props: IconProps) {
-  return (
-    <BaseIcon {...props}>
-      <path d={"m9 18 6-6-6-6"} />
-    </BaseIcon>
-  )
-}
-
-export function CheckIcon(props: IconProps) {
-  return (
-    <BaseIcon {...props}>
-      <path d={"M20 6 9 17l-5-5"} />
-    </BaseIcon>
-  )
-}
-
 export function Download(props: IconProps) {
   return (
     <BaseIcon {...props}>

@@ -43,12 +43,13 @@ function decodeCssEscapes(value: string): string {
   ))
 }
 
+const SAFE_FRAGMENT_URL_PATTERN = /url\((['"]?)#[a-z_][a-z0-9_.:-]*\1\)/gi
 function hasCssResource(value: string): boolean {
   const normalized = decodeCssEscapes(value)
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/[\u0000-\u0020]+/g, '')
     .toLowerCase()
-  return normalized.includes('url(')
+  return normalized.replace(SAFE_FRAGMENT_URL_PATTERN, '').includes('url(')
     || normalized.includes('@import')
     || normalized.includes('@font-face')
     || normalized.includes('image-set(')
@@ -159,6 +160,18 @@ function bytesToDataURL(bytes: Uint8Array, type: string): string {
   return `data:${type};base64,${btoa(binary)}`
 }
 
+function getRootBackgroundColor(root: Element): string | null {
+  const computed = root.ownerDocument.defaultView?.getComputedStyle(root).backgroundColor ?? ''
+  if (!computed || computed === 'transparent') return null
+  const match = /^(?:rgba|hsla)\(([^)]+)\)$/.exec(computed)
+  if (match) {
+    const components = match[1].split(/[,\s/]+/).filter(Boolean)
+    const alpha = components.length >= 4 ? Number.parseFloat(components[components.length - 1]) : 1
+    if (alpha === 0) return null
+  }
+  return computed
+}
+
 async function isolatedScreenshotDocument(html: string, signal: AbortSignal): Promise<Document> {
   if (html.length > MAX_HTML_BYTES * 2) {
     throw new Error('The email HTML is too large to export safely.')
@@ -219,17 +232,23 @@ async function isolatedScreenshotDocument(html: string, signal: AbortSignal): Pr
     image.src = bytesToDataURL(bytes, type)
   }
 
+  const cidResources = new Map<string, { bytes: Uint8Array; dataUrl: string }>()
   for (const { image, url } of cidImages) {
     throwIfAborted(signal)
-    const response = await fetch(url, { credentials: 'same-origin', redirect: 'error', signal })
-    if (!response.ok) throw new Error('An embedded image could not be loaded for export.')
-    const type = response.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase() ?? ''
-    if (!ALLOWED_IMAGE_TYPES.has(type)) throw new Error('An embedded image has an unsupported media type.')
-    const bytes = await readCappedResponse(response, signal)
-    aggregateBytes += bytes.byteLength
+    let resource = cidResources.get(url.href)
+    if (!resource) {
+      const response = await fetch(url, { credentials: 'same-origin', redirect: 'error', signal })
+      if (!response.ok) throw new Error('An embedded image could not be loaded for export.')
+      const type = response.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase() ?? ''
+      if (!ALLOWED_IMAGE_TYPES.has(type)) throw new Error('An embedded image has an unsupported media type.')
+      const bytes = await readCappedResponse(response, signal)
+      if (!signatureMatches(bytes, type)) throw new Error('An embedded image does not match its declared media type.')
+      resource = { bytes, dataUrl: bytesToDataURL(bytes, type) }
+      cidResources.set(url.href, resource)
+    }
+    aggregateBytes += resource.bytes.byteLength
     if (aggregateBytes > MAX_EMBEDDED_RESOURCE_BYTES) throw new Error('The email contains too many embedded image bytes to export safely.')
-    if (!signatureMatches(bytes, type)) throw new Error('An embedded image does not match its declared media type.')
-    image.src = bytesToDataURL(bytes, type)
+    image.src = resource.dataUrl
   }
 
   parsed.head.insertAdjacentHTML('afterbegin', '<meta http-equiv="Content-Security-Policy" content="default-src &apos;none&apos;; img-src data:; style-src &apos;unsafe-inline&apos;; script-src &apos;none&apos;; object-src &apos;none&apos;; frame-src &apos;none&apos;; connect-src &apos;none&apos;; font-src &apos;none&apos;; media-src &apos;none&apos;">')
@@ -259,6 +278,7 @@ export async function createHtmlScreenshot(
   const iframe = document.createElement('iframe')
   iframe.referrerPolicy = 'no-referrer'
   iframe.setAttribute('aria-hidden', 'true')
+  iframe.tabIndex = -1
   iframe.sandbox.value = 'allow-same-origin'
   iframe.style.cssText = `position:fixed;left:-100000px;top:0;border:0;width:${rasterWidth}px;height:${rasterHeight}px`
   const doctype = rasterDocument.doctype ? `<!DOCTYPE ${rasterDocument.doctype.name}>` : '<!DOCTYPE html>'
@@ -278,7 +298,18 @@ export async function createHtmlScreenshot(
     if (!root) throw new Error('The browser could not prepare the email document for export.')
     await Promise.all([...iframe.contentDocument!.images].map((image) => image.decode().catch(() => undefined)))
     throwIfAborted(signal)
-    const dataURL = await domToPng(root, { width: rasterWidth, height: rasterHeight, scale: 1, backgroundColor: '#fff' })
+    const rootBackgroundColor = getRootBackgroundColor(root)
+    const dataURL = await domToPng(root, {
+      width: rasterWidth,
+      height: rasterHeight,
+      scale: 1,
+      backgroundColor: '#fff',
+      onCloneNode: (clone) => {
+        if (rootBackgroundColor && clone.nodeType === Node.ELEMENT_NODE && clone.nodeName.toLowerCase() === 'html') {
+          (clone as HTMLElement).style.setProperty('background-color', rootBackgroundColor, 'important')
+        }
+      },
+    })
     throwIfAborted(signal)
     const blob = await (await fetch(dataURL, { signal })).blob()
     if (blob.type !== 'image/png' || blob.size === 0) throw new Error('The browser could not create a PNG screenshot.')

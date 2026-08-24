@@ -1,4 +1,5 @@
 import { useAutoAnimate } from '@formkit/auto-animate/preact'
+import { getTransitionSizes, type AutoAnimationPlugin } from '@formkit/auto-animate'
 import { Inbox, RotateCcw, Send, Trash2 } from '@/components/ui/icons'
 import { Button } from '@/components/ui/button'
 import {
@@ -11,6 +12,62 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { AnimatedValue, InlinePresence } from '@/components/ui/reactive'
 import { cn } from '@/lib/utils'
 import { formatRelativeTime, type Mailbox } from './use-hoomail'
+
+/**
+ * AutoAnimate plugin emitting exact-duration ease-out effects for every action.
+ * The library's options path stretches additions to duration * 1.5 with ease-in,
+ * and its built-in reduced-motion guard only covers options, not plugins.
+ */
+function createMotionPlugin(duration: number): AutoAnimationPlugin {
+  return (element, action, previousCoords, currentCoords) => {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      return new KeyframeEffect(element, null, { duration: 0 })
+    }
+    if (action === 'remain') {
+      // For "remain" the library passes (oldCoords, newCoords); FLIP back from
+      // the previous position, mirroring the library's own remain branch.
+      const oldCoords = previousCoords
+      const newCoords = currentCoords
+      if (!oldCoords || !newCoords) return new KeyframeEffect(element, null, { duration: 0 })
+      let deltaLeft = oldCoords.left - newCoords.left
+      let deltaTop = oldCoords.top - newCoords.top
+      const deltaRight = oldCoords.left + oldCoords.width - (newCoords.left + newCoords.width)
+      const deltaBottom = oldCoords.top + oldCoords.height - (newCoords.top + newCoords.height)
+      if (deltaBottom === 0) deltaTop = 0
+      if (deltaRight === 0) deltaLeft = 0
+      const [widthFrom, widthTo, heightFrom, heightTo] = getTransitionSizes(element, oldCoords, newCoords)
+      const from: Keyframe = { transform: `translate(${deltaLeft}px, ${deltaTop}px)` }
+      const to: Keyframe = { transform: 'translate(0px, 0px)' }
+      if (widthFrom !== widthTo) {
+        from.width = `${widthFrom}px`
+        to.width = `${widthTo}px`
+      }
+      if (heightFrom !== heightTo) {
+        from.height = `${heightFrom}px`
+        to.height = `${heightTo}px`
+      }
+      return new KeyframeEffect(element, [from, to], { duration, easing: 'ease-out' })
+    }
+    if (action === 'remove') {
+      return new KeyframeEffect(
+        element,
+        [
+          { transform: 'scale(1)', opacity: 1 },
+          { transform: 'scale(0.98)', opacity: 0 },
+        ],
+        { duration, easing: 'ease-out' },
+      )
+    }
+    return new KeyframeEffect(
+      element,
+      [
+        { transform: 'scale(0.98)', opacity: 0 },
+        { transform: 'scale(1)', opacity: 1 },
+      ],
+      { duration, easing: 'ease-out' },
+    )
+  }
+}
 
 export function MailboxSidebar({
   mailboxes,
@@ -27,7 +84,7 @@ export function MailboxSidebar({
   onOpenSendTest: () => void
   onOpenReset: () => void
 }) {
-  const [mailboxListRef] = useAutoAnimate<HTMLElement>({ duration: 180, easing: 'ease-out' })
+  const [mailboxListRef] = useAutoAnimate<HTMLElement>(createMotionPlugin(220))
   return (
     <aside aria-labelledby="inboxes-heading" className="flex h-full w-72 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
       <header className="flex items-center gap-2.5 border-b border-sidebar-border px-4 py-3.5">

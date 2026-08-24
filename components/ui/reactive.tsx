@@ -52,25 +52,20 @@ export function AnimatedValue({
   children?: ComponentChildren
   className?: string
 }) {
-  const firstRender = useRef(true)
-  const [revision, setRevision] = useState(0)
-  const previous = useRef(value)
-
-  useEffect(() => {
-    if (previous.current !== value) {
-      previous.current = value
-      setRevision((current) => current + 1)
-    }
-    firstRender.current = false
-  }, [value])
+  const state = useRef({ value, revision: 0 })
+  if (state.current.value !== value) {
+    state.current.value = value
+    state.current.revision += 1
+  }
 
   return (
     <span
-      key={revision}
+      key={state.current.revision}
       className={className}
-      data-value-changed={firstRender.current ? undefined : ''}
+      data-value-changed={state.current.revision > 0 ? '' : undefined}
     >
       {children ?? value}
     </span>
   )
+
 }

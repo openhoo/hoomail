@@ -3,7 +3,6 @@ import { useContext, useEffect, useRef, useState } from 'preact/hooks'
 import { createPortal } from 'preact/compat'
 
 import { cn } from '@/lib/utils'
-import { CheckIcon, ChevronRightIcon } from '@/components/ui/icons'
 
 type MenuContextValue = {
   open: boolean
@@ -43,7 +42,7 @@ function ContextMenu({ children }: { children?: ComponentChildren }) {
     }
     setPosition(null)
     if (!restoreFocus || !trigger) return
-    requestAnimationFrame(() => (moveTarget ?? trigger).focus())
+    requestAnimationFrame(() => (moveTarget ?? trigger).focus({ preventScroll: true }))
   }
   return (
     <MenuContext.Provider
@@ -100,6 +99,11 @@ function ContextMenuContent({ className, children, ...props }: JSX.HTMLAttribute
   useEffect(() => {
     if (!open) return
     const dismiss = () => close(false)
+    const dismissOutside = (event: Event) => {
+      const target = event.target
+      if (target instanceof Node && ref.current?.contains(target)) return
+      close()
+    }
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault()
@@ -126,11 +130,17 @@ function ContextMenuContent({ className, children, ...props }: JSX.HTMLAttribute
     window.addEventListener('pointerdown', dismiss)
     window.addEventListener('blur', dismiss)
     window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('scroll', dismissOutside, true)
+    window.addEventListener('wheel', dismissOutside)
+    window.addEventListener('resize', dismiss)
     requestAnimationFrame(() => ref.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus())
     return () => {
       window.removeEventListener('pointerdown', dismiss)
       window.removeEventListener('blur', dismiss)
       window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('scroll', dismissOutside, true)
+      window.removeEventListener('wheel', dismissOutside)
+      window.removeEventListener('resize', dismiss)
     }
   }, [open])
 
@@ -183,30 +193,12 @@ function ContextMenuSeparator({ className, ...props }: JSX.HTMLAttributes<HTMLDi
   return <div role="separator" data-slot="context-menu-separator" className={cn('-mx-1 my-1 h-px bg-border', className)} {...props} />
 }
 
-function ContextMenuGroup(props: JSX.HTMLAttributes<HTMLDivElement>) { return <div role="group" {...props} /> }
-function ContextMenuLabel({ className, ...props }: JSX.HTMLAttributes<HTMLDivElement>) { return <div className={cn('px-1.5 py-1 text-xs font-medium text-muted-foreground', className)} {...props} /> }
-function ContextMenuShortcut({ className, ...props }: JSX.HTMLAttributes<HTMLSpanElement>) { return <span className={cn('ml-auto text-xs tracking-widest text-muted-foreground', className)} {...props} /> }
-function ContextMenuCheckboxItem({ checked, children, ...props }: JSX.ButtonHTMLAttributes<HTMLButtonElement> & { checked?: boolean }) { return <ContextMenuItem {...props}>{children}{checked && <CheckIcon className="ml-auto" />}</ContextMenuItem> }
-function ContextMenuRadioItem(props: JSX.ButtonHTMLAttributes<HTMLButtonElement>) { return <ContextMenuItem {...props} /> }
-function ContextMenuRadioGroup(props: JSX.HTMLAttributes<HTMLDivElement>) { return <div role="group" {...props} /> }
-function ContextMenuSub({ children }: { children?: ComponentChildren }) { return <>{children}</> }
-function ContextMenuSubTrigger({ children, ...props }: JSX.ButtonHTMLAttributes<HTMLButtonElement>) { return <ContextMenuItem {...props}>{children}<ChevronRightIcon className="ml-auto" /></ContextMenuItem> }
-function ContextMenuSubContent(props: JSX.HTMLAttributes<HTMLDivElement>) { return <div {...props} /> }
 
 export {
   ContextMenu,
   ContextMenuTrigger,
   ContextMenuContent,
   ContextMenuItem,
-  ContextMenuCheckboxItem,
-  ContextMenuRadioItem,
-  ContextMenuLabel,
   ContextMenuSeparator,
-  ContextMenuShortcut,
-  ContextMenuGroup,
   ContextMenuPortal,
-  ContextMenuSub,
-  ContextMenuSubContent,
-  ContextMenuSubTrigger,
-  ContextMenuRadioGroup,
 }

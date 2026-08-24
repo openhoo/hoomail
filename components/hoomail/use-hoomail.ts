@@ -195,6 +195,7 @@ async function fetchInto<T>(key: string, fetcher: (key: string) => Promise<T>, f
       current.revalidateAfter = false
       void fetchInto(key, fetcher)
     }
+    trimInspectionCache()
   })
   current.promise = promise
   current.listeners.forEach((listener) => listener())
@@ -232,13 +233,18 @@ export function useCachedResource<T>(key: string | null, fetcher: (key: string) 
   const previous = useRef<T | undefined>(undefined)
   const current = key ? entry(key) : null
   const data = current?.data as T | undefined
-  if (data !== undefined) previous.current = data
+  const error = current?.error
+  if (key === null) previous.current = undefined
+  else if (data !== undefined) previous.current = data
 
   useEffect(() => {
     if (!key) return
     const current = entry(key)
     const listener = () => render((value) => value + 1)
     current.listeners.add(listener)
+    // A fetch can settle between the render-time snapshot and this subscription;
+    // re-render if the snapshot changed so that late notification is not lost.
+    if (current.data !== data || current.error !== error) render((value) => value + 1)
     if (current.data === undefined && !current.promise) void fetchInto(key, fetcher)
     return () => {
       current.listeners.delete(listener)
@@ -249,7 +255,7 @@ export function useCachedResource<T>(key: string | null, fetcher: (key: string) 
 
   return {
     data: data ?? (keepPreviousData ? previous.current : undefined),
-    error: current?.error,
+    error,
     isLoading: Boolean(key && data === undefined && (current?.promise || !current?.error)),
   }
 }
@@ -260,9 +266,9 @@ const jsonFetcher = async <T,>(url: string): Promise<T> => {
   return response.json()
 }
 
-export function useMailboxes() { const { data, isLoading } = useCachedResource<{ mailboxes: Mailbox[] }>('/api/mailboxes'); return { mailboxes: data?.mailboxes ?? [], isLoading } }
-export function useMessages(mailboxId: number | null, query?: string) { const q = query?.trim(); const key = mailboxId == null ? null : `/api/mailboxes/${mailboxId}/messages${q ? `?q=${encodeURIComponent(q)}` : ''}`; const { data, isLoading } = useCachedResource<{ messages: MessageListItem[] }>(key, jsonFetcher); return { messages: mailboxId == null ? [] : data?.messages ?? [], isLoading } }
-export function useCalendarEvents(mailboxId: number | null, enabled: boolean) { const { data, isLoading } = useCachedResource<{ events: CalendarEvent[] }>(enabled && mailboxId != null ? `/api/mailboxes/${mailboxId}/events` : null); return { events: data?.events ?? [], isLoading } }
+export function useMailboxes() { const { data, error, isLoading } = useCachedResource<{ mailboxes: Mailbox[] }>('/api/mailboxes'); return { mailboxes: data?.mailboxes ?? [], isLoading, error: error ?? null } }
+export function useMessages(mailboxId: number | null, query?: string) { const q = query?.trim(); const key = mailboxId == null ? null : `/api/mailboxes/${mailboxId}/messages${q ? `?q=${encodeURIComponent(q)}` : ''}`; const { data, error, isLoading } = useCachedResource<{ messages: MessageListItem[] }>(key, jsonFetcher); return { messages: mailboxId == null ? [] : data?.messages ?? [], isLoading, error: error ?? null } }
+export function useCalendarEvents(mailboxId: number | null, enabled: boolean) { const { data, error, isLoading } = useCachedResource<{ events: CalendarEvent[] }>(enabled && mailboxId != null ? `/api/mailboxes/${mailboxId}/events` : null); return { events: data?.events ?? [], isLoading, error: error ?? null } }
 export function useInspection(messageId: number | null, enabled: boolean) {
   const key = enabled && messageId != null ? `/api/messages/${messageId}/inspect` : null
   const { data, error, isLoading } = useCachedResource<InspectionReport>(key)
@@ -271,10 +277,15 @@ export function useInspection(messageId: number | null, enabled: boolean) {
   }, [key])
   return { inspection: data ?? null, isLoading, error: error ?? null, retry }
 }
-export function useMessage(messageId: number | null) { const { data, isLoading } = useCachedResource<{ message: FullMessage; attachments: AttachmentMeta[] }>(messageId != null ? `/api/messages/${messageId}` : null, jsonFetcher, true); return messageId == null ? { detail: null, isLoading: false } : { detail: data ?? null, isLoading } }
+export function useMessage(messageId: number | null) { const { data, error, isLoading } = useCachedResource<{ message: FullMessage; attachments: AttachmentMeta[] }>(messageId != null ? `/api/messages/${messageId}` : null, jsonFetcher, true); return messageId == null ? { detail: null, isLoading: false, error: null } : { detail: data ?? null, isLoading, error: error ?? null } }
 
 export async function runMessageAction(action: 'delete' | 'read' | 'unread', ids: number[]) { return (await fetch('/api/messages/actions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, ids }) })).ok }
 export async function deleteMailboxRequest(id: number) { return (await fetch(`/api/mailboxes/${id}`, { method: 'DELETE' })).ok }
+
+// ID-keyed resources invalidated together after a reset or SSE reconnect, since numeric IDs may be reused.
+function matchesIdKeyedResource(key: string) {
+  return /^\/api\/mailboxes\/\d+\/(?:messages|events)(?:\?|$)/.test(key) || /^\/api\/messages\/\d+(?:\/(?:inspect|source))?$/.test(key) || /^\/api\/attachments\/[^/?]+(?:\?.*)?$/.test(key)
+}
 
 export function useRealtime(options: { selectedMailboxId: number | null; onReset: () => void; onNewMailbox?: (mailbox: { id: number; address: string }) => void; onMailboxDeleted?: (mailboxId: number) => void }) {
   const optionsRef = useRef(options)
@@ -287,6 +298,14 @@ export function useRealtime(options: { selectedMailboxId: number | null; onReset
       const { onReset, onNewMailbox, onMailboxDeleted } = optionsRef.current
       const mailboxId = payload.mailboxId as number
       switch (payload.type) {
+        case 'connected':
+          // The stream is best-effort and non-replayable: after every (re)connect,
+          // discard ID-keyed caches that may have missed events, refetch what is
+          // currently displayed, and revalidate the mailbox list in place.
+          mutateCache(matchesIdKeyedResource, () => undefined, false)
+          mutateCache((key) => matchesIdKeyedResource(key) && (cache.get(key)?.listeners.size ?? 0) > 0)
+          mutateCache('/api/mailboxes')
+          break
         case 'mailbox:new': mutateCache('/api/mailboxes'); onNewMailbox?.(payload.mailbox as { id: number; address: string }); break
         case 'mailbox:deleted': mutateCache('/api/mailboxes'); onMailboxDeleted?.(mailboxId); break
         case 'message:new':
@@ -297,12 +316,10 @@ export function useRealtime(options: { selectedMailboxId: number | null; onReset
           break
         case 'calendar:changed': mutateCache(`/api/mailboxes/${mailboxId}/events`); break
         case 'reset':
-          mutateCache('/api/mailboxes')
-          mutateCache(
-            (key) => /^\/api\/mailboxes\/\d+\/(?:messages|events)(?:\?|$)/.test(key) || /^\/api\/messages\/\d+(?:\/(?:inspect|source))?$/.test(key) || /^\/api\/attachments\/[^/?]+(?:\?.*)?$/.test(key),
-            () => undefined,
-            false,
-          )
+          // Clear mailbox data before revalidating so the app cannot observe or
+          // auto-select a just-deleted mailbox from stale state mid-refresh.
+          mutateCache<{ mailboxes: Mailbox[] }>('/api/mailboxes', () => undefined)
+          mutateCache(matchesIdKeyedResource, () => undefined, false)
           onReset()
           break
       }

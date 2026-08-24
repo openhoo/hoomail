@@ -16,6 +16,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { InviteCard } from './invite-card'
 import {
   formatBytes,
+  mutateCache,
   type AttachmentMeta,
   type FullMessage,
   useCachedResource,
@@ -73,14 +74,16 @@ export function MessageViewer({
   attachments,
   selectedMessageId,
   isLoading,
+  detailError,
 }: {
   message: FullMessage | null
   attachments: AttachmentMeta[]
   selectedMessageId: number | null
   isLoading: boolean
+  detailError?: unknown
 }) {
   const htmlDoc = useMemo(() => {
-    if (!message?.html) return null
+    if (message?.html == null) return null
     const prefix = iframeDocumentPrefix()
     const hasHead = /<head[\s>]/i.test(message.html)
     if (hasHead) {
@@ -92,7 +95,7 @@ export function MessageViewer({
   // Choose the new message's default tab during the same render. Updating the
   // controlled state only after render briefly exposes the previous `text`
   // tab on the first HTML email, which produces a visible one-frame flash.
-  const defaultTab = htmlDoc ? 'html' : message?.text ? 'text' : 'source'
+  const defaultTab = htmlDoc != null ? 'html' : message?.text != null ? 'text' : 'source'
   const [tab, setTab] = useState(defaultTab)
   const [tabMessageId, setTabMessageId] = useState(message?.id ?? null)
   const messageChanged = message != null && message.id !== tabMessageId
@@ -112,8 +115,8 @@ export function MessageViewer({
   const [screenshotState, setScreenshotState] = useState<'idle' | 'loading' | 'error'>('idle')
   const screenshotMountedRef = useRef(true)
   const screenshotOperationRef = useRef(0)
-  const latestMessageIdRef = useRef<number | null>(message?.id ?? null)
-  latestMessageIdRef.current = message?.id ?? null
+  const latestMessageIdRef = useRef<number | null>(selectedMessageId)
+  latestMessageIdRef.current = selectedMessageId
   const screenshotAbortRef = useRef<AbortController | null>(null)
   const previewViewport = viewportPreset === 'fit' ? null : viewport
   useEffect(() => {
@@ -129,7 +132,7 @@ export function MessageViewer({
     screenshotAbortRef.current = null
     screenshotOperationRef.current += 1
     setScreenshotState('idle')
-  }, [message?.id])
+  }, [selectedMessageId])
   const selectViewportPreset = (preset: ViewportPreset) => {
     setViewportPreset(preset)
     const selected = VIEWPORT_PRESETS.find((candidate) => candidate.id === preset)
@@ -150,8 +153,11 @@ export function MessageViewer({
     setViewportPreset('custom')
   }
   const selectedDetailPending = selectedMessageId != null && message?.id !== selectedMessageId
+  const retrySelected = useCallback(() => {
+    if (selectedMessageId != null) mutateCache(`/api/messages/${selectedMessageId}`)
+  }, [selectedMessageId])
   const handleDownloadScreenshot = useCallback(async () => {
-    if (!message?.html || screenshotState === 'loading') return
+    if (isLoading || selectedDetailPending || message?.html == null || screenshotState === 'loading') return
     const operation = screenshotOperationRef.current + 1
     screenshotOperationRef.current = operation
     const controller = new AbortController()
@@ -179,28 +185,40 @@ export function MessageViewer({
         !screenshotMountedRef.current
         || controller.signal.aborted
         || screenshotOperationRef.current !== operation
+        || latestMessageIdRef.current !== messageId
       ) return
       setScreenshotState('error')
     } finally {
       if (screenshotAbortRef.current === controller) screenshotAbortRef.current = null
     }
-  }, [message?.html, message?.id, screenshotSize.height, screenshotSize.width, screenshotState])
-  const detailReady = !selectedDetailPending && (!htmlDoc || readyMessageId === message?.id)
+  }, [isLoading, message?.html, message?.id, selectedDetailPending, screenshotSize.height, screenshotSize.width, screenshotState])
+  const detailReady = !isLoading && !selectedDetailPending && (htmlDoc == null || readyMessageId === message?.id)
   const markHtmlReady = useCallback(() => {
     if (message) setReadyMessageId(message.id)
   }, [message?.id])
 
   useEffect(() => {
-    if (!messageChanged || !message) return
+    if (!message) {
+      setTabMessageId(null)
+      setReadyMessageId(null)
+      return
+    }
+    if (!messageChanged) return
     setTabMessageId(message.id)
     setTab(defaultTab)
     setReadyMessageId(null)
   }, [defaultTab, message, messageChanged])
+  const switchFailed = detailError != null && selectedDetailPending
+  const contentReady = detailReady && !switchFailed
+
 
   if (!message) {
+    const loadFailed = detailError != null && selectedMessageId != null
     return (
       <section aria-label="Message viewer" aria-live="polite" className="flex min-w-0 flex-1 flex-col items-center justify-center gap-4 bg-background">
-        {isLoading || selectedMessageId != null ? (
+        {loadFailed ? (
+          <MessageLoadError onRetry={retrySelected} />
+        ) : isLoading || selectedMessageId != null ? (
           <p role="status" className="text-sm text-muted-foreground">Loading message…</p>
         ) : (
           <>
@@ -225,13 +243,18 @@ export function MessageViewer({
   return (
     <section
       aria-label="Message viewer"
-      aria-busy={!detailReady || undefined}
+      aria-busy={!contentReady || undefined}
       className="relative flex min-w-0 flex-1 flex-col bg-background"
     >
       <span role="status" aria-live="polite" className="sr-only">
-        {detailReady ? `Message loaded: ${message.subject || 'no subject'}` : 'Loading message'}
+        {switchFailed
+          ? 'Could not load message.'
+          : contentReady
+            ? `Message loaded: ${message.subject || 'no subject'}`
+            : 'Loading message'}
       </span>
-      <header className="shrink-0 border-b border-border px-5 py-4">
+      <div className={`flex min-h-0 min-w-0 flex-1 flex-col ${contentReady ? 'visible' : 'invisible'}`}>
+        <header className="shrink-0 border-b border-border px-5 py-4">
         <h2 className="text-lg font-semibold leading-snug text-balance">
           {message.subject || '(no subject)'}
         </h2>
@@ -286,10 +309,10 @@ export function MessageViewer({
       >
         <div className="shrink-0 border-b border-border px-5 py-2">
           <TabsList className="h-8">
-            <TabsTrigger value="html" disabled={!htmlDoc} className="text-xs">
+            <TabsTrigger value="html" disabled={htmlDoc == null} className="text-xs">
               HTML
             </TabsTrigger>
-            <TabsTrigger value="text" disabled={!message.text} className="text-xs">
+            <TabsTrigger value="text" disabled={message.text == null} className="text-xs">
               Plain text
             </TabsTrigger>
             <TabsTrigger value="source" className="text-xs">
@@ -312,6 +335,7 @@ export function MessageViewer({
                 onRotate={rotateViewport}
                 onDownload={handleDownloadScreenshot}
                 downloadState={screenshotState}
+                downloadDisabled={isLoading || selectedDetailPending}
               />
               <HtmlFrame
                 doc={htmlDoc}
@@ -326,7 +350,7 @@ export function MessageViewer({
         <TabsContent value="text" className="min-h-0 flex-1 data-[state=inactive]:hidden">
           <ScrollArea className="h-full" aria-label="Plain text message">
             <pre className="whitespace-pre-wrap px-5 py-4 font-mono text-sm leading-relaxed">
-              {message.text || 'No plain text part.'}
+              {message.text ?? 'No plain text part.'}
             </pre>
           </ScrollArea>
         </TabsContent>
@@ -361,9 +385,31 @@ export function MessageViewer({
           {activeTab === 'inspect' && <InspectPanel messageId={message.id} active />}
         </TabsContent>
       </Tabs>
+      </div>
+      {!contentReady && (
+        <div
+          className="absolute inset-0 z-10 flex items-center justify-center bg-background"
+          role={switchFailed ? 'alert' : 'status'}
+        >
+          {switchFailed ? (
+            <MessageLoadError onRetry={retrySelected} />
+          ) : (
+            <p className="text-sm text-muted-foreground">Loading message…</p>
+          )}
+        </div>
+      )}
     </section>
   )
 }
+function MessageLoadError({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="flex max-w-xs flex-col items-center gap-3 text-center">
+      <p className="text-sm text-destructive">Could not load message.</p>
+      <Button type="button" size="sm" variant="outline" onClick={onRetry}>Retry</Button>
+    </div>
+  )
+}
+
 
 function ViewportToolbar({
   preset,
@@ -373,6 +419,7 @@ function ViewportToolbar({
   onRotate,
   onDownload,
   downloadState,
+  downloadDisabled,
 }: {
   preset: ViewportPreset
   viewport: ViewportSize
@@ -381,6 +428,7 @@ function ViewportToolbar({
   onRotate: () => void
   onDownload: () => void
   downloadState: 'idle' | 'loading' | 'error'
+  downloadDisabled: boolean
 }) {
   const dimensionFieldClass =
     'h-7 w-[4.5rem] rounded-md border border-input bg-background px-2 text-center font-mono text-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40'
@@ -411,7 +459,7 @@ function ViewportToolbar({
         size="sm"
         aria-label="Download HTML screenshot"
         aria-busy={downloadState === 'loading' || undefined}
-        disabled={downloadState === 'loading'}
+        disabled={downloadDisabled || downloadState === 'loading'}
         onClick={onDownload}
       >
         <Download className="size-3.5" aria-hidden="true" />
@@ -620,6 +668,7 @@ function HtmlFrame({
           sandbox=""
           referrerPolicy="no-referrer"
           tabIndex={-1}
+          aria-hidden="true"
           className="absolute inset-0 size-full border-0"
         />
       )}
@@ -661,7 +710,7 @@ function AttachmentChip({ attachment }: { attachment: AttachmentMeta }) {
   const chipIcon =
     previewKind === 'image' ? (
       <img
-        src={url || "/placeholder.svg"}
+        src={url}
         alt=""
         aria-hidden="true"
         className="size-5 shrink-0 rounded-sm border border-border bg-checkerboard object-cover"
@@ -719,11 +768,16 @@ function AttachmentChip({ attachment }: { attachment: AttachmentMeta }) {
               </span>
             </DialogTitle>
           </DialogHeader>
-          <div className="min-h-0 flex-1 overflow-auto rounded-md border border-border bg-card">
+          <div
+            className="min-h-0 flex-1 overflow-auto rounded-md border border-border bg-card"
+            tabIndex={0}
+            role="region"
+            aria-label={`${name} attachment preview`}
+          >
             {previewKind === 'image' && (
               <div className="flex min-h-48 items-center justify-center bg-checkerboard p-4">
                 {/* Served from our own API; dimensions are unknown. */}
-                <img src={url || "/placeholder.svg"} alt={name} className="max-h-[62vh] max-w-full object-contain" />
+                <img src={url} alt={name} className="max-h-[62vh] max-w-full object-contain" />
               </div>
             )}
             {previewKind === 'text' && <TextPreview url={url} active={open} />}
@@ -740,12 +794,50 @@ const textFetcher = (url: string) =>
     return r.text()
   })
 
+const TEXT_PREVIEW_CHAR_LIMIT = 100_000
+type TextPreviewPayload = { text: string; truncated: boolean }
+
+const previewTextFetcher = async (url: string): Promise<TextPreviewPayload> => {
+  const response = await fetch(url)
+  if (!response.ok) throw new Error('failed')
+  if (!response.body) {
+    const text = await response.text()
+    return {
+      text: text.slice(0, TEXT_PREVIEW_CHAR_LIMIT),
+      truncated: text.length > TEXT_PREVIEW_CHAR_LIMIT,
+    }
+  }
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let text = ''
+  let truncated = false
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    text += decoder.decode(value, { stream: true })
+    if (text.length >= TEXT_PREVIEW_CHAR_LIMIT) {
+      text = text.slice(0, TEXT_PREVIEW_CHAR_LIMIT)
+      truncated = true
+      void reader.cancel().catch(() => {})
+      break
+    }
+  }
+  return { text, truncated }
+}
+
 function TextPreview({ url, active }: { url: string; active: boolean }) {
-  const { data, error } = useCachedResource<string>(active ? url : null, textFetcher)
+  const { data, error } = useCachedResource<TextPreviewPayload>(active ? url : null, previewTextFetcher)
   return (
-    <pre className="whitespace-pre-wrap p-4 font-mono text-xs leading-relaxed">
-      {error ? 'Could not load preview.' : (data?.slice(0, 100_000) ?? 'Loading…')}
-    </pre>
+    <>
+      <pre className="whitespace-pre-wrap p-4 font-mono text-xs leading-relaxed">
+        {error ? 'Could not load preview.' : (data?.text ?? 'Loading…')}
+      </pre>
+      {data?.truncated && (
+        <p className="px-4 pb-3 text-xs text-muted-foreground">
+          Preview limited to the first 100,000 characters.
+        </p>
+      )}
+    </>
   )
 }
 

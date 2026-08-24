@@ -1,4 +1,4 @@
-import { useRef, useState } from 'preact/hooks'
+import { useEffect, useRef, useState } from 'preact/hooks'
 import { Loader2, RotateCcw, Send } from '@/components/ui/icons'
 import { Button } from '@/components/ui/button'
 import {
@@ -25,10 +25,30 @@ export function SendTestDialog({
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const sendingRef = useRef(false)
+  const sendControllerRef = useRef<AbortController | null>(null)
+  const sendGeneration = useRef(0)
+
+  useEffect(() => {
+    return () => {
+      sendGeneration.current += 1
+      sendControllerRef.current?.abort()
+    }
+  }, [])
+  useEffect(() => {
+    if (!open) {
+      sendGeneration.current += 1
+      sendControllerRef.current?.abort()
+      sendingRef.current = false
+      setSending(false)
+    }
+  }, [open])
 
   const send = async () => {
     if (sendingRef.current) return
     sendingRef.current = true
+    const generation = ++sendGeneration.current
+    const controller = new AbortController()
+    sendControllerRef.current = controller
     setSending(true)
     setError(null)
     try {
@@ -36,17 +56,22 @@ export function SendTestDialog({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ to, subject, kind }),
+        signal: controller.signal,
       })
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
         throw new Error(data.error || 'Send failed')
       }
+      if (controller.signal.aborted || sendGeneration.current !== generation) return
       onOpenChange(false)
     } catch (err) {
+      if (controller.signal.aborted || sendGeneration.current !== generation) return
       setError(err instanceof Error ? err.message : 'Send failed')
     } finally {
+      if (sendGeneration.current !== generation) return
       setSending(false)
       sendingRef.current = false
+      if (sendControllerRef.current === controller) sendControllerRef.current = null
     }
   }
 
@@ -187,21 +212,43 @@ export function ResetDialog({
 }) {
   const [resetting, setResetting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const resetControllerRef = useRef<AbortController | null>(null)
+  const resetGeneration = useRef(0)
+  useEffect(() => {
+    return () => {
+      resetGeneration.current += 1
+      resetControllerRef.current?.abort()
+    }
+  }, [])
+  useEffect(() => {
+    if (!open) {
+      resetGeneration.current += 1
+      resetControllerRef.current?.abort()
+      setResetting(false)
+    }
+  }, [open])
 
   const reset = async () => {
+    const generation = ++resetGeneration.current
+    const controller = new AbortController()
+    resetControllerRef.current = controller
     setResetting(true)
     setError(null)
     try {
-      const response = await fetch('/api/reset', { method: 'POST' })
+      const response = await fetch('/api/reset', { method: 'POST', signal: controller.signal })
       if (!response.ok) {
         const data = await response.json().catch(() => ({}))
         throw new Error(data.error || 'Reset failed')
       }
+      if (controller.signal.aborted || resetGeneration.current !== generation) return
       onOpenChange(false)
     } catch (err) {
+      if (controller.signal.aborted || resetGeneration.current !== generation) return
       setError(err instanceof Error ? err.message : 'Reset failed')
     } finally {
+      if (resetGeneration.current !== generation) return
       setResetting(false)
+      if (resetControllerRef.current === controller) resetControllerRef.current = null
     }
   }
 

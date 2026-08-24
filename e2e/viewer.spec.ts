@@ -252,8 +252,18 @@ test('switching plain to invite and back restores HTML without stale invite cont
 
 test('HTML preview applies its canvas while preserving sender content styling and privacy', async ({ page }) => {
   const remoteRequests: string[] = []
+  // Whole-lifecycle recorders: track every HTTP(S) page request plus everything
+  // originating inside the sandboxed preview document (about:srcdoc).
+  // data:/blob: loads never reach the network layer, so validated CID
+  // attachment requests are the only traffic allowed out of the email frame.
+  const allHttpRequests: string[] = []
+  const previewFrameRequests: string[] = []
   page.on('request', (request) => {
-    if (request.url().includes('remote.invalid')) remoteRequests.push(request.url())
+    const url = request.url()
+    if (!url.startsWith('http://') && !url.startsWith('https://')) return
+    allHttpRequests.push(url)
+    if (request.frame().url() === 'about:srcdoc') previewFrameRequests.push(url)
+    if (url.includes('remote.invalid')) remoteRequests.push(url)
   })
 
   const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
@@ -366,6 +376,15 @@ test('HTML preview applies its canvas while preserving sender content styling an
     cellPadding: '7px',
   })
   const appOrigin = new URL(page.url()).origin
+  const isCidAttachmentURL = (url: URL): boolean => (
+    url.origin === appOrigin
+    && /^\/api\/attachments\/[1-9]\d*$/.test(url.pathname)
+    && url.search === '?inline=cid'
+  )
+  const previewURLs = previewFrameRequests.map((value) => new URL(value))
+  expect(previewURLs.filter((url) => !isCidAttachmentURL(url))).toEqual([])
+  expect(previewURLs.filter((url) => isCidAttachmentURL(url))).toHaveLength(3)
+
   const previewMetrics = await frame.locator('html').evaluate((root) => ({
     width: root.clientWidth,
     height: root.clientHeight,
@@ -443,6 +462,9 @@ test('HTML preview applies its canvas while preserving sender content styling an
   ))
   expect(unexpectedRequests.map((url) => url.href)).toEqual([])
   expect(remoteRequests).toEqual([])
+  const finalPreviewURLs = previewFrameRequests.map((value) => new URL(value))
+  expect(finalPreviewURLs.filter((url) => !isCidAttachmentURL(url))).toEqual([])
+  expect(allHttpRequests.filter((value) => new URL(value).pathname === '/api/reset')).toEqual([])
 
   for (const name of ['report.pdf', 'active.svg']) {
     await expect(page.getByRole('link', { name: `Download ${name}` })).toBeVisible()

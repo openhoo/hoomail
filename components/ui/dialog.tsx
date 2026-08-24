@@ -90,27 +90,6 @@ function renderButton(
   return cloneElement(render, { ...render.props, ...props }, children)
 }
 
-function DialogTrigger({ render, children, onClick, ...props }: RenderableButtonProps) {
-  const { open, setOpen, contentId, triggerRef } = useDialogContext()
-  const triggerProps: JSX.ButtonHTMLAttributes<HTMLButtonElement> = {
-    type: "button",
-    "aria-haspopup": "dialog",
-    "aria-expanded": open,
-    "aria-controls": contentId,
-    ...props,
-    ref: (node) => {
-      triggerRef.current = node
-      const ref = props.ref
-      if (typeof ref === "function") ref(node)
-      else if (ref && typeof ref === "object") ref.current = node
-    },
-    onClick: (event) => {
-      onClick?.(event)
-      if (!event.defaultPrevented) setOpen(true)
-    },
-  }
-  return renderButton(render, triggerProps, children)
-}
 
 type DialogPortalProps = {
   children?: ComponentChildren
@@ -192,12 +171,20 @@ function DialogContent({
 
     const content = contentRef.current
     const firstFocusable = content?.querySelector<HTMLElement>(focusableSelector)
-    ;(firstFocusable ?? content)?.focus()
+    ;(firstFocusable ?? content)?.focus({ preventScroll: true })
+    const onFocusIn = (event: FocusEvent) => {
+      const currentContent = contentRef.current
+      if (!currentContent || !(event.target instanceof Node) || currentContent.contains(event.target)) return
+      const focusTarget = currentContent.querySelector<HTMLElement>(focusableSelector) ?? currentContent
+      focusTarget.focus({ preventScroll: true })
+    }
+    document.addEventListener("focusin", onFocusIn)
 
     return () => {
+      document.removeEventListener("focusin", onFocusIn)
       document.body.style.overflow = previousOverflow
       const focusTarget = triggerRef.current ?? previousActiveElement
-      focusTarget?.focus()
+      focusTarget?.focus({ preventScroll: true })
     }
   }, [open, triggerRef])
 
@@ -344,5 +331,4 @@ export {
   DialogOverlay,
   DialogPortal,
   DialogTitle,
-  DialogTrigger,
 }
