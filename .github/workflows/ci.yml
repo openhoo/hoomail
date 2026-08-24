@@ -87,11 +87,17 @@ jobs:
       - name: Install Chromium
         run: bun x playwright install --with-deps chromium
 
+      - name: Derive E2E ports
+        run: |
+          set -euo pipefail
+          base=$((16384 + (((GITHUB_RUN_ID * 2 + GITHUB_RUN_ATTEMPT) % 7000) * 2)))
+          {
+            echo "HOOMAIL_E2E_HTTP_PORT=$base"
+            echo "HOOMAIL_E2E_SMTP_PORT=$((base + 1))"
+            echo "HOOMAIL_E2E_POP3_PORT=$((base + 2))"
+          } >> "$GITHUB_ENV"
+
       - name: Test
-        env:
-          HOOMAIL_E2E_HTTP_PORT: ${{ 16384 + ((github.run_id * 2 + github.run_attempt) % 7000) * 2 }}
-          HOOMAIL_E2E_SMTP_PORT: ${{ 16385 + ((github.run_id * 2 + github.run_attempt) % 7000) * 2 }}
-          HOOMAIL_E2E_POP3_PORT: ${{ 16386 + ((github.run_id * 2 + github.run_attempt) % 7000) * 2 }}
         run: bun run test:e2e
 
       - name: Upload Playwright artifacts
