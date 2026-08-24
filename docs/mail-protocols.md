@@ -45,7 +45,7 @@ Hoomail parses all `To`, `Cc`, and `From` header address lists for display and i
 - The SMTP `MAIL FROM` address is used as the displayed sender only when no usable `From` header address exists.
 - An empty SMTP reverse path and no usable `From` header leave the displayed sender unset.
 - Delivery remains controlled by `RCPT TO`, independently of `From`, `To`, and `Cc` headers.
-- The complete SMTP `DATA` payload is retained as raw source. Parsed inspection headers use lowercase map keys and one value per field name; when a header is repeated, the last occurrence is retained in that parsed map. The raw source still contains every occurrence.
+- The complete SMTP `DATA` payload is retained as raw source. Parsed message detail exposes headers through a stored lowercase map with one value per field name; when a header is repeated, the last occurrence wins in that map. Inspection reports instead list every raw header field in wire order, preserving original field-name case and recording each value with its per-name occurrence ordinal and raw-source line number. The raw source still contains every occurrence.
 
 ### Message-size limit
 

@@ -137,7 +137,7 @@ HTML and Plain text are disabled when that body part is absent. On each newly op
 2. Plain text, when HTML is absent; or
 3. Source, when neither body representation is available.
 
-The **Source** tab shows captured header values labeled as raw headers. It is not a complete raw MIME-message viewer. If no captured headers are present, it shows **No headers captured.**
+The **Source** tab lazily fetches `GET /api/messages/{id}/source` when activated and renders the complete stored RFC 822 message—every header and body byte—under a **raw message** badge. It shows **Loading raw message…** while the fetch runs, **Could not load raw message.** on failure, and **Raw message unavailable.** when the stored source is empty. Fetching the source never marks the message read and emits no event.
 
 All enabled tab buttons participate in normal sequential Tab navigation. The tab list also supports:
 
@@ -190,7 +190,7 @@ Partial analysis remains useful: completed prefix structures and available findi
 
 The panel always states: **Static offline analysis. Authentication, delivery, and unsubscribe endpoints are not verified.** Inspection performs no DNS, endpoint, reputation, SMTP-transport, delivery, or external-resource verification. Opening a displayed external destination is a separate user action that contacts that destination in a new tab with opener isolation.
 
-If the request fails, the panel stops loading and renders the alert **Could not analyze this message.** with the action **Retry analysis**. Retrying clears stale report/error state, shows **Analyzing message…** again, and then either displays the new report with **Message analysis complete** or returns to the alert. Switching messages uses the new message's independent loading, error, and report state; a previous message's inspection is not retained.
+If the request fails, the panel stops loading and renders the alert **Could not analyze this message.** with the action **Retry analysis**. Retrying clears stale report/error state, shows **Analyzing message…** again, and then either displays the new report with **Message analysis complete** or returns to the alert. Switching messages uses the new message's independent loading, error, and report state; completed reports for recently viewed messages may be reused from the bounded client-side cache (up to eight inactive entries) and are always refreshed after Retry analysis, cache eviction, a server reset, or a page reload — direct API requests always run a fresh analysis.
 
 Report enums are versioned and normally closed. If a newer backend supplies an outcome, severity, basis, applicability, category, evidence source, or resource kind the current interface does not recognize, the panel uses a neutral **Unknown** presentation instead of failing to render.
 

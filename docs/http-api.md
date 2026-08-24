@@ -18,6 +18,7 @@ The API routes are:
 | `GET` | `/api/mailboxes/{id}/events` | List reconciled calendar events for a mailbox. |
 | `GET` | `/api/messages/{id}` | Get parsed message detail and mark it read. |
 | `GET` | `/api/messages/{id}/inspect` | Return a versioned offline inspection report. |
+| `GET` | `/api/messages/{id}/source` | Return the exact stored RFC 822 source bytes without changing read state. |
 | `POST` | `/api/messages/actions` | Delete messages or set their read state. |
 | `GET` | `/api/attachments/{id}` | Return stored attachment bytes. |
 | `GET` | `/api/events` | Open the global SSE stream. |
@@ -358,6 +359,9 @@ Successful analysis returns `200 OK`, including sender-caused syntax defects, ab
       }
     }
   ],
+  "headers": [
+    {"name": "From", "value": "Sender <sender@example.com>", "occurrence": 1, "line": 2}
+  ],
   "resources": [
     {
       "kind": "link",
@@ -378,6 +382,30 @@ Successful analysis returns `200 OK`, including sender-caused syntax defects, ab
     "rawSize": 456,
     "decodedSize": null,
     "children": []
+  },
+  "htmlCompatibility": {
+    "dataVersion": "1.0.4",
+    "dataUpdated": "2026-08-01",
+    "nodes": 12,
+    "tests": 46,
+    "score": {"supported": 90, "partial": 10, "unsupported": 0},
+    "platforms": [
+      {"family": "Apple Mail", "platform": "macOS", "label": "Apple Mail macOS"}
+    ],
+    "warnings": [
+      {
+        "slug": "html-anim-img",
+        "title": "Animated GIF images",
+        "category": "images",
+        "description": "Animated GIF images are supported.",
+        "url": "https://www.caniemail.com/features/html-anim-img/",
+        "occurrences": 1,
+        "score": {"supported": 80, "partial": 20, "unsupported": 0},
+        "clients": [
+          {"name": "Apple Mail macOS (Version 16)", "family": "Apple Mail", "platform": "macOS", "version": "Version 16", "support": "yes", "note": null}
+        ]
+      }
+    ]
   }
 }
 ```
@@ -388,14 +416,21 @@ Top-level and nested fields:
 
 | Object | Required fields and types |
 | --- | --- |
-| report | `analysis` object, `summary` object, `findings` array, `resources` array, `mimeTree` object or `null` |
+| report | `analysis` object, `summary` object, `findings` array, `headers` array, `resources` array, `mimeTree` object or `null`, `htmlCompatibility` object or `null` |
 | analysis | `version` integer, `state` string, `parsedThroughPath` string or `null`, `unavailableRuleFamilies` string array, `truncated` boolean |
 | summary | integer `fail`, `warning`, `advisory`, `observed`, `pass`, `notEvaluated` |
 | finding | string `id`, `category`, `outcome`, `severity`, `basis`, `applicability`, `label`, `detail`; `evidence` array; `evidenceTruncated` boolean; `reference` object or `null` |
 | evidence | required string `source`; optional `path`, `field`, `value` strings and `occurrence`, `line` integers |
 | reference | string `label` and `url` |
 | resource | string `kind`, `url`, `text`; `path` string or `null`; integer `occurrenceCount` |
-| MIME node | string `path`, `contentType`; nullable string `charset`, `encoding`, `disposition`, `filename`, `contentId`; nullable integer `rawSize`, `decodedSize`; `children` array |
+| header | string `name` and `value`; integer `occurrence` and `line` |
+| MIME node | string `path`, `contentType`; nullable string `charset`, `encoding`, `disposition`, `filename`, `contentId`; nullable integer `rawSize`, `decodedSize`; optional `checksums` object; `children` array |
+| checksums | string `md5`, `sha1`, `sha256` |
+| htmlCompatibility | string `dataVersion`, `dataUpdated`; integer `nodes`, `tests`; `score` object; `platforms` array; `warnings` array; optional boolean `warningsTruncated`, `clientsTruncated`, `truncated` |
+| compatibility score | number `supported`, `partial`, `unsupported` |
+| compatibility platform | string `family`, `platform`, `label` |
+| compatibility warning | string `slug`, `title`, `category`, `description`, `url`; integer `occurrences`; `score` object; `clients` array |
+| compatibility client | string `name`, `family`, `platform`, `version`, `support`; `note` string or `null` |
 
 Closed enums:
 
@@ -414,7 +449,7 @@ Summary buckets are mutually exclusive. `fail` counts failed findings; `warning`
 
 Findings use category order shown above. Within a category they order failed errors, warnings, advisories, not-evaluated results, observations, and ordinary passes, then by ID. Dynamic IDs append an occurrence or MIME path. Resources retain first-seen order; MIME children retain wire order.
 
-Every finding always includes `evidence`, `evidenceTruncated`, and `reference`; `reference` is `null` when unavailable. Evidence coordinates `path`, `field`, `occurrence`, `line`, and `value` are omitted when inapplicable. Every resource always includes `path`, which is `null` for fallback data. MIME `charset`, `encoding`, `disposition`, `filename`, `contentId`, `rawSize`, and `decodedSize` are present and nullable. A size of zero is distinct from `null`: raw size is known only for a complete indexed body range, and decoded size only after successful transfer decoding and text charset conversion; multipart decoded size is `null`.
+Every finding always includes `evidence`, `evidenceTruncated`, and `reference`; `reference` is `null` when unavailable. Evidence coordinates `path`, `field`, `occurrence`, `line`, and `value` are omitted when inapplicable. Every resource always includes `path`, which is `null` for fallback data. MIME `charset`, `encoding`, `disposition`, `filename`, `contentId`, `rawSize`, and `decodedSize` are present and nullable. A size of zero is distinct from `null`: raw size is known only for a complete indexed body range, and decoded size only after successful transfer decoding and text charset conversion; multipart decoded size is `null`. Report `headers` entries retain raw wire order and original field-name case; each value is unfolded to single spaces and carries the 1-based occurrence ordinal among same-named lowercase fields plus the field's first raw-source line, and values above 8 KiB end with a ` … [truncated]` mark. The optional MIME `checksums` object appears only on leaf nodes whose body was completely decoded without error and holds hex-encoded MD5, SHA-1, and SHA-256 of the decoded bytes. `htmlCompatibility` is `null` when no HTML representation was selected for analysis; each warning's `score` is the percentage split of client support, while the report-level `score` aggregates occurrences across detected HTML nodes.
 
 Reports may be partial because raw source is unavailable, semantic parsing stopped at a sender defect, or a deterministic parser/analyzer cap was reached. Unsupported encodings or charsets instead produce findings and nullable decoded sizes where applicable. Partial reports retain completed-prefix evidence. `analysis.truncated` is always retained when a cap is reached, and `truncated` becomes `true`. Authentication-Results, DKIM, ARC, unsubscribe, links, images, and MIME bytes are inspected statically; Hoomail performs no DNS or network access and does not verify SPF, DKIM signatures/body hashes, DMARC, ARC custody, alignment, endpoints, reputation, SMTP transport, delivery, or provider rendering. The 102 KiB compatibility heuristic measures selected decoded HTML only, never the total message or attachments.
 

@@ -27,10 +27,10 @@ The subcommand names are exact and case-sensitive.
 
 ```console
 $ hoomail version
-0.8.3
+0.9.0
 ```
 
-`internal/version.Value` starts as `"dev"`. During package initialization, an unchanged `"dev"` value is replaced with the trimmed contents of the compile-time embedded [`internal/version/version`](../internal/version/version) file, currently `0.8.3`. Release builds can replace `internal/version.Value` through Go linker flags; when replaced with a value other than `"dev"`, that linker-provided value is printed instead.
+`internal/version.Value` starts as `"dev"`. During package initialization, an unchanged `"dev"` value is replaced with the trimmed contents of the compile-time embedded [`internal/version/version`](../internal/version/version) file, currently `0.9.0`. Release builds can replace `internal/version.Value` through Go linker flags; when replaced with a value other than `"dev"`, that linker-provided value is printed instead.
 
 The command prints only the resolved value and a newline. It does not open the database or bind any listener.
 

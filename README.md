@@ -227,6 +227,7 @@ helm lint --strict charts/hoomail
 | `GET` | `/api/mailboxes/{id}/events` | List reconciled calendar events for an inbox |
 | `GET` | `/api/messages/{id}` | Get parsed message details; first retrieval also marks an unread message read |
 | `GET` | `/api/messages/{id}/inspect` | Get the versioned offline inspection report with analysis state, summary, grouped findings, searchable headers, static compatibility results, resources, and checksummed MIME structure |
+| `GET` | `/api/messages/{id}/source` | Return the exact stored RFC 822 source bytes without marking the message read |
 | `POST` | `/api/messages/actions` | Delete messages or mark IDs read/unread |
 | `GET` | `/api/attachments/{id}` | Serve a conservative raster-image/plain-text allowlist inline with `nosniff`; PDF and active formats download only; `?download=1` forces download |
 | `GET` | `/api/events` | Subscribe to the best-effort, non-replayable SSE invalidation stream |
