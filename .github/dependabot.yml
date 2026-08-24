@@ -15,7 +15,7 @@ updates:
           - patch
     open-pull-requests-limit: 5
 
-  - package-ecosystem: npm
+  - package-ecosystem: bun
     directory: /
     schedule:
       interval: weekly
@@ -23,7 +23,7 @@ updates:
       time: "06:00"
       timezone: Etc/UTC
     groups:
-      npm-minor-and-patch:
+      bun-minor-and-patch:
         update-types:
           - minor
           - patch

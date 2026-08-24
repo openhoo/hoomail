@@ -13,6 +13,7 @@ RUN bun run build
 FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS server
 WORKDIR /src
 COPY go.mod go.sum ./
+COPY third_party third_party/
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY cmd cmd
 COPY internal internal
@@ -28,19 +29,23 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" go build -trimpath -tags=nethttpomithttp2 \
       -ldflags="-s -w -X github.com/openhoo/hoomail/internal/version.Value=${VERSION}" \
       -o /hoomail ./cmd/hoomail
+RUN mkdir -p /app/data/tmp && chown 65532:65532 /app/data/tmp
 
 FROM scratch
 WORKDIR /app
 ENV PORT=3000 \
     HOOMAIL_SMTP_PORT=2525 \
     HOOMAIL_POP3_PORT=3110 \
-    HOOMAIL_DB_PATH=/app/data/hoomail.db
+    HOOMAIL_DB_PATH=/app/data/hoomail.db \
+    TMPDIR=/app/data \
+    SQLITE_TMPDIR=/app/data
 COPY --from=server /hoomail /hoomail
 COPY --from=server /src/internal/inspect/LICENSE.mailpit /licenses/LICENSE.mailpit
 COPY --from=server /src/internal/inspect/LICENSE.can-i-email /licenses/LICENSE.can-i-email
+COPY --from=server --chown=65532:65532 /app/data/tmp /app/data/tmp
 USER 65532:65532
 VOLUME ["/app/data"]
 EXPOSE 3000 2525 3110
-HEALTHCHECK --interval=30s --timeout=3s --start-period=3s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=3s --retries=3 \
   CMD ["/hoomail", "healthcheck"]
 ENTRYPOINT ["/hoomail"]
