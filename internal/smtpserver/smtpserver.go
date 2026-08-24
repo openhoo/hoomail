@@ -5,15 +5,28 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log"
 	"net"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/emersion/go-smtp"
 	"github.com/openhoo/hoomail/internal/store"
 )
 
 const MaxMessageBytes int64 = 25 * 1024 * 1024
+
+// MaxRecipients caps RCPT TO commands per transaction at RFC 5321's required
+// minimum capacity so a single session cannot accumulate unbounded recipients
+// and storage fan-out.
+const MaxRecipients = 100
+
+const (
+	readTimeout         = 60 * time.Second
+	writeTimeout        = 60 * time.Second
+	storeMessageTimeout = 30 * time.Second
+)
 
 var ErrServerClosed = smtp.ErrServerClosed
 
@@ -26,31 +39,37 @@ type Service struct {
 	server *smtp.Server
 	store  Store
 
-	mu       sync.Mutex
-	listener net.Listener
+	mu         sync.Mutex
+	listener   net.Listener
+	closing    bool
+	baseCtx    context.Context
+	baseCancel context.CancelFunc
 }
 
 func New(messageStore Store) *Service {
-	service := &Service{store: messageStore}
+	ctx, cancel := context.WithCancel(context.Background())
+	service := &Service{store: messageStore, baseCtx: ctx, baseCancel: cancel}
 	server := smtp.NewServer(service)
 	server.Domain = "localhost"
 	server.MaxMessageBytes = MaxMessageBytes
+	server.MaxRecipients = MaxRecipients
+	server.ReadTimeout = readTimeout
+	server.WriteTimeout = writeTimeout
 	service.server = server
 	return service
 }
 
-func (service *Service) Server() *smtp.Server { return service.server }
-
-func (service *Service) ListenAndServe(address string) error {
-	listener, err := net.Listen("tcp", address)
-	if err != nil {
-		return err
-	}
-	return service.Serve(listener)
-}
-
 func (service *Service) Serve(listener net.Listener) error {
+	if listener == nil {
+		return errors.New("smtpserver: nil listener")
+	}
 	service.mu.Lock()
+
+	if service.closing {
+		service.mu.Unlock()
+		_ = listener.Close()
+		return ErrServerClosed
+	}
 	if service.listener != nil {
 		service.mu.Unlock()
 		return errors.New("smtpserver: already serving")
@@ -58,36 +77,59 @@ func (service *Service) Serve(listener net.Listener) error {
 	service.listener = listener
 	service.mu.Unlock()
 
-	err := service.server.Serve(listener)
-	service.mu.Lock()
-	if service.listener == listener {
-		service.listener = nil
+	defer func() {
+		service.mu.Lock()
+		if service.listener == listener {
+			service.listener = nil
+		}
+		service.mu.Unlock()
+	}()
+
+	return service.server.Serve(listener)
+}
+
+func (service *Service) Shutdown(ctx context.Context) error {
+	listener := service.enterTerminalState()
+	err := service.server.Shutdown(ctx)
+	if listener != nil {
+		_ = listener.Close()
 	}
-	service.mu.Unlock()
 	return err
 }
 
-func (service *Service) Addr() net.Addr {
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	if service.listener == nil {
-		return nil
+func (service *Service) Close() error {
+	listener := service.enterTerminalState()
+	err := service.server.Close()
+	if listener != nil {
+		_ = listener.Close()
 	}
-	return service.listener.Addr()
+	return err
 }
 
-func (service *Service) Shutdown(ctx context.Context) error { return service.server.Shutdown(ctx) }
-func (service *Service) Close() error                       { return service.server.Close() }
+func (service *Service) enterTerminalState() net.Listener {
+	service.mu.Lock()
+	listener := service.listener
+	first := !service.closing
+	service.closing = true
+	service.mu.Unlock()
+	if first {
+		service.baseCancel()
+	}
+	return listener
+}
 
 func (service *Service) NewSession(*smtp.Conn) (smtp.Session, error) {
 	if service.store == nil {
 		return nil, errors.New("smtpserver: nil store")
 	}
-	return &session{store: service.store}, nil
+	ctx, cancel := context.WithCancel(service.baseCtx)
+	return &session{store: service.store, ctx: ctx, cancel: cancel}, nil
 }
 
 type session struct {
 	store      Store
+	ctx        context.Context
+	cancel     context.CancelFunc
 	mailFrom   string
 	recipients []string
 }
@@ -120,8 +162,16 @@ func (session *session) Data(reader io.Reader) error {
 	if err != nil {
 		return errors.New("message processing failed")
 	}
-	if _, err := session.store.StoreMessage(context.Background(), input); err != nil {
-		return errors.New("message processing failed")
+
+	ctx, cancel := context.WithTimeout(session.ctx, storeMessageTimeout)
+	defer cancel()
+	if _, err := session.store.StoreMessage(ctx, input); err != nil {
+		log.Printf("smtpserver: storing message failed: %v", err)
+		return &smtp.SMTPError{
+			Code:         451,
+			EnhancedCode: smtp.EnhancedCode{4, 3, 0},
+			Message:      "temporary local failure, please retry",
+		}
 	}
 	return nil
 }
@@ -133,6 +183,7 @@ func (session *session) Reset() {
 
 func (session *session) Logout() error {
 	session.Reset()
+	session.cancel()
 	return nil
 }
 

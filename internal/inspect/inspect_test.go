@@ -1,6 +1,7 @@
 package inspect
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -130,7 +131,7 @@ func TestAnalyzeCompleteReportOrderingResourcesAndOfflineWording(t *testing.T) {
 		`--alt--`,
 		``,
 	}, "\r\n"))
-	report, err := Analyze(Input{Raw: raw, StoredSize: int64(len(raw))})
+	report, err := Analyze(context.Background(), Input{Raw: raw, StoredSize: int64(len(raw))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +182,7 @@ func TestAnalyzeExposesMailpitParityMetadataOffline(t *testing.T) {
 		`<html><body><div style="display:grid">hello</div></body></html>`,
 		``,
 	}, "\r\n"))
-	report, err := Analyze(Input{Raw: raw, StoredSize: int64(len(raw))})
+	report, err := Analyze(context.Background(), Input{Raw: raw, StoredSize: int64(len(raw))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +208,7 @@ func TestAnalyzeExposesMailpitParityMetadataOffline(t *testing.T) {
 	if report.MIMETree.Checksums.MD5 != "877ecb572c060b534d65761d6bc46738" {
 		t.Fatalf("MD5=%s body=%q", report.MIMETree.Checksums.MD5, wantBody)
 	}
-	repeated, err := Analyze(Input{Raw: raw, StoredSize: int64(len(raw))})
+	repeated, err := Analyze(context.Background(), Input{Raw: raw, StoredSize: int64(len(raw))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +233,7 @@ func TestAnalyzeSearchableHeaderFidelityAndBound(t *testing.T) {
 		"X-Folded: left   \r\n" +
 		"\t right\r\n" +
 		"X-Long: " + longValue + "\r\n\r\nbody")
-	report, err := Analyze(Input{Raw: raw, StoredSize: int64(len(raw))})
+	report, err := Analyze(context.Background(), Input{Raw: raw, StoredSize: int64(len(raw))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,9 +266,12 @@ func TestAnalyzeRawlessPartialUsesFallbackOnce(t *testing.T) {
 		parseCalls++
 		return oldParse(raw, limits)
 	}
-	analyzeHTMLPass = func(raw []byte, path *string) (HTMLFacts, []string) { htmlCalls++; return oldHTML(raw, path) }
+	analyzeHTMLPass = func(ctx context.Context, raw []byte, path *string) (HTMLFacts, []string, error) {
+		htmlCalls++
+		return oldHTML(ctx, raw, path)
+	}
 	htmlBody := `<html><body><a href="https://example.test">Example</a></body></html>`
-	report, err := Analyze(Input{LegacyHTML: &htmlBody, StoredSize: int64(len(htmlBody))})
+	report, err := Analyze(context.Background(), Input{LegacyHTML: &htmlBody, StoredSize: int64(len(htmlBody))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +304,7 @@ func TestAnalyzePropagatesParserInvariantError(t *testing.T) {
 	t.Cleanup(func() { parseMIME = oldParse })
 	want := errors.New("correlation mismatch")
 	parseMIME = func([]byte, mimeparse.Limits) (mimeparse.Document, error) { return mimeparse.Document{}, want }
-	_, err := Analyze(Input{Raw: []byte("x")})
+	_, err := Analyze(context.Background(), Input{Raw: []byte("x")})
 	if !errors.Is(err, want) {
 		t.Fatalf("err=%v", err)
 	}
@@ -310,9 +314,12 @@ func TestAnalyzeHTMLPassZeroWithoutHTML(t *testing.T) {
 	oldHTML := analyzeHTMLPass
 	t.Cleanup(func() { analyzeHTMLPass = oldHTML })
 	calls := 0
-	analyzeHTMLPass = func(raw []byte, path *string) (HTMLFacts, []string) { calls++; return oldHTML(raw, path) }
+	analyzeHTMLPass = func(ctx context.Context, raw []byte, path *string) (HTMLFacts, []string, error) {
+		calls++
+		return oldHTML(ctx, raw, path)
+	}
 	text := "plain"
-	if _, err := Analyze(Input{LegacyText: &text}); err != nil {
+	if _, err := Analyze(context.Background(), Input{LegacyText: &text}); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 0 {
@@ -322,13 +329,13 @@ func TestAnalyzeHTMLPassZeroWithoutHTML(t *testing.T) {
 
 func TestHTMLFactsAggregatesOccurrencesAndCapsNodes(t *testing.T) {
 	htmlBody := `<html lang="en"><head><link rel="alternate stylesheet" href="http://css.example.test/mail.css"></head><body><a href="https://example.test"><img src="https://img.test/a.png" alt="Named"></a><a href="https://example.test"></a><img src="https://img.test/a.png" alt="Named"><img src="cid:logo"><img src="data:image/png;base64,AA=="></body></html>`
-	facts, causes := analyzeHTML([]byte(htmlBody), new("1.2"))
+	facts, causes, _ := analyzeHTML(context.Background(), []byte(htmlBody), new("1.2"))
 	if len(causes) != 0 || facts.anchorCount != 2 || facts.unnamedLinks != 1 || facts.imageCount != 4 || facts.externalImages != 2 {
 		t.Fatalf("facts=%#v causes=%#v", facts, causes)
 	}
 	a := analyzer{resourceMap: map[string]int{}, causes: map[string]struct{}{}}
 	for _, item := range facts.resources {
-		a.addResource(item.kind, item.path, item.url, item.text)
+		a.addResourceCounted(item.kind, item.path, item.url, item.text, item.count)
 	}
 	foundImage, foundStylesheet := false, false
 	for _, item := range a.resources {
@@ -349,7 +356,7 @@ func TestHTMLFactsAggregatesOccurrencesAndCapsNodes(t *testing.T) {
 		huge.WriteString("<span></span>")
 	}
 	huge.WriteString("<span></span></div>")
-	limited, limitedCauses := analyzeHTML([]byte(huge.String()), nil)
+	limited, limitedCauses, _ := analyzeHTML(context.Background(), []byte(huge.String()), nil)
 	if !limited.truncated || !containsString(limitedCauses, "HTML nodes") {
 		t.Fatalf("limited=%#v causes=%#v", limited, limitedCauses)
 	}
@@ -357,7 +364,7 @@ func TestHTMLFactsAggregatesOccurrencesAndCapsNodes(t *testing.T) {
 
 func TestAnalyzeHTMLResolvesNestedLabelAndDetectsStyledHiddenTrackers(t *testing.T) {
 	htmlBody := `<html lang="en"><body><span id="label"><strong>Open account</strong></span><a href="https://example.test" aria-labelledby="label"></a><div style="display:none"><img src="https://tracker.test/parent.gif" alt=""></div><img src="https://tracker.test/style.gif" style="width: 1px; height:1px" alt=""></body></html>`
-	facts, causes := analyzeHTML([]byte(htmlBody), new("1"))
+	facts, causes, _ := analyzeHTML(context.Background(), []byte(htmlBody), new("1"))
 	if len(causes) != 0 {
 		t.Fatalf("causes=%#v", causes)
 	}
@@ -391,7 +398,7 @@ func TestAnalyzeTruncatedRawIndexDoesNotEmitPerPartSemanticFindings(t *testing.T
 			TruncationCauses:  []string{"physical lines"},
 		}, nil
 	}
-	report, err := Analyze(Input{Raw: []byte("Subject: capped\r\n\r\nnot base64")})
+	report, err := Analyze(context.Background(), Input{Raw: []byte("Subject: capped\r\n\r\nnot base64")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -416,7 +423,7 @@ func TestAnalyzeStandardsEdgeCases(t *testing.T) {
 		``,
 		`Y2Fmw6k=`,
 	}, "\r\n"))
-	report, err := Analyze(Input{Raw: raw})
+	report, err := Analyze(context.Background(), Input{Raw: raw})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -440,7 +447,7 @@ func TestAnalyzeRejectsMalformedOneClickHTTPSURL(t *testing.T) {
 
 func TestAnalyzeAttachmentOnlyRootIsResourceAndEmptyBodyHasZeroSize(t *testing.T) {
 	raw := []byte("Content-Type: application/pdf\r\nContent-Disposition: attachment; filename=x.pdf\r\n\r\n")
-	report, err := Analyze(Input{Raw: raw})
+	report, err := Analyze(context.Background(), Input{Raw: raw})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -453,7 +460,7 @@ func TestAnalyzeAttachmentOnlyRootIsResourceAndEmptyBodyHasZeroSize(t *testing.T
 }
 
 func TestAnalyzeHiddenTextDoesNotNameLink(t *testing.T) {
-	facts, _ := analyzeHTML([]byte(`<a href="https://example.test"><span hidden>secret</span></a>`), nil)
+	facts, _, _ := analyzeHTML(context.Background(), []byte(`<a href="https://example.test"><span hidden>secret</span></a>`), nil)
 	if facts.unnamedLinks != 1 {
 		t.Fatalf("facts=%#v", facts)
 	}

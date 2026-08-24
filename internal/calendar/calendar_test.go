@@ -3,6 +3,8 @@ package calendar
 import (
 	"encoding/json"
 	"reflect"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -101,6 +103,29 @@ func TestParseICSCancelAndReply(t *testing.T) {
 	}
 }
 
+func TestParseICSRejectsMethodAfterComponents(t *testing.T) {
+	tests := []struct {
+		name   string
+		method string
+	}{
+		{name: "cancel", method: MethodCancel},
+		{name: "reply", method: MethodReply},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ics := "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\n" +
+				"UID:transport@example.com\r\nSEQUENCE:8\r\nDTSTART:20260723T100000Z\r\n" +
+				"END:VEVENT\r\nMETHOD:" + test.method + "\r\nEND:VCALENDAR\r\n"
+
+			events := ParseICS(ics)
+			if len(events) != 0 {
+				t.Fatalf("ParseICS returned %d events with METHOD after VEVENT, want 0: %#v", len(events), events)
+			}
+		})
+	}
+}
+
 func TestParseICSAllDayDefaultsEndAndPublish(t *testing.T) {
 	ics := "BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:holiday@example.com\nDTSTART;VALUE=DATE:20261224\nSUMMARY:Holiday\nEND:VEVENT\nEND:VCALENDAR\n"
 	events := ParseICS(ics)
@@ -166,6 +191,136 @@ func TestParseICSRejectsMalformedAndSkipsIncompleteEvents(t *testing.T) {
 	ics := "BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:missing-start\nEND:VEVENT\nBEGIN:VEVENT\nDTSTART:20260723T100000Z\nEND:VEVENT\nEND:VCALENDAR"
 	if events := ParseICS(ics); len(events) != 0 {
 		t.Fatalf("incomplete events returned %#v, want empty", events)
+	}
+}
+
+func TestUnfoldLinesPreservesFoldingSemantics(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want []string
+		ok   bool
+	}{
+		{name: "mixed newline styles and continuations", text: "first\r\n second\r\n\tthird\r\nnext", want: []string{"firstsecondthird", "next"}, ok: true},
+		{name: "continuation after empty logical line", text: "first\n\n continuation", want: []string{"first", "continuation"}, ok: true},
+		{name: "continuation without a logical line", text: " continuation", ok: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := unfoldLines(test.text)
+			if ok != test.ok {
+				t.Fatalf("unfoldLines(%q) ok = %v, want %v", test.text, ok, test.ok)
+			}
+			if !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("unfoldLines(%q) = %#v, want %#v", test.text, got, test.want)
+			}
+		})
+	}
+
+	var folded strings.Builder
+	folded.WriteString("DESCRIPTION:prefix")
+	for range 10_000 {
+		folded.WriteString("\n continuation")
+	}
+	lines, ok := unfoldLines(folded.String())
+	if !ok || len(lines) != 1 || len(lines[0]) != len("DESCRIPTION:prefix")+len("continuation")*10_000 {
+		t.Fatalf("large folded line = ok:%v lines:%d length:%d", ok, len(lines), len(lines[0]))
+	}
+}
+
+func TestParseICSRejectsIllegalNestingAndPropertiesOutsideRoot(t *testing.T) {
+	validEvent := "BEGIN:VEVENT\nUID:nesting@example.com\nDTSTART:20260723T100000Z\nEND:VEVENT\n"
+	tests := []struct {
+		name string
+		ics  string
+		want int
+	}{
+		{name: "valid direct event", ics: "BEGIN:VCALENDAR\n" + validEvent + "END:VCALENDAR\n", want: 1},
+		{name: "nested calendar", ics: "BEGIN:VCALENDAR\nBEGIN:VCALENDAR\nEND:VCALENDAR\nEND:VCALENDAR\n"},
+		{name: "nested event", ics: "BEGIN:VCALENDAR\nBEGIN:VEVENT\nBEGIN:VEVENT\nEND:VEVENT\nEND:VEVENT\nEND:VCALENDAR\n"},
+		{name: "event under another component", ics: "BEGIN:VCALENDAR\nBEGIN:VTIMEZONE\nBEGIN:VEVENT\nEND:VEVENT\nEND:VTIMEZONE\nEND:VCALENDAR\n"},
+		{name: "property before root", ics: "VERSION:2.0\nBEGIN:VCALENDAR\nEND:VCALENDAR\n"},
+		{name: "property after root", ics: "BEGIN:VCALENDAR\nEND:VCALENDAR\nVERSION:2.0\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := len(ParseICS(test.ics)); got != test.want {
+				t.Fatalf("ParseICS returned %d events, want %d", got, test.want)
+			}
+		})
+	}
+}
+
+func TestDecodeTextRejectsUnknownEscapes(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  string
+		ok    bool
+	}{
+		{name: "plain text", value: "plain", want: "plain", ok: true},
+		{name: "newline", value: `first\nsecond`, want: "first\nsecond", ok: true},
+		{name: "escaped punctuation", value: `a\\b\,c\;d`, want: "a\\b,c;d", ok: true},
+		{name: "unknown escape", value: `meeting\q`, ok: false},
+		{name: "dangling escape", value: `meeting\`, ok: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := decodeText(test.value)
+			if ok != test.ok || got != test.want {
+				t.Fatalf("decodeText(%q) = (%q, %v), want (%q, %v)", test.value, got, ok, test.want, test.ok)
+			}
+		})
+	}
+}
+
+func TestParseICSRejectsMalformedTextEscapes(t *testing.T) {
+	eventICS := func(uid, extra string) string {
+		return "BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:" + uid + "\nDTSTART:20260723T100000Z\n" + extra + "END:VEVENT\nEND:VCALENDAR\n"
+	}
+	tests := []struct {
+		name string
+		ics  string
+		want int
+	}{
+		{name: "unknown UID escape", ics: eventICS(`meeting\q`, ""), want: 0},
+		{name: "unknown summary escape", ics: eventICS("meeting@example.com", "SUMMARY:bad\\q\n"), want: 0},
+		{name: "valid escapes", ics: eventICS("meeting@example.com", `SUMMARY:a\,b\;c\\d\ne`+"\n"), want: 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			events := ParseICS(test.ics)
+			if len(events) != test.want {
+				t.Fatalf("ParseICS returned %d events, want %d", len(events), test.want)
+			}
+			if test.name == "valid escapes" && *events[0].Summary != "a,b;c\\d\ne" {
+				t.Fatalf("decoded summary = %q", *events[0].Summary)
+			}
+		})
+	}
+}
+
+func TestParseICSCapsEventsPerCalendar(t *testing.T) {
+	tests := []int{maxEventsPerCalendar, maxEventsPerCalendar + 1}
+	for _, eventCount := range tests {
+		t.Run(strconv.Itoa(eventCount), func(t *testing.T) {
+			var ics strings.Builder
+			ics.WriteString("BEGIN:VCALENDAR\n")
+			for index := range eventCount {
+				ics.WriteString("BEGIN:VEVENT\nUID:event-")
+				ics.WriteString(strconv.Itoa(index))
+				ics.WriteString("\nDTSTART:20260723T100000Z\nEND:VEVENT\n")
+			}
+			ics.WriteString("END:VCALENDAR\n")
+			events := ParseICS(ics.String())
+			want := eventCount
+			if eventCount > maxEventsPerCalendar {
+				want = 0
+			}
+			if len(events) != want {
+				t.Fatalf("ParseICS returned %d events, want %d", len(events), want)
+			}
+		})
 	}
 }
 

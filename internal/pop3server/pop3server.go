@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/openhoo/hoomail/internal/store"
 )
@@ -25,18 +26,50 @@ type Store interface {
 	DeletePOP3Messages(context.Context, uint64, []int64) ([]int64, error)
 }
 
+const (
+	defaultReadTimeout  = 10 * time.Minute
+	defaultWriteTimeout = time.Minute
+)
+
 type Service struct {
 	store Store
 
-	mu       sync.Mutex
-	listener net.Listener
-	conns    map[net.Conn]struct{}
-	closing  bool
-	wg       sync.WaitGroup
+	ReadTimeout  time.Duration
+	WriteTimeout time.Duration
+
+	mu         sync.Mutex
+	listener   net.Listener
+	conns      map[net.Conn]struct{}
+	closing    bool
+	wg         sync.WaitGroup
+	baseCtx    context.Context
+	baseCancel context.CancelFunc
 }
 
 func New(messageStore Store) *Service {
-	return &Service{store: messageStore, conns: make(map[net.Conn]struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &Service{
+		store:        messageStore,
+		conns:        make(map[net.Conn]struct{}),
+		ReadTimeout:  defaultReadTimeout,
+		WriteTimeout: defaultWriteTimeout,
+		baseCtx:      ctx,
+		baseCancel:   cancel,
+	}
+}
+
+func (service *Service) readDeadline() time.Time {
+	if service.ReadTimeout <= 0 {
+		return time.Time{}
+	}
+	return time.Now().Add(service.ReadTimeout)
+}
+
+func (service *Service) writeDeadline() time.Time {
+	if service.WriteTimeout <= 0 {
+		return time.Time{}
+	}
+	return time.Now().Add(service.WriteTimeout)
 }
 
 func (service *Service) Serve(listener net.Listener) error {
@@ -106,6 +139,7 @@ func (service *Service) Shutdown(ctx context.Context) error {
 	for _, conn := range connections {
 		_ = conn.Close()
 	}
+	service.baseCancel()
 
 	done := make(chan struct{})
 	go func() {
@@ -121,6 +155,8 @@ func (service *Service) Shutdown(ctx context.Context) error {
 }
 
 func (service *Service) serveConn(conn net.Conn) {
+	connCtx, cancel := context.WithCancel(service.baseCtx)
+	defer cancel()
 	defer func() {
 		_ = conn.Close()
 		service.mu.Lock()
@@ -131,30 +167,41 @@ func (service *Service) serveConn(conn net.Conn) {
 
 	writer := bufio.NewWriter(conn)
 	if service.store == nil {
+		_ = conn.SetWriteDeadline(service.writeDeadline())
 		_ = writeLine(writer, "-ERR server unavailable")
 		_ = writer.Flush()
 		return
 	}
+	_ = conn.SetWriteDeadline(service.writeDeadline())
 	if err := writeLine(writer, "+OK Hoomail POP3 ready"); err != nil || writer.Flush() != nil {
 		return
 	}
 
-	session := &session{store: service.store}
+	session := &session{store: service.store, ctx: connCtx}
 	reader := bufio.NewReaderSize(conn, maxCommandBytes)
 	for {
+		_ = conn.SetReadDeadline(service.readDeadline())
 		line, err := readCommand(reader)
 		if err != nil {
-			if !errors.Is(err, io.EOF) {
+			if !errors.Is(err, io.EOF) && !isTimeout(err) {
+				_ = conn.SetWriteDeadline(service.writeDeadline())
 				_ = writeLine(writer, "-ERR malformed command")
 				_ = writer.Flush()
 			}
 			return
 		}
+		_ = conn.SetWriteDeadline(service.writeDeadline())
 		closeConnection := session.execute(line, writer)
+		_ = conn.SetWriteDeadline(service.writeDeadline())
 		if writer.Flush() != nil || closeConnection {
 			return
 		}
 	}
+}
+
+func isTimeout(err error) bool {
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func readCommand(reader *bufio.Reader) (string, error) {
@@ -182,6 +229,7 @@ const (
 
 type session struct {
 	store      Store
+	ctx        context.Context
 	state      state
 	user       string
 	messages   []store.POP3Message
@@ -210,7 +258,7 @@ func (session *session) execute(line string, writer *bufio.Writer) bool {
 		if session.state == stateTransaction {
 			ids := session.deletedIDs()
 			if len(ids) > 0 {
-				if _, err := session.store.DeletePOP3Messages(context.Background(), session.generation, ids); err != nil {
+				if _, err := session.store.DeletePOP3Messages(session.ctx, session.generation, ids); err != nil {
 					_ = writeLine(writer, "-ERR unable to delete messages")
 					return true
 				}
@@ -234,7 +282,7 @@ func (session *session) execute(line string, writer *bufio.Writer) bool {
 		if session.user == "" || !hasArgument {
 			return session.badSyntax(writer)
 		}
-		snapshot, err := session.store.OpenPOP3Mailbox(context.Background(), session.user)
+		snapshot, err := session.store.OpenPOP3Mailbox(session.ctx, session.user)
 		if err != nil {
 			_ = writeLine(writer, "-ERR unable to open mailbox")
 			return false
@@ -432,27 +480,41 @@ func topBytes(raw []byte, bodyLines int) []byte {
 	body := raw[headerEnd+separatorLength:]
 	position := 0
 	for line := 0; line < bodyLines && position < len(body); line++ {
-		next := bytes.IndexByte(body[position:], '\n')
-		if next < 0 {
-			result = append(result, body[position:]...)
-			position = len(body)
-		} else {
-			next += position + 1
-			result = append(result, body[position:next]...)
-			position = next
+		end := position
+		for end < len(body) {
+			switch body[end] {
+			case '\r':
+				end++
+				if end < len(body) && body[end] == '\n' {
+					end++
+				}
+				break
+			case '\n':
+				end++
+				break
+			default:
+				end++
+				continue
+			}
+			break
 		}
+		result = append(result, body[position:end]...)
+		position = end
 	}
 	return result
 }
 
 func headerBoundary(raw []byte) (int, int) {
-	if index := bytes.Index(raw, []byte("\r\n\r\n")); index >= 0 {
-		return index, 4
+	crlfIndex := bytes.Index(raw, []byte("\r\n\r\n"))
+	lfIndex := bytes.Index(raw, []byte("\n\n"))
+	switch {
+	case crlfIndex >= 0 && (lfIndex < 0 || crlfIndex < lfIndex):
+		return crlfIndex, 4
+	case lfIndex >= 0:
+		return lfIndex, 2
+	default:
+		return -1, 0
 	}
-	if index := bytes.Index(raw, []byte("\n\n")); index >= 0 {
-		return index, 2
-	}
-	return -1, 0
 }
 
 func writeLine(writer *bufio.Writer, line string) error {

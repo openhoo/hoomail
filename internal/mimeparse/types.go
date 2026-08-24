@@ -78,4 +78,7 @@ type Document struct {
 	ParsedThroughPath *string
 	Truncated         bool
 	TruncationCauses  []string
+	// SemanticSkipped reports that the semantic parser did not run because an
+	// indexing cap fired first: analysis is unavailable, not failed.
+	SemanticSkipped bool
 }

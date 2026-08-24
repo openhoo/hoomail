@@ -2,8 +2,12 @@ package mimeparse
 
 import (
 	"bytes"
+	"fmt"
+	"io"
 	"mime"
 	"strings"
+
+	"github.com/emersion/go-message"
 )
 
 type rawIndex struct {
@@ -138,6 +142,9 @@ func (index *rawIndex) parseEntity(start, end int, path string, depth int, diges
 			malformedContentType = true
 		} else {
 			mediaType = strings.ToLower(parsedType)
+			for paramName, paramValue := range parsedParams {
+				parsedParams[paramName] = decodeHeaderValue(paramValue)
+			}
 			mediaParams = parsedParams
 		}
 	}
@@ -167,7 +174,7 @@ func (index *rawIndex) parseEntity(start, end int, path string, depth int, diges
 		MalformedContentType: malformedContentType,
 		MalformedDisposition: malformedDisposition,
 	}
-	complete := end <= index.indexedEnd
+	complete := end <= index.indexedEnd && (index.complete || end < index.indexedEnd)
 
 	if strings.HasPrefix(mediaType, "multipart/") {
 		boundary := mediaParams["boundary"]
@@ -376,4 +383,25 @@ func itoa(value int) string {
 		value /= 10
 	}
 	return string(buffer[position:])
+}
+
+// decodeHeaderValue mirrors go-message's parameter decoding: RFC 2047
+// encoded words are resolved with the same charset support as the semantic
+// pass, and any decoding failure keeps the original value.
+func decodeHeaderValue(value string) string {
+	decoder := mime.WordDecoder{CharsetReader: func(charset string, input io.Reader) (io.Reader, error) {
+		charset = strings.ToLower(charset)
+		if charset == "utf-8" || charset == "us-ascii" {
+			return input, nil
+		}
+		if message.CharsetReader == nil {
+			return input, fmt.Errorf("mimeparse: unhandled charset %q", charset)
+		}
+		return message.CharsetReader(charset, input)
+	}}
+	decoded, err := decoder.DecodeHeader(value)
+	if err != nil {
+		return value
+	}
+	return decoded
 }

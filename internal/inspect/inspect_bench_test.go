@@ -1,6 +1,7 @@
 package inspect
 
 import (
+	"context"
 	"strconv"
 	"strings"
 	"testing"
@@ -67,7 +68,7 @@ func BenchmarkAnalyze(b *testing.B) {
 			b.ReportAllocs()
 			b.SetBytes(int64(len(fixture.raw)))
 			for b.Loop() {
-				report, err := Analyze(Input{Raw: fixture.raw, StoredSize: int64(len(fixture.raw))})
+				report, err := Analyze(context.Background(), Input{Raw: fixture.raw, StoredSize: int64(len(fixture.raw))})
 				if err != nil {
 					b.Fatal(err)
 				}

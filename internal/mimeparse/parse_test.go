@@ -2,6 +2,8 @@ package mimeparse
 
 import (
 	"bytes"
+	"encoding/base64"
+	"mime/quotedprintable"
 	"strings"
 	"testing"
 
@@ -342,5 +344,156 @@ func TestParseZeroLimitsSkipsIndexes(t *testing.T) {
 	}
 	if document.Presentation.Text == nil || string(document.Presentation.Text.DecodedBody) != "body" {
 		t.Fatalf("presentation = %#v", document.Presentation)
+	}
+}
+
+func TestParseImplicitDigestWrapperCarriesDecodedAttachment(t *testing.T) {
+	nested := "Subject: inner\r\nMIME-Version: 1.0\r\nContent-Type: text/plain\r\n\r\ninner body"
+	raw := []byte("Content-Type: multipart/mixed; boundary=mixed\r\n\r\n" +
+		"--mixed\r\nContent-Type: text/plain\r\n\r\nintro\r\n" +
+		"--mixed\r\nContent-Type: multipart/digest; boundary=digest\r\n\r\n" +
+		"--digest\r\nContent-Disposition: attachment; filename=msg.eml\r\n\r\n" +
+		nested + "\r\n--digest--\r\n" +
+		"--mixed--\r\n")
+	for _, limits := range []Limits{{}, InspectionLimits} {
+		document, err := Parse(raw, limits)
+		if err != nil || document.SemanticError != nil {
+			t.Fatalf("limits=%#v: err=%v semantic=%v", limits, err, document.SemanticError)
+		}
+		if document.Root == nil || len(document.Root.Children) != 2 {
+			t.Fatalf("limits=%#v root=%#v", limits, document.Root)
+		}
+		wrapper := document.Root.Children[1].Children[0]
+		if wrapper.MediaType != "message/rfc822" || string(wrapper.DecodedBody) != nested {
+			t.Fatalf("limits=%#v wrapper=%#v", limits, wrapper)
+		}
+		if Filename(wrapper) != "msg.eml" || len(wrapper.Children) != 1 || wrapper.Children[0].Header.Get("Subject") != "inner" {
+			t.Fatalf("limits=%#v wrapper metadata=%#v", limits, wrapper)
+		}
+		if len(document.Presentation.Attachments) != 1 || document.Presentation.Attachments[0].Node != wrapper {
+			t.Fatalf("limits=%#v attachments=%#v", limits, document.Presentation.Attachments)
+		}
+	}
+}
+
+func TestParseDecodesBoundaryParametersForRawRouting(t *testing.T) {
+	raw := []byte("Content-Type: multipart/mixed; boundary=\"=?UTF-8?Q?outer?=\"\r\n\r\n" +
+		"--outer\r\nContent-Type: text/plain\r\n\r\nbody\r\n--outer--\r\n")
+	document, err := Parse(raw, InspectionLimits)
+	if err != nil || document.SemanticError != nil {
+		t.Fatalf("Parse: err=%v semantic=%v", err, document.SemanticError)
+	}
+	if document.Root == nil || len(document.Root.Children) != 1 || len(document.Root.BoundaryDelimiters) != 2 || !document.Root.BoundaryClosed {
+		t.Fatalf("root=%#v", document.Root)
+	}
+	if document.Root.MediaParams["boundary"] != "outer" {
+		t.Fatalf("boundary=%q", document.Root.MediaParams["boundary"])
+	}
+}
+
+func TestParseMarksCappedSemanticPassUnavailable(t *testing.T) {
+	tests := []struct {
+		name       string
+		raw        []byte
+		limits     Limits
+		wantRoot   bool
+		wantSyntax bool
+	}{
+		{
+			name:       "header cap before root",
+			raw:        []byte("A: one\r\nB: two\r\nC: three\r\n\r\nbody"),
+			limits:     Limits{MaxPhysicalLines: 3},
+			wantSyntax: false,
+		},
+		{
+			name:       "uncapped malformed header",
+			raw:        []byte("not a header\r\nstill not a header"),
+			limits:     Limits{MaxPhysicalLines: 100},
+			wantSyntax: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			document, err := Parse(test.raw, test.limits)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if document.SemanticSkipped != !test.wantSyntax || document.SemanticError != nil != test.wantSyntax {
+				t.Fatalf("document=%#v", document)
+			}
+			if document.Root != nil != test.wantRoot {
+				t.Fatalf("root=%#v", document.Root)
+			}
+		})
+	}
+}
+
+func TestParseCappedTailPathExcludesUnindexedBody(t *testing.T) {
+	raw := []byte("Content-Type: multipart/mixed; boundary=b\r\n\r\n" +
+		"--b\r\nContent-Type: text/plain\r\n\r\nfirst\r\n" +
+		"--b\r\nContent-Type: text/plain\r\n\r\ntail one\r\ntail two\r\n" +
+		"--b--\r\n")
+	document, err := Parse(raw, Limits{MaxPhysicalLines: 11})
+	if err != nil || document.SemanticError != nil || !document.SemanticSkipped {
+		t.Fatalf("document: err=%v %#v", err, document)
+	}
+	if document.ParsedThroughPath == nil || *document.ParsedThroughPath != "1.1" {
+		t.Fatalf("parsed through %v", document.ParsedThroughPath)
+	}
+}
+
+func TestParseTransferEncodedEncapsulatedChildren(t *testing.T) {
+	nested := "Subject: inner\r\nContent-Type: text/plain\r\n\r\ninner body"
+	tests := []struct {
+		name   string
+		encode func([]byte) string
+	}{
+		{
+			name: "base64",
+			encode: func(value []byte) string {
+				return base64.StdEncoding.EncodeToString(value)
+			},
+		},
+		{
+			name: "quoted-printable",
+			encode: func(value []byte) string {
+				var encoded bytes.Buffer
+				writer := quotedprintable.NewWriter(&encoded)
+				_, _ = writer.Write(value)
+				_ = writer.Close()
+				return encoded.String()
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			raw := []byte("Content-Type: multipart/mixed; boundary=m\r\n\r\n--m\r\n" +
+				"Content-Type: message/rfc822\r\nContent-Transfer-Encoding: " + test.name + "\r\n\r\n" +
+				test.encode([]byte(nested)) + "\r\n--m--\r\n")
+			document, err := Parse(raw, InspectionLimits)
+			if err != nil || document.SemanticError != nil {
+				t.Fatalf("Parse: err=%v semantic=%v", err, document.SemanticError)
+			}
+			encapsulated := document.Root.Children[0]
+			if string(encapsulated.DecodedBody) != nested || len(encapsulated.Children) != 1 || encapsulated.Children[0].Header.Get("Subject") != "inner" {
+				t.Fatalf("encapsulated=%#v", encapsulated)
+			}
+		})
+	}
+}
+
+func TestParsePreservesDecodedDispositionParameters(t *testing.T) {
+	raw := []byte("Content-Type: multipart/mixed; boundary=m\r\n\r\n--m\r\n" +
+		"Content-Type: application/octet-stream\r\n" +
+		"Content-Disposition: attachment; filename=\"=?UTF-8?Q?caf=C3=A9.txt?=\"\r\n\r\n" +
+		"data\r\n--m--\r\n")
+	for _, limits := range []Limits{{}, InspectionLimits} {
+		document, err := Parse(raw, limits)
+		if err != nil || document.SemanticError != nil {
+			t.Fatalf("limits=%#v: err=%v semantic=%v", limits, err, document.SemanticError)
+		}
+		if got := Filename(document.Root.Children[0]); got != "café.txt" {
+			t.Fatalf("limits=%#v filename=%q", limits, got)
+		}
 	}
 }

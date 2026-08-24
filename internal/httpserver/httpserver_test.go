@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
@@ -132,6 +134,24 @@ func TestGeneratedOpenAPIAndSwaggerEndpoints(t *testing.T) {
 	if mimeSchema.Properties["checksums"] == nil {
 		t.Error("MIME node schema missing checksums")
 	}
+	actionSchema := document.Components.Schemas["MessageAction"]
+	idsSchema, ok := actionSchema.Properties["ids"].(map[string]any)
+	if !ok || idsSchema["minItems"] != float64(1) || idsSchema["maxItems"] != float64(maxMessageActionIDs) {
+		t.Fatalf("MessageAction.ids schema=%#v", actionSchema.Properties["ids"])
+	}
+	listOperation, ok := document.Paths["/api/mailboxes/{mailboxId}/messages"]["get"].(map[string]any)
+	if !ok {
+		t.Fatal("messages GET operation missing")
+	}
+	parameters, ok := listOperation["parameters"].([]any)
+	if !ok || len(parameters) != 2 {
+		t.Fatalf("messages parameters=%#v", listOperation["parameters"])
+	}
+	queryParameter, ok := parameters[1].(map[string]any)
+	querySchema, schemaOK := queryParameter["schema"].(map[string]any)
+	if !ok || !schemaOK || querySchema["maxLength"] != float64(maxSearchPatternBytes) {
+		t.Fatalf("messages q schema=%#v", parameters[1])
+	}
 
 	head := request(t, handler, http.MethodHead, "/openapi.json", "")
 	if head.Code != http.StatusOK || head.Body.Len() != 0 {
@@ -204,6 +224,74 @@ func TestGeneratedOpenAPIAttachmentContract(t *testing.T) {
 	}
 }
 
+func TestGeneratedOpenAPINullableReferencesAndCalendarAttendeeContract(t *testing.T) {
+	var document map[string]any
+	if err := json.Unmarshal(generatedOpenAPI, &document); err != nil {
+		t.Fatal(err)
+	}
+	var walk func(any, string)
+	walk = func(value any, path string) {
+		switch node := value.(type) {
+		case map[string]any:
+			if _, hasRef := node["$ref"]; hasRef {
+				if _, hasNullable := node["nullable"]; hasNullable {
+					t.Errorf("%s has nullable beside $ref", path)
+				}
+			}
+			for key, child := range node {
+				walk(child, path+"."+key)
+			}
+		case []any:
+			for index, child := range node {
+				walk(child, fmt.Sprintf("%s[%d]", path, index))
+			}
+		}
+	}
+	walk(document, "openapi")
+
+	components := document["components"].(map[string]any)
+	schemas := components["schemas"].(map[string]any)
+	assertNullableRef := func(schemaName, propertyName, target string) {
+		t.Helper()
+		schema := schemas[schemaName].(map[string]any)
+		properties := schema["properties"].(map[string]any)
+		property := properties[propertyName].(map[string]any)
+		if property["nullable"] != true {
+			t.Errorf("%s.%s nullable=%v, want true", schemaName, propertyName, property["nullable"])
+		}
+		allOf := property["allOf"].([]any)
+		if len(allOf) != 1 || allOf[0].(map[string]any)["$ref"] != "#/components/schemas/"+target {
+			t.Errorf("%s.%s allOf=%v, want a single ref to %s", schemaName, propertyName, allOf, target)
+		}
+		if _, hasRef := property["$ref"]; hasRef {
+			t.Errorf("%s.%s must not have a direct $ref", schemaName, propertyName)
+		}
+	}
+	assertNullableRef("Finding", "reference", "Reference")
+	assertNullableRef("InspectionReport", "mimeTree", "MimeNode")
+	assertNullableRef("InspectionReport", "htmlCompatibility", "HTMLCompatibility")
+
+	attendee := schemas["CalendarAttendee"].(map[string]any)
+	required := attendee["required"].([]any)
+	if len(required) != 1 || required[0] != "address" {
+		t.Fatalf("CalendarAttendee required=%v, want [address]", required)
+	}
+	attendeeProperties := attendee["properties"].(map[string]any)
+	for _, field := range []string{"address", "name", "partstat", "role"} {
+		fieldSchema, ok := attendeeProperties[field].(map[string]any)
+		if !ok || fieldSchema["type"] != "string" {
+			t.Errorf("CalendarAttendee.%s=%v, want string schema", field, attendeeProperties[field])
+		}
+	}
+	event := schemas["CalendarEvent"].(map[string]any)
+	eventProperties := event["properties"].(map[string]any)
+	attendees := eventProperties["attendees"].(map[string]any)
+	items := attendees["items"].(map[string]any)
+	if items["$ref"] != "#/components/schemas/CalendarAttendee" {
+		t.Fatalf("CalendarEvent.attendees.items=%v, want CalendarAttendee ref", items)
+	}
+}
+
 func TestInvalidIDsJSONAndActions(t *testing.T) {
 	handler := New(testStore(t), StaticConfig{}, nil)
 	assertResponse(t, request(t, handler, http.MethodDelete, "/api/mailboxes/nope", ""), 400, `{"error":"Invalid mailbox id"}`)
@@ -248,6 +336,73 @@ func equalInt64s(left, right []int64) bool {
 		}
 	}
 	return true
+}
+
+func TestMessageActionsDeduplicateAndCapIDs(t *testing.T) {
+	data := testStore(t)
+	stored, err := data.StoreMessage(context.Background(), store.StoreMessageInput{
+		Recipients: []string{"actions@example.com"},
+		To:         []store.AddressEntry{},
+		CC:         []store.AddressEntry{},
+		Headers:    map[string]string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := stored[0].MessageID
+	handler := New(data, StaticConfig{}, nil)
+
+	duplicateBody := `{"action":"read","ids":[` + jsonNumber(id) + `,` + jsonNumber(id) + `]}`
+	assertResponse(t, request(t, handler, http.MethodPost, "/api/messages/actions", duplicateBody), http.StatusOK, `{"ok":true}`)
+	var read int
+	if err := data.DB().QueryRow(`SELECT is_read FROM messages WHERE id=?`, id).Scan(&read); err != nil {
+		t.Fatal(err)
+	}
+	if read != 1 {
+		t.Fatalf("is_read=%d, want 1", read)
+	}
+
+	values := make([]string, maxMessageActionIDs+1)
+	for index := range values {
+		values[index] = strconv.Itoa(index + 1)
+	}
+	oversizedBody := `{"action":"read","ids":[` + strings.Join(values, ",") + `]}`
+	assertResponse(t, request(t, handler, http.MethodPost, "/api/messages/actions", oversizedBody), http.StatusBadRequest, `{"error":"Too many message ids provided; maximum is 10000"}`)
+}
+
+func TestSearchQueryLimit(t *testing.T) {
+	data := testStore(t)
+	if _, err := data.StoreMessage(context.Background(), store.StoreMessageInput{
+		Recipients: []string{"search@example.com"},
+		To:         []store.AddressEntry{},
+		CC:         []store.AddressEntry{},
+		Headers:    map[string]string{"subject": "search"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var mailboxID int64
+	if err := data.DB().QueryRow(`SELECT id FROM mailboxes LIMIT 1`).Scan(&mailboxID); err != nil {
+		t.Fatal(err)
+	}
+	handler := New(data, StaticConfig{}, nil)
+	target := func(query string) string {
+		return "/api/mailboxes/" + jsonNumber(mailboxID) + "/messages?q=" + url.QueryEscape(query)
+	}
+	tests := []struct {
+		name   string
+		query  string
+		status int
+		body   string
+	}{
+		{"boundary", strings.Repeat("a", maxSearchPatternBytes), http.StatusOK, `{"messages":[]}`},
+		{"raw over limit", strings.Repeat("a", maxSearchPatternBytes+1), http.StatusBadRequest, `{"error":"Search query too long"}`},
+		{"escaped over limit", strings.Repeat("%", maxSearchPatternBytes/2+1), http.StatusBadRequest, `{"error":"Search query too long"}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assertResponse(t, request(t, handler, http.MethodGet, target(test.query), ""), test.status, test.body)
+		})
+	}
 }
 
 func TestMessageDetailCorruptJSONDoesNotMarkRead(t *testing.T) {
@@ -425,6 +580,58 @@ func TestAttachmentHeaders(t *testing.T) {
 				t.Errorf("Cache-Control=%q", got)
 			}
 		})
+	}
+}
+
+func TestAttachmentLookupHeadersAndEmptyContent(t *testing.T) {
+	data := testStore(t)
+	handler := New(data, StaticConfig{}, nil)
+
+	missing := request(t, handler, http.MethodGet, "/api/attachments/999999", "")
+	if missing.Code != http.StatusNotFound {
+		t.Fatalf("missing status=%d", missing.Code)
+	}
+	if got := missing.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Errorf("missing nosniff=%q", got)
+	}
+	if got := missing.Header().Get("Cache-Control"); got != "private, no-store" {
+		t.Errorf("missing cache-control=%q", got)
+	}
+
+	invalid := request(t, handler, http.MethodGet, "/api/attachments/nope", "")
+	if invalid.Code != http.StatusBadRequest {
+		t.Fatalf("invalid status=%d", invalid.Code)
+	}
+	if got := invalid.Header().Get("Cache-Control"); got != "private, no-store" {
+		t.Errorf("invalid cache-control=%q", got)
+	}
+
+	stored, err := data.StoreMessage(context.Background(), store.StoreMessageInput{
+		Recipients: []string{"empty@example.com"},
+		To:         []store.AddressEntry{},
+		CC:         []store.AddressEntry{},
+		Headers:    map[string]string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := data.DB().Exec(`INSERT INTO attachments (message_id, size, content) VALUES (?, 0, NULL)`, stored[0].MessageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attachmentID, err := result.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	empty := request(t, handler, http.MethodGet, "/api/attachments/"+jsonNumber(attachmentID), "")
+	if empty.Code != http.StatusOK || empty.Body.Len() != 0 {
+		t.Fatalf("empty status=%d body=%q", empty.Code, empty.Body.String())
+	}
+	if got := empty.Header().Get("Content-Length"); got != "0" {
+		t.Errorf("empty content-length=%q", got)
+	}
+	if got := empty.Header().Get("Cache-Control"); got != "private, no-store" {
+		t.Errorf("empty cache-control=%q", got)
 	}
 }
 
@@ -688,9 +895,18 @@ func TestInspectRawlessPartialAndCorruptHeaders(t *testing.T) {
 }
 
 func TestSSERequestReturnsPromptlyAfterCancel(t *testing.T) {
-	server := httptest.NewServer(New(testStore(t), StaticConfig{}, nil))
-	defer server.Close()
+	handler := New(testStore(t), StaticConfig{}, nil)
+	done := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handler.ServeHTTP(w, r)
+		close(done)
+	}))
+	defer func() {
+		server.CloseClientConnections()
+		server.Close()
+	}()
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/api/events", nil)
 	response, err := server.Client().Do(req)
 	if err != nil {
@@ -699,7 +915,8 @@ func TestSSERequestReturnsPromptlyAfterCancel(t *testing.T) {
 	cancel()
 	_ = response.Body.Close()
 	select {
-	case <-time.After(100 * time.Millisecond):
-	default:
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("SSE handler did not return after client cancellation")
 	}
 }

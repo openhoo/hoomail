@@ -169,7 +169,12 @@ func (s *server) listMessages(response http.ResponseWriter, request *http.Reques
 		writeError(response, http.StatusBadRequest, "Invalid mailbox id")
 		return
 	}
-	messages, err := s.store.ListMessages(request.Context(), id, request.URL.Query().Get("q"))
+	query := request.URL.Query().Get("q")
+	if searchPatternBytes(query) > maxSearchPatternBytes {
+		writeError(response, http.StatusBadRequest, "Search query too long")
+		return
+	}
+	messages, err := s.store.ListMessages(request.Context(), id, query)
 	if err != nil {
 		internalError(response, err)
 		return
@@ -319,7 +324,7 @@ func (s *server) getMessage(response http.ResponseWriter, request *http.Request,
 		attachments = append(attachments, attachmentInfoResponse{attachment.ID, attachment.Filename, attachment.ContentType, attachment.Size})
 	}
 	message := messageResponse{detail.Message.ID, detail.Message.MailboxID, detail.Message.FromAddress, detail.Message.FromName, to, cc, detail.Message.Subject, html, detail.Message.Text, headers, detail.Message.Size, detail.Message.ReceivedAt, iCalEvents}
-	if err := s.store.MarkRead(request.Context(), id, detail.Message.MailboxID, detail.Message.IsRead); err != nil {
+	if err := s.store.MarkReadDetail(request.Context(), detail); err != nil {
 		internalError(response, err)
 		return
 	}
@@ -370,17 +375,34 @@ func (s *server) inspectMessage(response http.ResponseWriter, request *http.Requ
 		internalError(response, errors.New("invalid stored headers JSON"))
 		return
 	}
-	report, err := inspect.Analyze(inspect.Input{
+	report, err := inspect.Analyze(request.Context(), inspect.Input{
 		Raw:        row.Raw,
 		LegacyHTML: row.HTML,
 		LegacyText: row.Text,
 		StoredSize: row.Size,
 	})
 	if err != nil {
+		if request.Context().Err() != nil {
+			return
+		}
 		internalError(response, err)
 		return
 	}
 	writeJSON(response, http.StatusOK, report)
+}
+
+const (
+	// maxMessageActionIDs stays far below the bundled SQLite bind-parameter
+	// limit (32766) so one action can never exceed it, even with the extra
+	// read-state parameter.
+	maxMessageActionIDs = 10_000
+	// maxSearchPatternBytes bounds the escaped LIKE pattern built by the
+	// store (each \, %, _ doubles) far below SQLite's 50000-byte limit.
+	maxSearchPatternBytes = 1024
+)
+
+func searchPatternBytes(query string) int {
+	return len(query) + strings.Count(query, `\`) + strings.Count(query, `%`) + strings.Count(query, `_`)
 }
 
 const maxJSONBodyBytes = 1 << 20
@@ -404,15 +426,28 @@ func validIDs(value any) []int64 {
 	if !ok {
 		return []int64{}
 	}
-	ids := make([]int64, 0, len(values))
+	capacity := len(values)
+	if capacity > maxMessageActionIDs+1 {
+		capacity = maxMessageActionIDs + 1
+	}
+	ids := make([]int64, 0, capacity)
+	seen := make(map[int64]struct{}, capacity)
 	for _, value := range values {
 		number, ok := value.(json.Number)
 		if !ok {
 			continue
 		}
 		id, err := number.Int64()
-		if err == nil {
-			ids = append(ids, id)
+		if err != nil {
+			continue
+		}
+		if _, duplicate := seen[id]; duplicate {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+		if len(ids) > maxMessageActionIDs {
+			return ids
 		}
 	}
 	return ids
@@ -428,6 +463,10 @@ func (s *server) messageActions(response http.ResponseWriter, request *http.Requ
 	ids := validIDs(body["ids"])
 	if len(ids) == 0 {
 		writeError(response, http.StatusBadRequest, "No valid message ids provided")
+		return
+	}
+	if len(ids) > maxMessageActionIDs {
+		writeError(response, http.StatusBadRequest, fmt.Sprintf("Too many message ids provided; maximum is %d", maxMessageActionIDs))
 		return
 	}
 	action, _ := body["action"].(string)
@@ -550,6 +589,7 @@ func encodeRFC5987(value string) string {
 
 func (s *server) getAttachment(response http.ResponseWriter, request *http.Request, rawID string) {
 	response.Header().Set("X-Content-Type-Options", "nosniff")
+	response.Header().Set("Cache-Control", "private, no-store")
 	id, ok := parseID(rawID)
 	if !ok {
 		writeError(response, http.StatusBadRequest, "Invalid attachment id")
@@ -560,7 +600,7 @@ func (s *server) getAttachment(response http.ResponseWriter, request *http.Reque
 		internalError(response, err)
 		return
 	}
-	if attachment == nil || attachment.Content == nil {
+	if attachment == nil {
 		writeError(response, http.StatusNotFound, "Attachment not found")
 		return
 	}
@@ -568,6 +608,9 @@ func (s *server) getAttachment(response http.ResponseWriter, request *http.Reque
 	filename := sanitizeAttachmentFilename(attachment.Filename, attachment.ID)
 	disposition := "attachment"
 	content := attachment.Content
+	if content == nil {
+		content = []byte{}
+	}
 	if contentType == "image/svg+xml" {
 		response.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'none'; style-src 'none'; img-src 'none'; object-src 'none'; base-uri 'none'")
 	}
@@ -586,7 +629,6 @@ func (s *server) getAttachment(response http.ResponseWriter, request *http.Reque
 	response.Header().Set("Content-Type", contentType)
 	response.Header().Set("Content-Length", strconv.Itoa(len(content)))
 	response.Header().Set("Content-Disposition", formatAttachmentDisposition(disposition, filename))
-	response.Header().Set("Cache-Control", "private, no-store")
 	response.WriteHeader(http.StatusOK)
 	_, _ = response.Write(content)
 }

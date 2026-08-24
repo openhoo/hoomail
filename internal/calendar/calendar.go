@@ -15,7 +15,10 @@ const (
 	MethodReply   = "REPLY"
 )
 
-type Attendee = ParsedAttendee
+// maxEventsPerCalendar bounds how many VEVENT components a single calendar part
+// may contain before parsing fails closed, so one allowed-size attachment cannot
+// amplify into unbounded parse, marshal, and persistence work.
+const maxEventsPerCalendar = 1000
 
 type ParsedAttendee struct {
 	Address  string  `json:"address"`
@@ -40,8 +43,6 @@ type ParsedCalendarEvent struct {
 	AllDay           bool             `json:"allDay"`
 }
 
-type Event = ParsedCalendarEvent
-
 func (event ParsedCalendarEvent) DedupKey() string {
 	return event.UID + "|" + strconv.Itoa(event.Sequence) + "|" + event.Method
 }
@@ -52,18 +53,6 @@ func IsCalendarPart(contentType, filename string) bool {
 		return true
 	}
 	return strings.HasSuffix(strings.ToLower(filename), ".ics")
-}
-
-func Parse(text string) []ParsedCalendarEvent {
-	return ParseICS(text)
-}
-
-func ParseIcs(text string) []ParsedCalendarEvent {
-	return ParseICS(text)
-}
-
-func IsPart(contentType, filename string) bool {
-	return IsCalendarPart(contentType, filename)
 }
 
 func ParseICS(text string) []ParsedCalendarEvent {
@@ -78,6 +67,8 @@ func ParseICS(text string) []ParsedCalendarEvent {
 	var current *eventBuilder
 	seenCalendar := false
 	closedCalendar := false
+	seenComponent := false
+	eventCount := 0
 
 	for _, raw := range lines {
 		if raw == "" {
@@ -91,13 +82,26 @@ func ParseICS(text string) []ParsedCalendarEvent {
 		switch line.name {
 		case "BEGIN":
 			component := strings.ToUpper(line.value)
-			if len(stack) == 0 {
+			switch {
+			case len(stack) == 0:
 				if component != "VCALENDAR" || seenCalendar {
 					return []ParsedCalendarEvent{}
 				}
 				seenCalendar = true
-			} else if stack[len(stack)-1] == "VCALENDAR" && component == "VEVENT" {
+			case component == "VCALENDAR":
+				return []ParsedCalendarEvent{}
+			case component == "VEVENT":
+				if len(stack) != 1 || stack[0] != "VCALENDAR" {
+					return []ParsedCalendarEvent{}
+				}
+				eventCount++
+				if eventCount > maxEventsPerCalendar {
+					return []ParsedCalendarEvent{}
+				}
 				current = newEventBuilder()
+			}
+			if len(stack) > 0 {
+				seenComponent = true
 			}
 			stack = append(stack, component)
 			continue
@@ -123,13 +127,19 @@ func ParseICS(text string) []ParsedCalendarEvent {
 			continue
 		}
 
+		if len(stack) == 0 {
+			return []ParsedCalendarEvent{}
+		}
 		if len(stack) == 1 && stack[0] == "VCALENDAR" && line.name == "METHOD" {
+			if seenComponent {
+				return []ParsedCalendarEvent{}
+			}
 			if value := strings.ToUpper(line.value); value != "" {
 				method = value
 			}
 			continue
 		}
-		if current != nil && len(stack) > 0 && stack[len(stack)-1] == "VEVENT" {
+		if current != nil && stack[len(stack)-1] == "VEVENT" {
 			current.add(line)
 		}
 	}
@@ -174,7 +184,10 @@ func (builder *eventBuilder) build(method string) (ParsedCalendarEvent, bool, bo
 	if !hasUID || !hasStart {
 		return ParsedCalendarEvent{}, false, true
 	}
-	uid := decodeText(uidLine.value)
+	uid, ok := decodeText(uidLine.value)
+	if !ok {
+		return ParsedCalendarEvent{}, false, false
+	}
 	if uid == "" {
 		return ParsedCalendarEvent{}, false, true
 	}
@@ -203,13 +216,20 @@ func (builder *eventBuilder) build(method string) (ParsedCalendarEvent, bool, bo
 		endMillis = &value
 	}
 
+	summary, summaryOk := optionalText(builder.properties["SUMMARY"])
+	description, descriptionOk := optionalText(builder.properties["DESCRIPTION"])
+	location, locationOk := optionalText(builder.properties["LOCATION"])
+	if !summaryOk || !descriptionOk || !locationOk {
+		return ParsedCalendarEvent{}, false, false
+	}
+
 	event := ParsedCalendarEvent{
 		Method:      strings.ToUpper(method),
 		UID:         uid,
 		Sequence:    parseSequence(builder.properties["SEQUENCE"].value),
-		Summary:     optionalText(builder.properties["SUMMARY"]),
-		Description: optionalText(builder.properties["DESCRIPTION"]),
-		Location:    optionalText(builder.properties["LOCATION"]),
+		Summary:     summary,
+		Description: description,
+		Location:    location,
 		Status:      optionalUpper(builder.properties["STATUS"]),
 		Attendees:   make([]ParsedAttendee, 0, len(builder.attendees)),
 		DTStart:     start.UnixMilli(),
@@ -242,15 +262,25 @@ func unfoldLines(text string) ([]string, bool) {
 	text = strings.ReplaceAll(text, "\r", "\n")
 	physical := strings.Split(text, "\n")
 	lines := make([]string, 0, len(physical))
-	for _, line := range physical {
-		if strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t") {
-			if len(lines) == 0 {
+	var line strings.Builder
+	started := false
+	for _, physicalLine := range physical {
+		if strings.HasPrefix(physicalLine, " ") || strings.HasPrefix(physicalLine, "\t") {
+			if !started {
 				return nil, false
 			}
-			lines[len(lines)-1] += line[1:]
+			line.WriteString(physicalLine[1:])
 			continue
 		}
-		lines = append(lines, line)
+		if started {
+			lines = append(lines, line.String())
+		}
+		line.Reset()
+		line.WriteString(physicalLine)
+		started = true
+	}
+	if started {
+		lines = append(lines, line.String())
 	}
 	return lines, true
 }
@@ -346,13 +376,17 @@ func decodeParameter(value string) string {
 	return value
 }
 
-func decodeText(value string) string {
+func decodeText(value string) (string, bool) {
 	var decoded strings.Builder
 	decoded.Grow(len(value))
 	for index := 0; index < len(value); index++ {
-		if value[index] != '\\' || index+1 >= len(value) {
-			decoded.WriteByte(value[index])
+		character := value[index]
+		if character != '\\' {
+			decoded.WriteByte(character)
 			continue
+		}
+		if index+1 >= len(value) {
+			return "", false
 		}
 		index++
 		switch value[index] {
@@ -361,10 +395,10 @@ func decodeText(value string) string {
 		case '\\', ',', ';':
 			decoded.WriteByte(value[index])
 		default:
-			decoded.WriteByte(value[index])
+			return "", false
 		}
 	}
-	return decoded.String()
+	return decoded.String(), true
 }
 
 func mailto(value string) *string {
@@ -381,12 +415,15 @@ func mailto(value string) *string {
 	return &value
 }
 
-func optionalText(line contentLine) *string {
-	value := decodeText(line.value)
-	if value == "" {
-		return nil
+func optionalText(line contentLine) (*string, bool) {
+	value, ok := decodeText(line.value)
+	if !ok {
+		return nil, false
 	}
-	return &value
+	if value == "" {
+		return nil, true
+	}
+	return &value, true
 }
 
 func optionalUpper(line contentLine) *string {

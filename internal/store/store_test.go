@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -43,7 +45,7 @@ func TestOpenMigratesLegacyMessagesColumns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !columns["ical_json"] || !columns["raw"] {
+	if !columns["ical_json"] || !columns["raw"] || !columns["snippet"] {
 		t.Fatalf("missing migrations: %#v", columns)
 	}
 }
@@ -252,5 +254,163 @@ func TestCalendarSequenceCancelAndReplyRules(t *testing.T) {
 	}
 	if len(attendees) != 1 || attendees[0].Partstat == nil || *attendees[0].Partstat != "ACCEPTED" {
 		t.Fatalf("attendees=%v", attendees)
+	}
+}
+
+func TestMarkReadRequiresMailboxAndEmitsOnlyOnChange(t *testing.T) {
+	var emitted []events.Event
+	store := openTestStore(t, WithBroadcaster(func(event events.Event) {
+		emitted = append(emitted, event)
+	}))
+	ctx := context.Background()
+	stored, err := store.StoreMessage(ctx, StoreMessageInput{
+		Recipients: []string{"first@example.com", "second@example.com"},
+		Headers:    map[string]string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	emitted = nil
+
+	if err := store.MarkRead(ctx, stored[0].MessageID, stored[1].MailboxID, 0); err != nil {
+		t.Fatal(err)
+	}
+	detail, err := store.GetMessage(ctx, stored[0].MessageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.Message.IsRead != 0 || len(emitted) != 0 {
+		t.Fatalf("wrong-mailbox MarkRead changed row or emitted event: read=%d events=%v", detail.Message.IsRead, emitted)
+	}
+
+	if err := store.MarkRead(ctx, stored[0].MessageID, stored[0].MailboxID, 0); err != nil {
+		t.Fatal(err)
+	}
+	if detail, err = store.GetMessage(ctx, stored[0].MessageID); err != nil {
+		t.Fatal(err)
+	} else if detail.Message.IsRead != 1 || len(emitted) != 1 || emitted[0].Type != events.TypeMessagesChanged {
+		t.Fatalf("matching MarkRead = read %d events %v", detail.Message.IsRead, emitted)
+	}
+
+	emitted = nil
+	if err := store.MarkRead(ctx, stored[0].MessageID, stored[0].MailboxID, 1); err != nil {
+		t.Fatal(err)
+	}
+	if len(emitted) != 0 {
+		t.Fatalf("already-read snapshot emitted event: %v", emitted)
+	}
+}
+
+func TestStoreMessagePersistsBoundedSnippets(t *testing.T) {
+	store := openTestStore(t, WithBroadcaster(func(events.Event) {}))
+	ctx := context.Background()
+	text := strings.Repeat("ä", 200)
+	html := `<style>.hidden{display:none}</style><p>first&nbsp;second</p><script>alert(1)</script>`
+	tests := []struct {
+		name string
+		text *string
+		html *string
+		want string
+	}{
+		{name: "text takes precedence", text: &text, html: &html, want: normalizeSnippet(text, snippetLimit)},
+		{name: "html strips active blocks and tags", html: &html, want: normalizeSnippet(tags.ReplaceAllString(styleScript.ReplaceAllString(html, " "), " "), snippetLimit)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := store.StoreMessage(ctx, StoreMessageInput{Recipients: []string{test.name + "@example.com"}, Text: test.text, HTML: test.html, Headers: map[string]string{}}); err != nil {
+				t.Fatal(err)
+			}
+			mailboxes, err := store.ListMailboxes(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var mailboxID int64
+			for _, mailbox := range mailboxes {
+				if mailbox.Address == test.name+"@example.com" {
+					mailboxID = mailbox.ID
+				}
+			}
+			rows, err := store.ListMessages(ctx, mailboxID, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(rows) != 1 || rows[0].Snippet != test.want {
+				t.Fatalf("snippet=%q want %q rows=%v", rows[0].Snippet, test.want, rows)
+			}
+		})
+	}
+}
+
+func TestOpenBackfillsSnippetColumnForLegacyRows(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-snippets.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`
+		CREATE TABLE mailboxes (id INTEGER PRIMARY KEY AUTOINCREMENT, address TEXT NOT NULL UNIQUE, created_at INTEGER NOT NULL, last_message_at INTEGER);
+		CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, mailbox_id INTEGER NOT NULL, from_address TEXT, from_name TEXT, to_json TEXT NOT NULL DEFAULT '[]', cc_json TEXT NOT NULL DEFAULT '[]', subject TEXT, html TEXT, text TEXT, headers_json TEXT NOT NULL DEFAULT '{}', size INTEGER NOT NULL DEFAULT 0, is_read INTEGER NOT NULL DEFAULT 0, received_at INTEGER NOT NULL);
+		INSERT INTO mailboxes(address, created_at) VALUES ('legacy@example.com', 1);
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := `<style>ignore</style><p>legacy body</p><script>ignore</script>`
+	_, err = db.Exec(`INSERT INTO messages(mailbox_id,html,received_at) VALUES(1,?,2)`, html)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	rows, err := store.ListMessages(context.Background(), 1, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := normalizeSnippet(tags.ReplaceAllString(styleScript.ReplaceAllString(html, " "), " "), snippetLimit)
+	if len(rows) != 1 || rows[0].Snippet != want {
+		t.Fatalf("backfilled snippet=%q want %q rows=%v", rows[0].Snippet, want, rows)
+	}
+}
+
+func TestPOP3SerializationHonorsContextCancellation(t *testing.T) {
+	store := openTestStore(t)
+	tests := []struct {
+		name string
+		call func(context.Context) error
+	}{
+		{name: "open", call: func(ctx context.Context) error {
+			_, err := store.OpenPOP3Mailbox(ctx, "blocked@example.com")
+			return err
+		}},
+		{name: "delete", call: func(ctx context.Context) error {
+			_, err := store.DeletePOP3Messages(ctx, store.pop3Generation, []int64{1})
+			return err
+		}},
+		{name: "wipe", call: store.WipeAll},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store.pop3Mu.Lock()
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			result := make(chan error, 1)
+			go func() { result <- test.call(ctx) }()
+			select {
+			case err := <-result:
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("error=%v want context.Canceled", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("canceled POP3 operation remained blocked")
+			}
+			store.pop3Mu.Unlock()
+		})
 	}
 }

@@ -9,6 +9,11 @@ import (
 	"strings"
 )
 
+const (
+	messageActionMaxItems = 10_000
+	searchQueryMaxLength  = 1024
+)
+
 func ref(name string) map[string]any { return map[string]any{"$ref": "#/components/schemas/" + name} }
 
 func array(items any) map[string]any { return map[string]any{"type": "array", "items": items} }
@@ -28,6 +33,10 @@ func nullable(schema map[string]any) map[string]any {
 	}
 	result["nullable"] = true
 	return result
+}
+
+func nullableRef(name string) map[string]any {
+	return map[string]any{"allOf": []any{ref(name)}, "nullable": true}
 }
 
 func jsonResponse(description string, schema any) map[string]any {
@@ -85,9 +94,12 @@ func main() {
 			"id": integer, "from_address": nullable(stringSchema), "from_name": nullable(stringSchema), "subject": nullable(stringSchema), "snippet": stringSchema,
 			"is_read": map[string]any{"type": "integer", "enum": []int{0, 1}}, "received_at": integer, "has_ical": map[string]any{"type": "integer", "enum": []int{0, 1}}, "attachment_count": integer,
 		}),
+		"CalendarAttendee": object([]string{"address"}, map[string]any{
+			"address": stringSchema, "name": stringSchema, "partstat": stringSchema, "role": stringSchema,
+		}),
 		"CalendarEvent": object([]string{"id", "uid", "sequence", "summary", "description", "location", "status", "organizerAddress", "organizerName", "attendees", "dtstart", "dtend", "allDay", "lastMessageId", "updatedAt"}, map[string]any{
 			"id": integer, "uid": stringSchema, "sequence": map[string]any{"type": "integer"}, "summary": nullable(stringSchema), "description": nullable(stringSchema), "location": nullable(stringSchema),
-			"status": stringSchema, "organizerAddress": nullable(stringSchema), "organizerName": nullable(stringSchema), "attendees": array(address), "dtstart": integer,
+			"status": stringSchema, "organizerAddress": nullable(stringSchema), "organizerName": nullable(stringSchema), "attendees": array(ref("CalendarAttendee")), "dtstart": integer,
 			"dtend": nullable(integer), "allDay": boolean, "lastMessageId": nullable(integer), "updatedAt": integer,
 		}),
 		"AttachmentInfo": object([]string{"id", "filename", "contentType", "size"}, map[string]any{
@@ -99,7 +111,7 @@ func main() {
 			"size": integer, "receivedAt": integer, "icalEvents": array(map[string]any{"type": "object", "additionalProperties": true}),
 		}),
 		"MessageAction": object([]string{"action", "ids"}, map[string]any{
-			"action": map[string]any{"type": "string", "enum": []string{"delete", "read", "unread"}}, "ids": array(integer),
+			"action": map[string]any{"type": "string", "enum": []string{"delete", "read", "unread"}}, "ids": map[string]any{"type": "array", "items": integer, "minItems": 1, "maxItems": messageActionMaxItems},
 		}),
 		"SendTestRequest": object(nil, map[string]any{
 			"to": map[string]any{"type": "string", "format": "email", "default": "test@hoomail.local"}, "subject": stringSchema,
@@ -117,7 +129,7 @@ func main() {
 		}),
 		"Finding": object([]string{"id", "category", "outcome", "severity", "basis", "applicability", "label", "detail", "evidence", "evidenceTruncated", "reference"}, map[string]any{
 			"id": stringSchema, "category": stringSchema, "outcome": stringSchema, "severity": stringSchema, "basis": stringSchema, "applicability": stringSchema,
-			"label": stringSchema, "detail": stringSchema, "evidence": array(ref("Evidence")), "evidenceTruncated": boolean, "reference": nullable(ref("Reference")),
+			"label": stringSchema, "detail": stringSchema, "evidence": array(ref("Evidence")), "evidenceTruncated": boolean, "reference": nullableRef("Reference"),
 		}),
 		"Resource": object([]string{"kind", "path", "url", "text", "occurrenceCount"}, map[string]any{
 			"kind": stringSchema, "path": nullable(stringSchema), "url": stringSchema, "text": stringSchema, "occurrenceCount": map[string]any{"type": "integer"},
@@ -154,7 +166,7 @@ func main() {
 		}),
 		"InspectionReport": object([]string{"analysis", "summary", "findings", "headers", "resources", "mimeTree", "htmlCompatibility"}, map[string]any{
 			"analysis": ref("Analysis"), "summary": ref("InspectionSummary"), "findings": array(ref("Finding")), "headers": array(ref("InspectionHeader")),
-			"resources": array(ref("Resource")), "mimeTree": nullable(ref("MimeNode")), "htmlCompatibility": nullable(ref("HTMLCompatibility")),
+			"resources": array(ref("Resource")), "mimeTree": nullableRef("MimeNode"), "htmlCompatibility": nullableRef("HTMLCompatibility"),
 		}),
 		"Event": object([]string{"type"}, map[string]any{
 			"type":    map[string]any{"type": "string", "enum": []string{"connected", "mailbox:new", "mailbox:deleted", "messages:changed", "calendar:changed", "message:new", "reset"}},
@@ -167,7 +179,7 @@ func main() {
 	deleteMailbox := operation("Mailboxes", "Delete a mailbox and its messages", withSuccess(errorResponses("400", "404"), "200", "Mailbox deleted", ref("Success")))
 	deleteMailbox["parameters"] = []any{pathParameter("mailboxId", "Mailbox ID")}
 	listMessages := operation("Messages", "List or search mailbox messages", withSuccess(errorResponses("400"), "200", "Messages", object([]string{"messages"}, map[string]any{"messages": array(ref("MessageListItem"))})))
-	listMessages["parameters"] = []any{pathParameter("mailboxId", "Mailbox ID"), map[string]any{"name": "q", "in": "query", "description": "Case-insensitive message search", "schema": stringSchema}}
+	listMessages["parameters"] = []any{pathParameter("mailboxId", "Mailbox ID"), map[string]any{"name": "q", "in": "query", "description": "Case-insensitive message search", "schema": map[string]any{"type": "string", "maxLength": searchQueryMaxLength}}}
 	listEvents := operation("Calendar", "List mailbox calendar events", withSuccess(errorResponses("400"), "200", "Calendar events", object([]string{"events"}, map[string]any{"events": array(ref("CalendarEvent"))})))
 	listEvents["parameters"] = []any{pathParameter("mailboxId", "Mailbox ID")}
 	getMessage := operation("Messages", "Get a message and mark it read", withSuccess(errorResponses("400", "404"), "200", "Message detail", object([]string{"message", "attachments"}, map[string]any{"message": ref("Message"), "attachments": array(ref("AttachmentInfo"))})))

@@ -2,10 +2,13 @@ package pop3server
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -24,9 +27,13 @@ type recordingStore struct {
 	deleteCalls [][]int64
 	openErr     error
 	deleteErr   error
+	openHook    func(context.Context)
 }
 
-func (recording *recordingStore) OpenPOP3Mailbox(_ context.Context, address string) (store.POP3MailboxSnapshot, error) {
+func (recording *recordingStore) OpenPOP3Mailbox(ctx context.Context, address string) (store.POP3MailboxSnapshot, error) {
+	if recording.openHook != nil {
+		recording.openHook(ctx)
+	}
 	recording.mu.Lock()
 	defer recording.mu.Unlock()
 	recording.openCalls = append(recording.openCalls, address)
@@ -423,4 +430,206 @@ func TestStoreFailuresReturnERR(t *testing.T) {
 			t.Fatalf("QUIT response = %q", response)
 		}
 	})
+}
+
+func TestTopBytesUsesEarliestBoundaryAndPhysicalLineTerminators(t *testing.T) {
+	tests := []struct {
+		name      string
+		raw       string
+		bodyLines int
+		want      string
+	}{
+		{name: "earliest mixed boundary headers only", raw: "Subject: x\n\nfirst\r\n\r\nsecond", bodyLines: 0, want: "Subject: x\n\n"},
+		{name: "earliest mixed boundary first body line", raw: "Subject: x\n\nfirst\r\n\r\nsecond", bodyLines: 1, want: "Subject: x\n\nfirst\r\n"},
+		{name: "lone CR body terminators", raw: "Subject: x\r\n\r\none\rtwo\rthree", bodyLines: 2, want: "Subject: x\r\n\r\none\rtwo\r"},
+		{name: "unterminated final line", raw: "Subject: x\r\n\r\none\rtwo\rthree", bodyLines: 3, want: "Subject: x\r\n\r\none\rtwo\rthree"},
+		{name: "no header boundary", raw: "Subject: x", bodyLines: 1, want: "Subject: x"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := string(topBytes([]byte(test.raw), test.bodyLines)); got != test.want {
+				t.Fatalf("topBytes=%q want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestPOP3ReadDeadlineClosesIdleConnection(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := New(&recordingStore{})
+	service.ReadTimeout = 40 * time.Millisecond
+	service.WriteTimeout = time.Second
+	done := make(chan error, 1)
+	go func() { done <- service.Serve(listener) }()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := service.Shutdown(ctx); err != nil {
+			t.Errorf("shutdown: %v", err)
+		}
+	})
+
+	conn, err := net.Dial("tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	if welcome, err := reader.ReadString('\n'); err != nil || !strings.HasPrefix(welcome, "+OK") {
+		t.Fatalf("welcome=%q err=%v", welcome, err)
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reader.ReadString('\n'); err == nil {
+		t.Fatal("idle connection remained open")
+	}
+}
+
+func TestPOP3ShutdownCancelsBlockedStoreCall(t *testing.T) {
+	entered := make(chan struct{})
+	var once sync.Once
+	recording := &recordingStore{
+		openHook: func(ctx context.Context) {
+			once.Do(func() { close(entered) })
+			<-ctx.Done()
+		},
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := New(recording)
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- service.Serve(listener) }()
+	client := dialPOP3(t, listener.Addr().String())
+	defer client.close()
+	if response := client.command("USER blocked@example.test"); !strings.HasPrefix(response, "+OK") {
+		t.Fatalf("USER response=%q", response)
+	}
+	if _, err := fmt.Fprint(client.conn, "PASS ignored\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("store call did not start")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := service.Shutdown(ctx); err != nil {
+		t.Fatalf("shutdown=%v", err)
+	}
+	select {
+	case err := <-serveDone:
+		if !errors.Is(err, ErrServerClosed) {
+			t.Fatalf("Serve returned %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Serve did not return after shutdown")
+	}
+}
+
+type deadlineConn struct {
+	input              *bytes.Reader
+	chunks             [][]byte
+	readIndex          int
+	readDelay          time.Duration
+	rejectExpired      bool
+	writeErrors        int
+	writes             int
+	writeDeadline      time.Time
+	writeDeadlineCalls int
+	closed             bool
+}
+
+func (conn *deadlineConn) Read(p []byte) (int, error) {
+	if conn.chunks == nil {
+		return conn.input.Read(p)
+	}
+	if conn.readIndex >= len(conn.chunks) {
+		return 0, io.EOF
+	}
+	if conn.readIndex == 2 && conn.readDelay > 0 {
+		time.Sleep(conn.readDelay)
+	}
+	chunk := conn.chunks[conn.readIndex]
+	conn.readIndex++
+	return copy(p, chunk), nil
+}
+func (conn *deadlineConn) Close() error                { conn.closed = true; return nil }
+func (conn *deadlineConn) LocalAddr() net.Addr         { return &net.TCPAddr{} }
+func (conn *deadlineConn) RemoteAddr() net.Addr        { return &net.TCPAddr{} }
+func (conn *deadlineConn) SetDeadline(time.Time) error { return nil }
+func (conn *deadlineConn) SetReadDeadline(time.Time) error {
+	return nil
+}
+func (conn *deadlineConn) SetWriteDeadline(deadline time.Time) error {
+	conn.writeDeadline = deadline
+	conn.writeDeadlineCalls++
+	return nil
+}
+func (conn *deadlineConn) Write(p []byte) (int, error) {
+	conn.writes++
+	if conn.rejectExpired && conn.writes >= 4 {
+		if time.Now().After(conn.writeDeadline) {
+			conn.writeErrors++
+			return 0, os.ErrDeadlineExceeded
+		}
+		return len(p), nil
+	}
+	if conn.writes < 4 {
+		return len(p), nil
+	}
+	if wait := time.Until(conn.writeDeadline); wait > 0 {
+		time.Sleep(wait)
+	}
+	return 0, os.ErrDeadlineExceeded
+}
+
+func TestPOP3WriteDeadlineClosesStalledRetrieval(t *testing.T) {
+	raw := append([]byte("Subject: large\r\n\r\n"), bytes.Repeat([]byte("x"), 16<<20)...)
+	conn := &deadlineConn{input: bytes.NewReader([]byte("USER large@example.test\r\nPASS ignored\r\nRETR 1\r\n"))}
+	service := New(&recordingStore{messages: []store.POP3Message{{ID: 1, Raw: raw}}})
+	service.ReadTimeout = time.Second
+	service.WriteTimeout = 20 * time.Millisecond
+	service.mu.Lock()
+	service.conns[conn] = struct{}{}
+	service.wg.Add(1)
+	service.mu.Unlock()
+
+	start := time.Now()
+	service.serveConn(conn)
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("stalled write took %s", elapsed)
+	}
+	if conn.writeDeadlineCalls < 4 {
+		t.Fatalf("write deadline calls=%d want at least 4", conn.writeDeadlineCalls)
+	}
+	if !conn.closed {
+		t.Fatal("connection was not closed")
+	}
+}
+
+func TestPOP3RefreshesWriteDeadlineBeforeDelayedCommand(t *testing.T) {
+	conn := &deadlineConn{
+		chunks:        [][]byte{[]byte("USER delayed@example.test\r\n"), []byte("PASS ignored\r\n"), []byte("RETR 1\r\n")},
+		readDelay:     40 * time.Millisecond,
+		rejectExpired: true,
+	}
+	service := New(&recordingStore{messages: []store.POP3Message{{ID: 1, Raw: append([]byte("Subject: delayed\r\n\r\n"), bytes.Repeat([]byte("y"), 8<<10)...)}}})
+	service.ReadTimeout = time.Second
+	service.WriteTimeout = 20 * time.Millisecond
+	service.mu.Lock()
+	service.conns[conn] = struct{}{}
+	service.wg.Add(1)
+	service.mu.Unlock()
+
+	service.serveConn(conn)
+	if conn.writeErrors != 0 {
+		t.Fatalf("delayed command used an expired write deadline: %d errors", conn.writeErrors)
+	}
 }

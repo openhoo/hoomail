@@ -2,6 +2,7 @@ package inspect
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"net/url"
 	"strconv"
@@ -12,30 +13,33 @@ import (
 )
 
 type HTMLFacts struct {
-	explicitHTMLRoot   bool
-	lang               string
-	langInvalid        bool
-	imageCount         int
-	missingAlt         int
-	anchorCount        int
-	unnamedLinks       int
-	externalImages     int
-	trackingPixels     int
-	insecure           int
-	truncated          bool
-	resources          []htmlResourceOccurrence
-	missingAltEvidence []Evidence
-	unnamedEvidence    []Evidence
-	externalEvidence   []Evidence
-	trackingEvidence   []Evidence
-	insecureEvidence   []Evidence
+	explicitHTMLRoot      bool
+	lang                  string
+	langInvalid           bool
+	imageCount            int
+	missingAlt            int
+	anchorCount           int
+	unnamedLinks          int
+	externalImages        int
+	trackingPixels        int
+	insecure              int
+	truncated             bool
+	resources             []htmlResourceOccurrence
+	missingAltEvidence    []Evidence
+	unnamedEvidence       []Evidence
+	externalEvidence      []Evidence
+	trackingEvidence      []Evidence
+	insecureEvidence      []Evidence
+	resourcesCapped       bool
+	resourceValuesDropped bool
 }
 
 type htmlResourceOccurrence struct {
-	kind string
-	path *string
-	url  string
-	text string
+	kind  string
+	path  *string
+	url   string
+	text  string
+	count int
 }
 
 type htmlAnchor struct {
@@ -64,7 +68,7 @@ type pendingAnchor struct {
 	imageAlt   string
 }
 
-func analyzeHTML(raw []byte, path *string) (HTMLFacts, []string) {
+func analyzeHTML(ctx context.Context, raw []byte, path *string) (HTMLFacts, []string, error) {
 	facts := HTMLFacts{resources: make([]htmlResourceOccurrence, 0)}
 	causes := make([]string, 0, 2)
 	tokenizer := html.NewTokenizer(bytes.NewReader(raw))
@@ -73,6 +77,11 @@ func analyzeHTML(raw []byte, path *string) (HTMLFacts, []string) {
 	pending := make([]pendingAnchor, 0)
 	idText := make(map[string]string)
 	nodes := 0
+	openTags := make(map[string][]int)
+	activeIDs := make([]int, 0, 16)
+	anchorHistory := make([]int, 0, 8)
+	nearestAnchor := -1
+	resourceIndex := make(map[string]int)
 	for {
 		typeOfToken := tokenizer.Next()
 		if typeOfToken == html.ErrorToken {
@@ -90,7 +99,12 @@ func analyzeHTML(raw []byte, path *string) (HTMLFacts, []string) {
 			if nodes > MaxHTMLNodes {
 				facts.truncated = true
 				causes = append(causes, "HTML nodes")
-				return facts, causes
+				return facts, causes, nil
+			}
+			if nodes%1024 == 0 {
+				if err := ctx.Err(); err != nil {
+					return facts, causes, err
+				}
 			}
 			name := strings.ToLower(token.Data)
 			attrs := htmlAttrs(token.Attr)
@@ -111,10 +125,10 @@ func analyzeHTML(raw []byte, path *string) (HTMLFacts, []string) {
 			}
 			if name == "link" && containsHTMLToken(attrs["rel"], "stylesheet") {
 				if stylesheet, ok := inspectionHTTPURL(attrs["href"]); ok {
-					facts.resources = append(facts.resources, htmlResourceOccurrence{kind: "link", path: path, url: stylesheet, text: "stylesheet"})
+					collectHTMLResource(&facts, resourceIndex, htmlResourceOccurrence{kind: "link", path: path, url: stylesheet, text: "stylesheet"})
 					if strings.HasPrefix(strings.ToLower(stylesheet), "http://") {
 						facts.insecure++
-						facts.insecureEvidence = append(facts.insecureEvidence, Evidence{Source: "html", Path: path, Value: new(evidenceValue(stylesheet))})
+						facts.insecureEvidence = appendBoundedHTMLEvidence(facts.insecureEvidence, path, stylesheet)
 					}
 				}
 			}
@@ -123,15 +137,10 @@ func analyzeHTML(raw []byte, path *string) (HTMLFacts, []string) {
 				alt, hasAlt := attrs["alt"]
 				if !hasAlt {
 					facts.missingAlt++
-					facts.missingAltEvidence = append(facts.missingAltEvidence, Evidence{Source: "html", Path: path, Value: new("img without alt")})
+					facts.missingAltEvidence = appendBoundedHTMLEvidence(facts.missingAltEvidence, path, "img without alt")
 				}
-				if !hidden {
-					for index := len(stack) - 1; index >= 0; index-- {
-						if stack[index].anchor != nil {
-							appendBoundedNormalized(&stack[index].anchor.childImageAlt, alt, 512)
-							break
-						}
-					}
+				if !hidden && nearestAnchor >= 0 {
+					appendBoundedNormalized(&stack[nearestAnchor].anchor.childImageAlt, alt, 512)
 				}
 				source := strings.TrimSpace(attrs["src"])
 				if source != "" {
@@ -141,17 +150,17 @@ func analyzeHTML(raw []byte, path *string) (HTMLFacts, []string) {
 						if tracking {
 							kind = "tracking-pixel"
 							facts.trackingPixels++
-							facts.trackingEvidence = append(facts.trackingEvidence, Evidence{Source: "html", Path: path, Value: new(evidenceValue(source))})
+							facts.trackingEvidence = appendBoundedHTMLEvidence(facts.trackingEvidence, path, source)
 						}
 						if external {
 							facts.externalImages++
-							facts.externalEvidence = append(facts.externalEvidence, Evidence{Source: "html", Path: path, Value: new(evidenceValue(source))})
+							facts.externalEvidence = appendBoundedHTMLEvidence(facts.externalEvidence, path, source)
 						}
 						if strings.HasPrefix(strings.ToLower(source), "http://") {
 							facts.insecure++
-							facts.insecureEvidence = append(facts.insecureEvidence, Evidence{Source: "html", Path: path, Value: new(evidenceValue(source))})
+							facts.insecureEvidence = appendBoundedHTMLEvidence(facts.insecureEvidence, path, source)
 						}
-						facts.resources = append(facts.resources, htmlResourceOccurrence{kind: kind, path: path, url: source, text: normalizeHTMLText(alt)})
+						collectHTMLResource(&facts, resourceIndex, htmlResourceOccurrence{kind: kind, path: path, url: source, text: normalizeHTMLText(alt)})
 					}
 				}
 			}
@@ -163,7 +172,16 @@ func analyzeHTML(raw []byte, path *string) (HTMLFacts, []string) {
 				id = ""
 			}
 			if typeOfToken == html.StartTagToken && !isVoidElement(name) {
+				position := len(stack)
 				stack = append(stack, htmlElement{name: name, id: id, anchor: anchor, hidden: hidden})
+				openTags[name] = append(openTags[name], position)
+				if anchor != nil {
+					nearestAnchor = position
+					anchorHistory = append(anchorHistory, position)
+				}
+				if id != "" {
+					activeIDs = append(activeIDs, position)
+				}
 			} else if anchor != nil {
 				pending = append(pending, pendingAnchor{href: anchor.href, ariaLabel: anchor.ariaLabel, labelledBy: anchor.labelledBy, title: anchor.title})
 			}
@@ -172,39 +190,51 @@ func analyzeHTML(raw []byte, path *string) (HTMLFacts, []string) {
 			if text == "" {
 				continue
 			}
-			for index := range stack {
-				if stack[index].id != "" {
-					appendBoundedNormalized(&stack[index].text, text, 512)
+			alive := activeIDs[:0]
+			for _, position := range activeIDs {
+				if position >= len(stack) {
+					continue
+				}
+				element := &stack[position]
+				appendBoundedNormalized(&element.text, text, 512)
+				if element.text.Len() < 512 {
+					alive = append(alive, position)
 				}
 			}
+			activeIDs = alive
 			if len(stack) == 0 || !stack[len(stack)-1].hidden {
-				for index := len(stack) - 1; index >= 0; index-- {
-					if stack[index].anchor != nil {
-						appendBoundedNormalized(&stack[index].anchor.text, text, 512)
-						break
-					}
+				if nearestAnchor >= 0 {
+					appendBoundedNormalized(&stack[nearestAnchor].anchor.text, text, 512)
 				}
 			}
 		case html.EndTagToken:
 			name := strings.ToLower(token.Data)
-			index := -1
-			for candidate := len(stack) - 1; candidate >= 0; candidate-- {
-				if stack[candidate].name == name {
-					index = candidate
-					break
-				}
-			}
-			if index >= 0 {
+			positions := openTags[name]
+			if len(positions) != 0 {
+				index := positions[len(positions)-1]
+				openTags[name] = positions[:len(positions)-1]
 				for candidate := len(stack) - 1; candidate >= index; candidate-- {
-					if stack[candidate].id != "" {
-						idText[stack[candidate].id] = normalizeHTMLText(stack[candidate].text.String())
+					element := stack[candidate]
+					if owned := openTags[element.name]; len(owned) != 0 && owned[len(owned)-1] == candidate {
+						openTags[element.name] = owned[:len(owned)-1]
 					}
-					if stack[candidate].anchor != nil {
-						a := stack[candidate].anchor
+					if element.id != "" {
+						idText[element.id] = normalizeHTMLText(element.text.String())
+					}
+					if element.anchor != nil {
+						a := element.anchor
 						pending = append(pending, pendingAnchor{href: a.href, ariaLabel: a.ariaLabel, labelledBy: a.labelledBy, title: a.title, text: a.text.String(), imageAlt: a.childImageAlt.String()})
 					}
 				}
 				stack = stack[:index]
+				for len(anchorHistory) != 0 && anchorHistory[len(anchorHistory)-1] >= index {
+					anchorHistory = anchorHistory[:len(anchorHistory)-1]
+				}
+				if len(anchorHistory) == 0 {
+					nearestAnchor = -1
+				} else {
+					nearestAnchor = anchorHistory[len(anchorHistory)-1]
+				}
 			}
 		}
 	}
@@ -240,19 +270,49 @@ func analyzeHTML(raw []byte, path *string) (HTMLFacts, []string) {
 			if anchor.title != "" {
 				value += "; title=" + anchor.title
 			}
-			facts.unnamedEvidence = append(facts.unnamedEvidence, Evidence{Source: "html", Path: path, Value: new(evidenceValue(value))})
+			facts.unnamedEvidence = appendBoundedHTMLEvidence(facts.unnamedEvidence, path, value)
 		}
 		if safe, ok := inspectionAnchorURL(anchor.href); ok {
-			facts.resources = append(facts.resources, htmlResourceOccurrence{kind: "link", path: path, url: safe, text: label})
+			collectHTMLResource(&facts, resourceIndex, htmlResourceOccurrence{kind: "link", path: path, url: safe, text: label})
 			if strings.HasPrefix(strings.ToLower(safe), "http://") {
 				facts.insecure++
-				facts.insecureEvidence = append(facts.insecureEvidence, Evidence{Source: "html", Path: path, Value: new(evidenceValue(safe))})
+				facts.insecureEvidence = appendBoundedHTMLEvidence(facts.insecureEvidence, path, safe)
 			}
 		}
 	}
-	return facts, causes
+	return facts, causes, nil
 }
 
+func appendBoundedHTMLEvidence(list []Evidence, path *string, value string) []Evidence {
+	if len(list) >= MaxEvidencePerFinding {
+		return list
+	}
+	return append(list, Evidence{Source: "html", Path: path, Value: new(evidenceValue(value))})
+}
+
+// collectHTMLResource deduplicates occurrences immediately so repeated tags cannot
+// grow unbounded backing arrays before report generation caps them again.
+func collectHTMLResource(facts *HTMLFacts, index map[string]int, occurrence htmlResourceOccurrence) {
+	if len(occurrence.url) > 2048 || len(occurrence.text) > 2048 {
+		facts.resourceValuesDropped = true
+		return
+	}
+	key := occurrence.kind + "\x00" + pointerValue(occurrence.path) + "\x00" + occurrence.url
+	if position, ok := index[key]; ok {
+		facts.resources[position].count++
+		if facts.resources[position].text == "" && occurrence.text != "" {
+			facts.resources[position].text = occurrence.text
+		}
+		return
+	}
+	if len(facts.resources) >= MaxResources {
+		facts.resourcesCapped = true
+		return
+	}
+	index[key] = len(facts.resources)
+	occurrence.count = 1
+	facts.resources = append(facts.resources, occurrence)
+}
 func htmlAttrs(attributes []html.Attribute) map[string]string {
 	out := make(map[string]string, len(attributes))
 	for _, attr := range attributes {

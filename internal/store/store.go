@@ -78,11 +78,17 @@ func (store *Store) init(ctx context.Context) error {
 	for _, migration := range []struct{ column, statement string }{
 		{"ical_json", `ALTER TABLE messages ADD COLUMN ical_json TEXT`},
 		{"raw", `ALTER TABLE messages ADD COLUMN raw BLOB`},
+		{"snippet", `ALTER TABLE messages ADD COLUMN snippet TEXT NOT NULL DEFAULT ''`},
 	} {
 		if !columns[migration.column] {
 			if _, err := store.db.ExecContext(ctx, migration.statement); err != nil {
 				return fmt.Errorf("add messages.%s: %w", migration.column, err)
 			}
+		}
+	}
+	if !columns["snippet"] {
+		if err := store.backfillSnippets(ctx); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -115,7 +121,7 @@ CREATE TABLE IF NOT EXISTS messages (
  id INTEGER PRIMARY KEY AUTOINCREMENT, mailbox_id INTEGER NOT NULL REFERENCES mailboxes(id) ON DELETE CASCADE,
  from_address TEXT, from_name TEXT, to_json TEXT NOT NULL DEFAULT '[]', cc_json TEXT NOT NULL DEFAULT '[]', subject TEXT,
  html TEXT, text TEXT, headers_json TEXT NOT NULL DEFAULT '{}', size INTEGER NOT NULL DEFAULT 0,
- is_read INTEGER NOT NULL DEFAULT 0, received_at INTEGER NOT NULL, ical_json TEXT, raw BLOB
+ is_read INTEGER NOT NULL DEFAULT 0, received_at INTEGER NOT NULL, ical_json TEXT, raw BLOB, snippet TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_messages_mailbox ON messages(mailbox_id, received_at DESC);
 CREATE TABLE IF NOT EXISTS attachments (
@@ -189,6 +195,7 @@ type Attachment struct {
 type MessageDetail struct {
 	Message     Message          `json:"message"`
 	Attachments []AttachmentInfo `json:"attachments"`
+	generation  uint64
 }
 type RawMessage struct {
 	Raw         []byte  `json:"raw"`
@@ -273,7 +280,7 @@ var tags = regexp.MustCompile(`(?s)<[^>]+>`)
 var styleScript = regexp.MustCompile(`(?is)<(?:style|script)[^>]*>.*?</(?:style|script)>`)
 
 func (store *Store) ListMessages(ctx context.Context, mailboxID int64, query string) ([]MessageListItem, error) {
-	statement := `SELECT id,from_address,from_name,subject,text,html,is_read,received_at,ical_json IS NOT NULL,(SELECT COUNT(*) FROM attachments a WHERE a.message_id=messages.id AND a.content_id IS NULL) FROM messages WHERE mailbox_id=?`
+	statement := `SELECT id,from_address,from_name,subject,snippet,is_read,received_at,ical_json IS NOT NULL,(SELECT COUNT(*) FROM attachments a WHERE a.message_id=messages.id AND a.content_id IS NULL) FROM messages WHERE mailbox_id=?`
 	args := []any{mailboxID}
 	if q := strings.TrimSpace(query); q != "" {
 		escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(q)
@@ -290,20 +297,58 @@ func (store *Store) ListMessages(ctx context.Context, mailboxID int64, query str
 	result := []MessageListItem{}
 	for rows.Next() {
 		var row MessageListItem
-		var textValue, htmlValue *string
-		if err := rows.Scan(&row.ID, &row.FromAddress, &row.FromName, &row.Subject, &textValue, &htmlValue, &row.IsRead, &row.ReceivedAt, &row.HasICal, &row.AttachmentCount); err != nil {
+		if err := rows.Scan(&row.ID, &row.FromAddress, &row.FromName, &row.Subject, &row.Snippet, &row.IsRead, &row.ReceivedAt, &row.HasICal, &row.AttachmentCount); err != nil {
 			return nil, err
 		}
-		source := ""
-		if textValue != nil {
-			source = *textValue
-		} else if htmlValue != nil {
-			source = tags.ReplaceAllString(styleScript.ReplaceAllString(*htmlValue, " "), " ")
-		}
-		row.Snippet = normalizeSnippet(source, 140)
 		result = append(result, row)
 	}
 	return result, rows.Err()
+}
+
+const snippetLimit = 140
+
+func (store *Store) backfillSnippets(ctx context.Context) error {
+	rows, err := store.db.QueryContext(ctx, `SELECT id,text,html FROM messages WHERE snippet=''`)
+	if err != nil {
+		return fmt.Errorf("load snippet backlog: %w", err)
+	}
+	type pendingSnippet struct {
+		id      int64
+		snippet string
+	}
+	pending := []pendingSnippet{}
+	for rows.Next() {
+		var id int64
+		var text, html *string
+		if err := rows.Scan(&id, &text, &html); err != nil {
+			rows.Close()
+			return err
+		}
+		pending = append(pending, pendingSnippet{id: id, snippet: messageSnippet(text, html)})
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, item := range pending {
+		if _, err := store.db.ExecContext(ctx, `UPDATE messages SET snippet=? WHERE id=?`, item.snippet, item.id); err != nil {
+			return fmt.Errorf("backfill snippet: %w", err)
+		}
+	}
+	return nil
+}
+
+func messageSnippet(text, html *string) string {
+	source := ""
+	if text != nil {
+		source = *text
+	} else if html != nil {
+		source = tags.ReplaceAllString(styleScript.ReplaceAllString(*html, " "), " ")
+	}
+	return normalizeSnippet(source, snippetLimit)
 }
 
 func normalizeSnippet(source string, limit int) string {

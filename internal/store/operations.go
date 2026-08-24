@@ -11,30 +11,141 @@ import (
 	"github.com/openhoo/hoomail/internal/events"
 )
 
+const messageDetailColumns = `SELECT id,mailbox_id,from_address,from_name,to_json,cc_json,subject,html,text,headers_json,size,is_read,received_at,ical_json FROM messages WHERE id=?`
+const messageAttachmentsColumns = `SELECT id,filename,content_type,content_id,size FROM attachments WHERE message_id=?`
+
 func (store *Store) GetMessage(ctx context.Context, id int64) (*MessageDetail, error) {
+	if err := store.acquirePop3(ctx); err != nil {
+		return nil, err
+	}
+	defer store.pop3Mu.Unlock()
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	detail, found, err := readMessageDetail(ctx, tx, id)
+	if err != nil || !found {
+		return nil, err
+	}
+	detail.generation = store.pop3Generation
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return detail, nil
+}
+
+// ReadMessage returns the message detail and marks it read within one
+// POP3-serialized transaction so a concurrent WipeAll plus re-delivery cycle
+// can neither mix generations inside the detail nor mark a replacement message
+// read based on the pre-reset state.
+func (store *Store) ReadMessage(ctx context.Context, id int64) (*MessageDetail, error) {
+	if err := store.acquirePop3(ctx); err != nil {
+		return nil, err
+	}
+	marked := false
+	committed := false
+	var mailboxID int64
+	defer func() {
+		if committed && marked {
+			store.emit(events.MessagesChanged(mailboxID))
+		}
+		store.pop3Mu.Unlock()
+	}()
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	detail, found, err := readMessageDetail(ctx, tx, id)
+	if err != nil || !found {
+		return nil, err
+	}
+	if detail.Message.IsRead == 0 {
+		if _, err = tx.ExecContext(ctx, `UPDATE messages SET is_read=1 WHERE id=?`, id); err != nil {
+			return nil, err
+		}
+		marked = true
+		mailboxID = detail.Message.MailboxID
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	committed = true
+	return detail, nil
+}
+
+// MarkReadDetail marks the exact generation returned by GetMessage after the
+// caller has successfully prepared its response. A reset makes the token
+// stale, so a later delivery reusing the numeric IDs cannot be marked read.
+func (store *Store) MarkReadDetail(ctx context.Context, detail *MessageDetail) error {
+	if detail == nil || detail.Message.IsRead != 0 {
+		return nil
+	}
+	if err := store.acquirePop3(ctx); err != nil {
+		return err
+	}
+	changed := false
+	committed := false
+	defer func() {
+		if committed && changed {
+			store.emit(events.MessagesChanged(detail.Message.MailboxID))
+		}
+		store.pop3Mu.Unlock()
+	}()
+	if detail.generation != store.pop3Generation {
+		return nil
+	}
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE messages SET is_read=1 WHERE id=? AND mailbox_id=? AND received_at=? AND is_read=0`, detail.Message.ID, detail.Message.MailboxID, detail.Message.ReceivedAt)
+	if err != nil {
+		return err
+	}
+	rowsChanged, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	changed = rowsChanged != 0
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
+// readMessageDetail loads the message row plus its attachment metadata from a
+// single query source so both reads observe one consistent snapshot.
+func readMessageDetail(ctx context.Context, source querySource, id int64) (*MessageDetail, bool, error) {
 	var message Message
-	err := store.db.QueryRowContext(ctx, `SELECT id,mailbox_id,from_address,from_name,to_json,cc_json,subject,html,text,headers_json,size,is_read,received_at,ical_json FROM messages WHERE id=?`, id).Scan(
+	err := source.QueryRowContext(ctx, messageDetailColumns, id).Scan(
 		&message.ID, &message.MailboxID, &message.FromAddress, &message.FromName, &message.ToJSON, &message.CCJSON, &message.Subject, &message.HTML, &message.Text, &message.HeadersJSON, &message.Size, &message.IsRead, &message.ReceivedAt, &message.ICalJSON)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
+		return nil, false, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	rows, err := store.db.QueryContext(ctx, `SELECT id,filename,content_type,content_id,size FROM attachments WHERE message_id=?`, id)
+	rows, err := source.QueryContext(ctx, messageAttachmentsColumns, id)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer rows.Close()
 	attachments := []AttachmentInfo{}
 	for rows.Next() {
 		var attachment AttachmentInfo
 		if err := rows.Scan(&attachment.ID, &attachment.Filename, &attachment.ContentType, &attachment.ContentID, &attachment.Size); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		attachments = append(attachments, attachment)
 	}
-	return &MessageDetail{Message: message, Attachments: attachments}, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	return &MessageDetail{Message: message, Attachments: attachments}, true, nil
 }
 
 func (store *Store) GetAttachment(ctx context.Context, id int64) (*Attachment, error) {
@@ -67,13 +178,36 @@ func (store *Store) GetMessageSource(ctx context.Context, id int64) ([]byte, boo
 	return raw, true, nil
 }
 
+func (store *Store) acquirePop3(ctx context.Context) error {
+	if store.pop3Mu.TryLock() {
+		return nil
+	}
+	acquired := make(chan struct{})
+	go func() {
+		store.pop3Mu.Lock()
+		close(acquired)
+	}()
+	select {
+	case <-acquired:
+		return nil
+	case <-ctx.Done():
+		go func() {
+			<-acquired
+			store.pop3Mu.Unlock()
+		}()
+		return ctx.Err()
+	}
+}
+
 func (store *Store) OpenPOP3Mailbox(ctx context.Context, rawAddress string) (POP3MailboxSnapshot, error) {
 	address := strings.TrimSpace(strings.ToLower(rawAddress))
 	if address == "" {
 		return POP3MailboxSnapshot{}, errors.New("mailbox address is empty")
 	}
 
-	store.pop3Mu.Lock()
+	if err := store.acquirePop3(ctx); err != nil {
+		return POP3MailboxSnapshot{}, err
+	}
 	var mailboxID int64
 	isNew := false
 	committed := false
@@ -132,7 +266,9 @@ func (store *Store) OpenPOP3Mailbox(ctx context.Context, rawAddress string) (POP
 }
 
 func (store *Store) DeletePOP3Messages(ctx context.Context, generation uint64, ids []int64) ([]int64, error) {
-	store.pop3Mu.Lock()
+	if err := store.acquirePop3(ctx); err != nil {
+		return nil, err
+	}
 	var affected []int64
 	deleted := false
 	defer func() {
@@ -147,7 +283,7 @@ func (store *Store) DeletePOP3Messages(ctx context.Context, generation uint64, i
 		return []int64{}, nil
 	}
 	var err error
-	affected, err = store.affectedMailboxes(ctx, ids)
+	affected, err = affectedMailboxes(ctx, store.db, ids)
 	if err != nil {
 		return nil, err
 	}
@@ -162,8 +298,16 @@ func (store *Store) MarkRead(ctx context.Context, id, mailboxID int64, wasRead i
 	if wasRead != 0 {
 		return nil
 	}
-	if _, err := store.db.ExecContext(ctx, `UPDATE messages SET is_read=1 WHERE id=?`, id); err != nil {
+	result, err := store.db.ExecContext(ctx, `UPDATE messages SET is_read=1 WHERE id=? AND mailbox_id=? AND is_read=0`, id, mailboxID)
+	if err != nil {
 		return err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if changed == 0 {
+		return nil
 	}
 	store.emit(events.MessagesChanged(mailboxID))
 	return nil
@@ -182,22 +326,41 @@ func (store *Store) SetReadState(ctx context.Context, ids []int64, isRead bool) 
 	if len(ids) == 0 {
 		return []int64{}, nil
 	}
-	args := intArgs(ids)
-	affected, err := store.affectedMailboxes(ctx, ids)
-	if err != nil {
+	if err := store.acquirePop3(ctx); err != nil {
 		return nil, err
 	}
+	var affected []int64
+	committed := false
+	defer func() {
+		if committed {
+			for _, mailboxID := range affected {
+				store.emit(events.MessagesChanged(mailboxID))
+			}
+		}
+		store.pop3Mu.Unlock()
+	}()
 	value := 0
 	if isRead {
 		value = 1
 	}
-	updateArgs := append([]any{value}, args...)
-	if _, err = store.db.ExecContext(ctx, `UPDATE messages SET is_read=? WHERE id IN (`+placeholders(len(ids))+`)`, updateArgs...); err != nil {
+	args := intArgs(ids)
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
 		return nil, err
 	}
-	for _, id := range affected {
-		store.emit(events.MessagesChanged(id))
+	defer tx.Rollback()
+	affected, err = affectedMailboxes(ctx, tx, ids)
+	if err != nil {
+		return nil, err
 	}
+	updateArgs := append([]any{value}, args...)
+	if _, err = tx.ExecContext(ctx, `UPDATE messages SET is_read=? WHERE id IN (`+placeholders(len(ids))+`)`, updateArgs...); err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	committed = true
 	return affected, nil
 }
 
@@ -205,21 +368,45 @@ func (store *Store) DeleteMessages(ctx context.Context, ids []int64) ([]int64, e
 	if len(ids) == 0 {
 		return []int64{}, nil
 	}
-	affected, err := store.affectedMailboxes(ctx, ids)
+	if err := store.acquirePop3(ctx); err != nil {
+		return nil, err
+	}
+	var affected []int64
+	committed := false
+	defer func() {
+		if committed {
+			for _, mailboxID := range affected {
+				store.emit(events.MessagesChanged(mailboxID))
+			}
+		}
+		store.pop3Mu.Unlock()
+	}()
+	tx, err := store.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
-	if _, err = store.db.ExecContext(ctx, `DELETE FROM messages WHERE id IN (`+placeholders(len(ids))+`)`, intArgs(ids)...); err != nil {
+	defer tx.Rollback()
+	affected, err = affectedMailboxes(ctx, tx, ids)
+	if err != nil {
 		return nil, err
 	}
-	for _, id := range affected {
-		store.emit(events.MessagesChanged(id))
+	if _, err = tx.ExecContext(ctx, `DELETE FROM messages WHERE id IN (`+placeholders(len(ids))+`)`, intArgs(ids)...); err != nil {
+		return nil, err
 	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	committed = true
 	return affected, nil
 }
 
-func (store *Store) affectedMailboxes(ctx context.Context, ids []int64) ([]int64, error) {
-	rows, err := store.db.QueryContext(ctx, `SELECT DISTINCT mailbox_id FROM messages WHERE id IN (`+placeholders(len(ids))+`)`, intArgs(ids)...)
+type querySource interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func affectedMailboxes(ctx context.Context, source querySource, ids []int64) ([]int64, error) {
+	rows, err := source.QueryContext(ctx, `SELECT DISTINCT mailbox_id FROM messages WHERE id IN (`+placeholders(len(ids))+`)`, intArgs(ids)...)
 	if err != nil {
 		return nil, err
 	}
@@ -269,7 +456,9 @@ func (store *Store) DeleteMailbox(ctx context.Context, id int64) (bool, error) {
 }
 
 func (store *Store) WipeAll(ctx context.Context) error {
-	store.pop3Mu.Lock()
+	if err := store.acquirePop3(ctx); err != nil {
+		return err
+	}
 	reset := false
 	defer func() {
 		store.pop3Mu.Unlock()
@@ -310,6 +499,7 @@ func (store *Store) StoreMessage(ctx context.Context, input StoreMessageInput) (
 	if err != nil {
 		return nil, err
 	}
+	snippet := messageSnippet(input.Text, input.HTML)
 	var icalJSON any
 	if len(input.ICalEvents) > 0 {
 		data, marshalErr := json.Marshal(input.ICalEvents)
@@ -344,7 +534,7 @@ func (store *Store) StoreMessage(ctx context.Context, input StoreMessageInput) (
 		if isNew {
 			pending = append(pending, events.MailboxNew(mailboxID, address))
 		}
-		result, execErr := tx.ExecContext(ctx, `INSERT INTO messages(mailbox_id,from_address,from_name,to_json,cc_json,subject,html,text,headers_json,size,is_read,received_at,ical_json,raw) VALUES(?,?,?,?,?,?,?,?,?,?,0,?,?,?)`, mailboxID, input.FromAddress, input.FromName, string(toJSON), string(ccJSON), input.Subject, input.HTML, input.Text, string(headersJSON), input.Size, now, icalJSON, input.Raw)
+		result, execErr := tx.ExecContext(ctx, `INSERT INTO messages(mailbox_id,from_address,from_name,to_json,cc_json,subject,html,text,headers_json,size,is_read,received_at,ical_json,raw,snippet) VALUES(?,?,?,?,?,?,?,?,?,?,0,?,?,?,?)`, mailboxID, input.FromAddress, input.FromName, string(toJSON), string(ccJSON), input.Subject, input.HTML, input.Text, string(headersJSON), input.Size, now, icalJSON, input.Raw, snippet)
 		if execErr != nil {
 			return nil, execErr
 		}

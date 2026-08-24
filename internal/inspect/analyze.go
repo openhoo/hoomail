@@ -2,6 +2,7 @@ package inspect
 
 import (
 	"bytes"
+	"context"
 	"crypto/md5"  // #nosec G501 -- MD5 is exposed only as a compatibility checksum.
 	"crypto/sha1" // #nosec G505 -- SHA-1 is exposed only as a compatibility checksum.
 	"crypto/sha256"
@@ -53,6 +54,7 @@ var truncationOrder = []string{
 var unavailableOrder = []string{"message", "mime", "authentication", "unsubscribe", "content", "privacy", "compatibility"}
 
 type analyzer struct {
+	ctx         context.Context
 	input       Input
 	doc         mimeparse.Document
 	findings    []Finding
@@ -79,12 +81,22 @@ type headerOccurrence struct {
 	field      mimeparse.HeaderField
 }
 
-func Analyze(input Input) (Report, error) {
+func Analyze(ctx context.Context, input Input) (Report, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return Report{}, err
+	}
 	doc, err := parseMIME(input.Raw, mimeparse.InspectionLimits)
 	if err != nil {
 		return Report{}, err
 	}
+	if err := ctx.Err(); err != nil {
+		return Report{}, err
+	}
 	a := analyzer{
+		ctx:         ctx,
 		input:       input,
 		doc:         doc,
 		findings:    make([]Finding, 0),
@@ -104,22 +116,41 @@ func Analyze(input Input) (Report, error) {
 	a.semanticOK = a.rawPresent && doc.Root != nil && doc.SemanticError == nil && !hasCause(a.causes, "raw bytes")
 	a.selectBodies()
 	a.runAnalysisRules()
+	if err := ctx.Err(); err != nil {
+		return Report{}, err
+	}
 	if a.rawPresent && doc.Root != nil && !hasCause(a.causes, "raw bytes") {
 		if doc.Truncated {
 			a.addUnavailable("mime")
 		}
 		a.runMessageRules()
 		a.runMIMERules()
+		if err := ctx.Err(); err != nil {
+			return Report{}, err
+		}
 		a.runAuthenticationRules()
 		a.runUnsubscribeRules()
+		if err := ctx.Err(); err != nil {
+			return Report{}, err
+		}
 	}
-	a.analyzeContent()
+	if err := a.analyzeContent(); err != nil {
+		return Report{}, err
+	}
 	a.runContentRules()
 	a.runPrivacyRules()
+	if err := ctx.Err(); err != nil {
+		return Report{}, err
+	}
 	a.runCompatibilityRules()
 	a.addAttachmentResources()
-
-	report := a.finishReport()
+	if err := ctx.Err(); err != nil {
+		return Report{}, err
+	}
+	report, err := a.finishReport()
+	if err != nil {
+		return Report{}, err
+	}
 	return report, nil
 }
 
@@ -163,6 +194,11 @@ func (a *analyzer) runAnalysisRules() {
 	if hasCause(a.causes, "raw bytes") {
 		a.addUnavailable("message", "mime", "authentication", "unsubscribe")
 		a.addFinding(finding("analysis.parse", "analysis", "not-evaluated", "none", "evidence", "all", "MIME parsing", "Semantic MIME parsing was deliberately skipped because the raw message exceeds the offline inspection byte limit.", nil, nil))
+		return
+	}
+	if a.doc.SemanticSkipped {
+		a.addUnavailable("mime")
+		a.addFinding(finding("analysis.parse", "analysis", "not-evaluated", "none", "evidence", "all", "MIME parsing", "Semantic MIME parsing was skipped because bounded inspection limits stopped raw indexing before the semantic parser could run; raw evidence remains available.", nil, nil))
 		return
 	}
 	if a.doc.SemanticError != nil {
@@ -886,17 +922,26 @@ func (a *analyzer) runUnsubscribeDKIMCoverage(fields []headerOccurrence, claims 
 	}
 }
 
-func (a *analyzer) analyzeContent() {
+func (a *analyzer) analyzeContent() error {
 	if a.html != nil {
-		facts, causes := analyzeHTMLPass(a.html, a.htmlPath)
+		facts, causes, err := analyzeHTMLPass(a.ctx, a.html, a.htmlPath)
+		if err != nil {
+			return err
+		}
 		a.facts = &facts
 		for _, cause := range causes {
 			a.addCause(cause)
 		}
 		for _, occurrence := range facts.resources {
-			a.addResource(occurrence.kind, occurrence.path, occurrence.url, occurrence.text)
+			a.addResourceCounted(occurrence.kind, occurrence.path, occurrence.url, occurrence.text, occurrence.count)
 		}
-		return
+		if facts.resourceValuesDropped {
+			a.addCause("resource values")
+		}
+		if facts.resourcesCapped {
+			a.addCause("resources")
+		}
+		return nil
 	}
 	if a.text != nil {
 		for _, matchRange := range textResourceRE.FindAllIndex(a.text, -1) {
@@ -911,6 +956,7 @@ func (a *analyzer) analyzeContent() {
 			}
 		}
 	}
+	return nil
 }
 
 func (a *analyzer) runContentRules() {
@@ -948,7 +994,7 @@ func (a *analyzer) runContentRules() {
 	if a.facts.imageCount > 0 {
 		if a.facts.missingAlt > 0 {
 			detail := fmt.Sprintf("%d image occurrence(s)%s omit the alt attribute; empty alt is treated as present.", a.facts.missingAlt, fallbackLabel)
-			a.addFinding(finding("content.image-alt", "content", "pass", "advisory", "heuristic", "html", "Image alt attributes", detail, a.facts.missingAltEvidence, nil))
+			a.addHTMLFinding(finding("content.image-alt", "content", "pass", "advisory", "heuristic", "html", "Image alt attributes", detail, a.facts.missingAltEvidence, nil), a.facts.missingAlt, len(a.facts.missingAltEvidence))
 		} else if !a.facts.truncated {
 			a.addFinding(finding("content.image-alt", "content", "pass", "none", "heuristic", "html", "Image alt attributes", "Every inspected image declares an alt attribute.", nil, nil))
 		}
@@ -956,7 +1002,7 @@ func (a *analyzer) runContentRules() {
 	if a.facts.anchorCount > 0 {
 		if a.facts.unnamedLinks > 0 {
 			detail := fmt.Sprintf("%d anchor occurrence(s)%s have no conservative static accessible name.", a.facts.unnamedLinks, fallbackLabel)
-			a.addFinding(finding("content.link-name", "content", "pass", "advisory", "heuristic", "html", "Link names", detail, a.facts.unnamedEvidence, nil))
+			a.addHTMLFinding(finding("content.link-name", "content", "pass", "advisory", "heuristic", "html", "Link names", detail, a.facts.unnamedEvidence, nil), a.facts.unnamedLinks, len(a.facts.unnamedEvidence))
 		} else if !a.facts.truncated {
 			a.addFinding(finding("content.link-name", "content", "pass", "none", "heuristic", "html", "Link names", "Every inspected anchor has a conservative static accessible name.", nil, nil))
 		}
@@ -975,17 +1021,17 @@ func (a *analyzer) runPrivacyRules() {
 		return
 	}
 	if a.facts.externalImages > 0 {
-		a.addFinding(finding("privacy.external-images", "privacy", "pass", "advisory", "heuristic", "html", "External images", fmt.Sprintf("%d external image occurrence(s) were found. Inspection is offline and did not fetch them.", a.facts.externalImages), a.facts.externalEvidence, nil))
+		a.addHTMLFinding(finding("privacy.external-images", "privacy", "pass", "advisory", "heuristic", "html", "External images", fmt.Sprintf("%d external image occurrence(s) were found. Inspection is offline and did not fetch them.", a.facts.externalImages), a.facts.externalEvidence, nil), a.facts.externalImages, len(a.facts.externalEvidence))
 	} else if !a.facts.truncated {
 		a.addFinding(finding("privacy.external-images", "privacy", "pass", "none", "heuristic", "html", "External images", "No external HTTP(S) image source was found. Inspection made no network requests.", nil, nil))
 	}
 	if a.facts.trackingPixels > 0 {
-		a.addFinding(finding("privacy.tracking-pixels", "privacy", "pass", "advisory", "heuristic", "html", "Tracking pixels", fmt.Sprintf("%d hidden or at-most-one-pixel image candidate(s) were found; false positives and negatives are possible.", a.facts.trackingPixels), a.facts.trackingEvidence, nil))
+		a.addHTMLFinding(finding("privacy.tracking-pixels", "privacy", "pass", "advisory", "heuristic", "html", "Tracking pixels", fmt.Sprintf("%d hidden or at-most-one-pixel image candidate(s) were found; false positives and negatives are possible.", a.facts.trackingPixels), a.facts.trackingEvidence, nil), a.facts.trackingPixels, len(a.facts.trackingEvidence))
 	} else if !a.facts.truncated {
 		a.addFinding(finding("privacy.tracking-pixels", "privacy", "pass", "none", "heuristic", "html", "Tracking pixels", "No hidden or at-most-one-pixel image candidate was found; this heuristic is not exhaustive.", nil, nil))
 	}
 	if a.facts.insecure > 0 {
-		a.addFinding(finding("privacy.insecure-links", "privacy", "pass", "advisory", "heuristic", "html", "Insecure resources", fmt.Sprintf("%d HTTP resource occurrence(s) use plaintext transport syntax.", a.facts.insecure), a.facts.insecureEvidence, nil))
+		a.addHTMLFinding(finding("privacy.insecure-links", "privacy", "pass", "advisory", "heuristic", "html", "Insecure resources", fmt.Sprintf("%d HTTP resource occurrence(s) use plaintext transport syntax.", a.facts.insecure), a.facts.insecureEvidence, nil), a.facts.insecure, len(a.facts.insecureEvidence))
 	} else if !a.facts.truncated {
 		a.addFinding(finding("privacy.insecure-links", "privacy", "pass", "none", "heuristic", "html", "Insecure resources", "No inspected link or external image uses an http:// destination.", nil, nil))
 	}
@@ -1055,12 +1101,14 @@ func collectLeafAttachments(root *mimeparse.Node, out []mimeparse.AttachmentCand
 	return out
 }
 
-func (a *analyzer) finishReport() Report {
+func (a *analyzer) finishReport() (Report, error) {
+	if err := a.ctx.Err(); err != nil {
+		return Report{}, err
+	}
 	if len(a.findings) >= MaxFindings {
 		a.findings = a.findings[:MaxFindings-1]
 		a.addCause("findings")
 	}
-	sort.SliceStable(a.findings, func(i, j int) bool { return findingLess(a.findings[i], a.findings[j]) })
 	compatibility := analyzeHTMLCompatibility(a.html)
 	if compatibility != nil {
 		if compatibility.Truncated {
@@ -1072,12 +1120,20 @@ func (a *analyzer) finishReport() Report {
 			a.addUnavailable("compatibility")
 		}
 	}
+	if len(a.causes) > 0 {
+		a.ensureTruncationFinding()
+	}
+	sort.SliceStable(a.findings, func(i, j int) bool { return findingLess(a.findings[i], a.findings[j]) })
+	if err := a.ctx.Err(); err != nil {
+		return Report{}, err
+	}
+	semanticDecoded := !a.doc.Truncated || hasCause(a.causes, "raw bytes")
 	report := Report{
 		Analysis:          Analysis{Version: AnalysisVersion, State: "complete", ParsedThroughPath: a.doc.ParsedThroughPath, UnavailableRuleFamilies: a.unavailableFamilies(), Truncated: len(a.causes) > 0},
 		Headers:           a.searchableHeaders(),
 		Findings:          a.findings,
 		Resources:         a.resources,
-		MIMETree:          buildMIMETree(a.doc.Root, a.doc.Raw),
+		MIMETree:          buildMIMETree(a.doc.Root, a.doc.Raw, semanticDecoded),
 		HTMLCompatibility: compatibility,
 	}
 	if !a.rawPresent || a.doc.SemanticError != nil || len(a.causes) > 0 {
@@ -1102,7 +1158,10 @@ func (a *analyzer) finishReport() Report {
 		report.Summary = summarize(report.Findings)
 		trimReport(&report)
 	}
-	return report
+	if encoded, _ := json.Marshal(report); len(encoded) > MaxReportBytes {
+		return Report{}, errors.New("inspection report exceeds byte limit")
+	}
+	return report, nil
 }
 
 func (a *analyzer) ensureTruncationFinding() {
@@ -1162,6 +1221,33 @@ func (a *analyzer) addResource(kind string, path *string, rawURL, text string) {
 	}
 	a.resourceMap[key] = len(a.resources)
 	a.resources = append(a.resources, Resource{Kind: kind, Path: path, URL: rawURL, Text: text, OccurrenceCount: 1})
+}
+func (a *analyzer) addResourceCounted(kind string, path *string, rawURL, text string, count int) {
+	if count <= 0 {
+		return
+	}
+	key := kind + "\x00" + pointerValue(path) + "\x00" + rawURL
+	if index, ok := a.resourceMap[key]; ok {
+		a.resources[index].OccurrenceCount += count
+		if a.resources[index].Text == "" && text != "" {
+			a.resources[index].Text = text
+		}
+		return
+	}
+	if len(a.resources) >= MaxResources {
+		a.addCause("resources")
+		return
+	}
+	a.resourceMap[key] = len(a.resources)
+	a.resources = append(a.resources, Resource{Kind: kind, Path: path, URL: rawURL, Text: text, OccurrenceCount: count})
+}
+
+func (a *analyzer) addHTMLFinding(item Finding, occurrences, retained int) {
+	if occurrences > retained {
+		item.EvidenceTruncated = true
+		a.addCause("evidence")
+	}
+	a.addFinding(item)
 }
 
 func (a *analyzer) addCause(cause string) {
@@ -1880,7 +1966,7 @@ func splitAngleList(value string) ([]string, bool) {
 	return parts, true
 }
 
-func buildMIMETree(root *mimeparse.Node, raw []byte) *MimeNode {
+func buildMIMETree(root *mimeparse.Node, raw []byte, semanticDecoded bool) *MimeNode {
 	if root == nil {
 		return nil
 	}
@@ -1912,7 +1998,7 @@ func buildMIMETree(root *mimeparse.Node, raw []byte) *MimeNode {
 			size := len(body)
 			item.RawSize = &size
 		}
-		if len(node.Children) == 0 && node.DecodeError == nil {
+		if semanticDecoded && len(node.Children) == 0 && node.DecodeError == nil {
 			size := len(node.DecodedBody)
 			item.DecodedSize = &size
 			md5Sum := md5.Sum(node.DecodedBody)   // #nosec G401 -- Compatibility checksum, not a security primitive.
@@ -1995,6 +2081,17 @@ func trimReport(report *Report) {
 		return
 	}
 	report.Resources = []Resource{}
+	if measure() <= MaxReportBytes {
+		report.Summary = summarize(report.Findings)
+		return
+	}
+	for measure() > MaxReportBytes && len(report.Headers) > 0 {
+		if len(report.Headers) == 1 {
+			report.Headers = []Header{}
+			break
+		}
+		report.Headers = report.Headers[:len(report.Headers)/2]
+	}
 	if measure() <= MaxReportBytes {
 		report.Summary = summarize(report.Findings)
 		return
