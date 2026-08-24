@@ -20,7 +20,7 @@ permissions:
 
 env:
   BUN_VERSION: 1.3.14
-  GO_VERSION: 1.26.5
+  GO_VERSION: 1.26.6
   HOOVERSION_SHA: 799ecf4a9c29e8ce4d5ad7055a6030adf665cf82 # v0.2.0
   GHCR_IMAGE: ghcr.io/${{ github.repository }}
   DOCKERHUB_IMAGE: openhoo/hoomail
