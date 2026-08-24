@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.9.1 (2026-08-24)
+
+### Bug Fixes
+
+- **server:** enforce protocol and safety limits (deac52d)
+- **web:** restore viewer and cache contracts (c0eb86e)
+- **deploy:** gate releases and fix runtime dirs (de5dbae)
+- **ci:** bump go toolchain to 1.26.6 (b42e801)
+- **ci:** randomize e2e ports per run (7c0bf25)
+- **ci:** derive e2e ports in shell (4010f6b)
+
+### Other Changes
+
+- align guides with implemented behavior (647a1b3)
+
 ## 0.9.0 (2026-08-11)
 
 ### Features
