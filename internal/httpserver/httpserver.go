@@ -70,11 +70,7 @@ func (s *server) ServeHTTP(response http.ResponseWriter, request *http.Request) 
 	switch {
 	case (request.Method == http.MethodGet || request.Method == http.MethodHead) && route == "/openapi.json":
 		serveOpenAPI(response, request)
-	case (request.Method == http.MethodGet || request.Method == http.MethodHead) && route == "/swagger":
-		http.Redirect(response, request, "/swagger/", http.StatusPermanentRedirect)
-	case (request.Method == http.MethodGet || request.Method == http.MethodHead) && route == "/swagger/":
-		serveSwaggerUI(response, request)
-	case route == "/openapi.json" || route == "/swagger" || route == "/swagger/":
+	case route == "/openapi.json":
 		response.Header().Set("Allow", "GET, HEAD")
 		http.Error(response, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 	case request.Method == http.MethodGet && route == "/api/mailboxes":

@@ -48,7 +48,7 @@ func assertResponse(t *testing.T, response *httptest.ResponseRecorder, status in
 	}
 }
 
-func TestGeneratedOpenAPIAndSwaggerEndpoints(t *testing.T) {
+func TestGeneratedOpenAPIEndpoint(t *testing.T) {
 	handler := New(testStore(t), StaticConfig{}, nil)
 
 	openAPI := request(t, handler, http.MethodGet, "/openapi.json", "")
@@ -162,24 +162,10 @@ func TestGeneratedOpenAPIAndSwaggerEndpoints(t *testing.T) {
 		t.Fatalf("openapi POST status=%d headers=%v", disallowed.Code, disallowed.Header())
 	}
 
-	redirect := request(t, handler, http.MethodGet, "/swagger", "")
-	if redirect.Code != http.StatusPermanentRedirect || redirect.Header().Get("Location") != "/swagger/" {
-		t.Fatalf("swagger redirect status=%d location=%q", redirect.Code, redirect.Header().Get("Location"))
-	}
-	swagger := request(t, handler, http.MethodGet, "/swagger/", "")
-	if swagger.Code != http.StatusOK ||
-		!strings.Contains(swagger.Body.String(), `url:"/openapi.json"`) ||
-		!strings.Contains(swagger.Body.String(), "swagger-ui-dist@5.11.0") {
-		t.Fatalf("swagger status=%d body=%q", swagger.Code, swagger.Body.String())
-	}
-	if swagger.Header().Get("Content-Security-Policy") == "" ||
-		swagger.Header().Get("X-Content-Type-Options") != "nosniff" {
-		t.Fatalf("swagger headers=%v", swagger.Header())
-	}
-	swaggerHead := request(t, handler, http.MethodHead, "/swagger/", "")
-	if swaggerHead.Code != http.StatusOK || swaggerHead.Body.Len() != 0 {
-		t.Fatalf("swagger HEAD status=%d body=%q", swaggerHead.Code, swaggerHead.Body.String())
-	}
+	missing := request(t, handler, http.MethodGet, "/swagger", "")
+	assertResponse(t, missing, http.StatusNotFound, "404 page not found\n")
+	missingTrailing := request(t, handler, http.MethodGet, "/swagger/", "")
+	assertResponse(t, missingTrailing, http.StatusNotFound, "404 page not found\n")
 }
 
 func TestGeneratedOpenAPIAttachmentContract(t *testing.T) {
