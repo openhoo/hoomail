@@ -79,6 +79,7 @@ type Hub struct {
 	mu          sync.Mutex
 	nextID      uint64
 	subscribers map[uint64]chan Event
+	closed      bool
 }
 
 func NewHub() *Hub {
@@ -86,9 +87,14 @@ func NewHub() *Hub {
 }
 
 func (hub *Hub) Subscribe() (<-chan Event, func()) {
-	channel := make(chan Event, subscriberBuffer)
-
 	hub.mu.Lock()
+	if hub.closed {
+		hub.mu.Unlock()
+		wake := make(chan Event)
+		close(wake)
+		return wake, func() {}
+	}
+	channel := make(chan Event, subscriberBuffer)
 	id := hub.nextID
 	hub.nextID++
 	hub.subscribers[id] = channel
@@ -110,6 +116,10 @@ func (hub *Hub) Subscribe() (<-chan Event, func()) {
 
 func (hub *Hub) Broadcast(event Event) {
 	hub.mu.Lock()
+	if hub.closed {
+		hub.mu.Unlock()
+		return
+	}
 	for id, channel := range hub.subscribers {
 		select {
 		case channel <- event:
@@ -121,6 +131,22 @@ func (hub *Hub) Broadcast(event Event) {
 	hub.mu.Unlock()
 }
 
+// Close wakes every active subscriber by closing its channel so streaming
+// handlers return promptly and rejects future subscriptions. It is safe to
+// call concurrently with Subscribe and Broadcast and is idempotent.
+func (hub *Hub) Close() {
+	hub.mu.Lock()
+	defer hub.mu.Unlock()
+	if hub.closed {
+		return
+	}
+	hub.closed = true
+	for id, channel := range hub.subscribers {
+		delete(hub.subscribers, id)
+		close(channel)
+	}
+}
+
 var global = NewHub()
 
 func Subscribe() (<-chan Event, func()) {
@@ -129,4 +155,11 @@ func Subscribe() (<-chan Event, func()) {
 
 func Broadcast(event Event) {
 	global.Broadcast(event)
+}
+
+// Close closes every subscription on the process-wide hub. cmd/hoomail
+// registers it as an http.Server OnShutdown hook so SSE handlers return
+// promptly during Shutdown.
+func Close() {
+	global.Close()
 }

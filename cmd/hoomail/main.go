@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/openhoo/hoomail/internal/events"
 	"github.com/openhoo/hoomail/internal/httpserver"
 	"github.com/openhoo/hoomail/internal/pop3server"
 	"github.com/openhoo/hoomail/internal/sendtest"
@@ -110,6 +111,11 @@ func run() error {
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
+
+	// Closing the events hub when Shutdown begins wakes /api/events stream
+	// handlers, letting Shutdown drain open SSE connections quickly instead
+	// of always running into the context ceiling below.
+	httpService.RegisterOnShutdown(events.Close)
 
 	smtpListener, err := net.Listen("tcp", smtpAddress)
 	if err != nil {

@@ -123,3 +123,60 @@ func assertEvents(t *testing.T, channel <-chan Event, want []Event) {
 		}
 	}
 }
+
+func TestHubCloseWakesSubscribers(t *testing.T) {
+	hub := NewHub()
+	first, unsubscribeFirst := hub.Subscribe()
+	second, unsubscribeSecond := hub.Subscribe()
+	defer unsubscribeFirst()
+	defer unsubscribeSecond()
+	hub.Broadcast(MailboxNew(1, "before@example.com"))
+	hub.Close()
+	hub.Close()
+
+	// Events already buffered remain readable; the channel then reports
+	// closed so streaming handlers return promptly.
+	want := []Event{MailboxNew(1, "before@example.com")}
+	assertEvents(t, first, want)
+	assertEvents(t, second, want)
+
+	if _, open := <-first; open {
+		t.Fatal("subscriber channel still open after draining and Close")
+	}
+	if _, open := <-second; open {
+		t.Fatal("subscriber channel still open after draining and Close")
+	}
+
+	hub.Broadcast(MessagesChanged(7))
+	if event, open := <-first; open {
+		t.Fatalf("unexpected event after Close: %+v", event)
+	}
+}
+
+func TestSubscribeAfterCloseReturnsClosedChannel(t *testing.T) {
+	hub := NewHub()
+	hub.Close()
+	stream, unsubscribe := hub.Subscribe()
+	defer unsubscribe()
+	if _, open := <-stream; open {
+		t.Fatal("subscription after Close returned an open channel")
+	}
+}
+
+func TestCloseConcurrentWithBroadcastAndSubscribe(t *testing.T) {
+	for range 25 {
+		hub := NewHub()
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			for index := range 100 {
+				_, unsubscribe := hub.Subscribe()
+				unsubscribe()
+				hub.Broadcast(MessagesChanged(int64(index)))
+			}
+		}()
+		hub.Close()
+		<-done
+		hub.Close()
+	}
+}
