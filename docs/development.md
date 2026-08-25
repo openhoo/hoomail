@@ -7,7 +7,7 @@ This guide covers the repository-supported contributor workflow. It separates th
 Use the versions pinned by CI and the container build:
 
 - Bun `1.3.14`
-- Go `1.26.5`
+- Go `1.26.6`
 - Playwright-managed Chromium for browser tests and the frontend benchmark
 
 `package.json` does not declare `packageManager` or `engines`, so it does **not** enforce the Bun version. Verify the executable in your environment when reproducibility matters:
@@ -111,7 +111,7 @@ The Playwright harness is self-contained:
 4. It uses isolated HTTP, SMTP, and POP3 listener ports.
 5. It stops that server when Playwright finishes; it never reuses an already-running server.
 
-A separately running Hoomail instance is neither required nor used. The harness database is disposable and is removed at the next harness startup, so normal `data/hoomail.db` checkout data is not reset. Invoke E2E through the package scripts rather than calling `e2e/run-server.ts` directly; package-script and Playwright runs provide the supported port defaults and lifecycle. Direct helper invocation without port variables currently falls back to POP3 `33110`, rather than the package-script default of SMTP plus one (`33126` with the default SMTP port).
+A separately running Hoomail instance is neither required nor used. The harness database is disposable and is removed at the next harness startup, so normal `data/hoomail.db` checkout data is not reset. Invoke E2E through the package scripts rather than calling `e2e/run-server.ts` directly; package-script and Playwright runs provide the supported port lifecycle.
 
 Specifications using the shared page fixture reset the isolated application through `POST /api/reset` before each test, navigate to the app, wait for a live `200` SSE response, and verify the empty UI before the test body runs. The performance specification performs its own explicit reset. Tests should wait for observable UI or network results rather than fixed sleeps.
 
@@ -127,7 +127,7 @@ Default harness ports are:
 | SMTP | `33125` | `HOOMAIL_E2E_SMTP_PORT` |
 | POP3 | `33126` | `HOOMAIL_E2E_POP3_PORT` |
 
-For package-script and Playwright runs, POP3 defaults to the selected SMTP port plus one unless explicitly overridden. Direct `e2e/run-server.ts` invocation without variables instead currently falls back to `33110`, so use the package scripts. For example:
+For package-script and Playwright runs, POP3 defaults to the selected SMTP port plus one unless explicitly overridden. Direct `e2e/run-server.ts` invocation without variables derives the same SMTP-plus-one fallback. For example:
 
 ```bash
 HOOMAIL_E2E_HTTP_PORT=33200 \

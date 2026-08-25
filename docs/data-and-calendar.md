@@ -11,13 +11,13 @@ At startup, Hoomail:
 1. requires a non-empty database path;
 2. creates the path's parent directory with mode `0755` for ordinary filesystem paths;
 3. opens SQLite and limits the connection pool to one open connection;
-4. enables `PRAGMA foreign_keys = ON` and requests `PRAGMA journal_mode = WAL`;
+4. applies `PRAGMA foreign_keys = ON` and `PRAGMA journal_mode = WAL` on every pooled connection via SQLite DSN `_pragma` parameters, so both settings survive connection recycling;
 5. creates missing tables and indexes idempotently; and
-6. upgrades a legacy `messages` table by adding `ical_json` and `raw` when either column is absent.
+6. upgrades a legacy `messages` table by adding `ical_json`, `raw`, and `snippet` when any of the three columns is absent.
 
 The configured path names one logical SQLite database. For a file-backed database that successfully enters WAL mode, SQLite may also create `-wal` and `-shm` sidecar files beside the database. Backups and volume handling must treat such a database and its active sidecars as one unit. In-memory databases and file-backed databases that do not enter WAL mode have no WAL sidecars to manage. See [deployment](deployment.md) for the configured path and persistent-volume guidance.
 
-Parent-directory creation is skipped for `:memory:` and `file:` URI database paths. The application does not run a general migration framework: the current schema is created with `CREATE ... IF NOT EXISTS`, and the two legacy message columns above are the only explicit column migrations.
+Parent-directory creation is skipped for `:memory:` and `file:` URI database paths. The application does not run a general migration framework: the current schema is created with `CREATE ... IF NOT EXISTS`, and the three legacy message columns above are the only explicit column migrations. When an upgrade adds `snippet` to a legacy table, Hoomail also performs a one-time backfill that rewrites existing rows to derive their snippets from the stored text or HTML content; rows created after the migration have their snippets computed at ingest time.
 
 ## Stored data model
 

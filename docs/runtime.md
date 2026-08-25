@@ -27,10 +27,10 @@ The subcommand names are exact and case-sensitive.
 
 ```console
 $ hoomail version
-0.9.0
+0.9.1
 ```
 
-`internal/version.Value` starts as `"dev"`. During package initialization, an unchanged `"dev"` value is replaced with the trimmed contents of the compile-time embedded [`internal/version/version`](../internal/version/version) file, currently `0.9.0`. Release builds can replace `internal/version.Value` through Go linker flags; when replaced with a value other than `"dev"`, that linker-provided value is printed instead.
+`internal/version.Value` starts as `"dev"`. During package initialization, an unchanged `"dev"` value is replaced with the trimmed contents of the compile-time embedded [`internal/version/version`](../internal/version/version) file, currently `0.9.1`. Release builds can replace `internal/version.Value` through Go linker flags; when replaced with a value other than `"dev"`, that linker-provided value is printed instead.
 
 The command prints only the resolved value and a newline. It does not open the database or bind any listener.
 
@@ -124,15 +124,16 @@ The frontend is a compile-time dependency of the Go binary:
 - The frontend must exist in `web/dist` when the Go executable is compiled.
 - Changing files in `web/dist` after compilation does not change an already-built executable; the binary must be rebuilt.
 
-Requests not handled by an API route pass to the static single-page application handler. Its exact behavior is:
+Requests not handled by an API route pass first through one dedicated non-API route and then to the static single-page application handler. The exact behavior is:
 
 | Request | Result |
 | --- | --- |
 | `GET /` or `HEAD /` | Serve embedded `index.html`. |
 | `GET` or `HEAD` for an existing embedded file | Serve that file. |
-| `GET` or `HEAD` for a missing non-API path | Serve `index.html` as the SPA fallback. This includes paths that look like missing static assets. |
+| `GET /openapi.json` or `HEAD /openapi.json` | Serve the generated OpenAPI document as `application/json`, regardless of the embedded static filesystem. Other methods return a plain-text `405 Method Not Allowed` with an `Allow: GET, HEAD` header. |
+| `GET` or `HEAD` for any other missing non-API path | Serve `index.html` as the SPA fallback. This includes paths that look like missing static assets. |
 | Any unmatched path beginning with `/api/` | Return `404`; API misses never fall back to the SPA. |
-| A non-`GET`/`HEAD` request not matched by an API route | Return `404`. |
+| A non-`GET`/`HEAD` request for any other path not matched by an API route | Return `404`. |
 | A static request when neither the requested file nor `index.html` can be read | Return `404`. |
 
 The requested path is cleaned before the embedded filesystem lookup. The response content type is inferred from the extension of the file actually served; when a missing path falls back, that file is `index.html`. Go's `http.ServeContent` provides the final GET/HEAD response semantics.

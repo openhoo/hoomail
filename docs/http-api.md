@@ -25,6 +25,8 @@ The API routes are:
 | `POST` | `/api/reset` | Delete all stored data and reset generated IDs. |
 | `POST` | `/api/send-test` | Send a built-in sample through Hoomail's SMTP listener. |
 
+One non-API route exists alongside the embedded web application: `GET /openapi.json` returns the generated OpenAPI document describing these endpoints. It responds with `application/json` and a one-hour cache lifetime, does not depend on the configured static filesystem, and rejects other methods with a plain-text `405 Method Not Allowed` carrying an `Allow: GET, HEAD` header. There is no interactive documentation page.
+
 Routing is method-sensitive. An unsupported method, an `/api/*` path not captured by the route matchers described below, or a `HEAD` request for a `GET`-only API route returns Go's plain-text response:
 
 ```text
@@ -38,7 +40,7 @@ The API does not return `405 Method Not Allowed` or an `Allow` header.
 
 Nested dynamic routes are matched by prefix and terminal suffix rather than by exact segment count. Consequently, greedy malformed paths such as `/api/mailboxes/1/extra/messages`, `/api/mailboxes/1/extra/events`, or `/api/messages/1/extra/inspect` reach the corresponding handler; the whole intervening value is parsed as the ID and currently returns the endpoint-specific JSON `400`, not the unknown-route plain-text `404`.
 
-Outside `/api/`, production `GET` and `HEAD` requests are served from the embedded web application. If a static path does not exist, the server returns the SPA index. Other methods and deployments without a configured static filesystem return `404`.
+Outside `/api/`—except for `/openapi.json` above—production `GET` and `HEAD` requests are served from the embedded web application. If a static path does not exist, the server returns the SPA index. Other methods and deployments without a configured static filesystem return `404`.
 
 ### IDs
 
@@ -144,7 +146,7 @@ Optional query parameter:
 | --- | --- |
 | `q` | Search subject, sender address, sender name, and the stored plain-text body. Leading and trailing whitespace is ignored. |
 
-The search is a SQLite `LIKE` substring search. Literal `%`, `_`, and `\` in `q` are escaped. It does not search headers or the HTML body. With an empty or whitespace-only `q`, all messages in the mailbox are listed.
+The search is a SQLite `LIKE` substring search. Literal `%`, `_`, and `\` in `q` are escaped. The resulting escaped pattern is capped at 1024 bytes; each literal `%`, `_`, or `\` character counts twice because escaping doubles it. A query whose escaped pattern exceeds that limit returns `400 {"error":"Search query too long"}`. The search does not search headers or the HTML body. With an empty or whitespace-only `q`, all messages in the mailbox are listed.
 
 Returns `200 OK`:
 
@@ -489,6 +491,7 @@ Body handling is intentionally permissive in some places and strict in others:
 - The decoded top-level value is treated as an object; another JSON type consequently has no usable IDs or action.
 - `ids` is useful only when it is an array. Each entry must be an exact decimal integer token accepted by `json.Number.Int64()` and within the signed 64-bit range `[-9223372036854775808, 9223372036854775807]`. Fractional values, exponent notation, values outside that range, strings, booleans, objects, arrays, and `null` entries are silently ignored. Hexadecimal forms are not valid JSON numbers.
 - At least one valid numeric ID must remain. This check happens before action validation.
+- Duplicate IDs are removed while preserving first-seen order. If more than 10000 unique IDs remain after deduplication, the request returns `400 {"error":"Too many message ids provided; maximum is 10000"}`.
 - `action` must be one of the exact lowercase strings above.
 
 Responses:
@@ -498,6 +501,7 @@ Responses:
 | `200` | `{"ok":true}` | The action was accepted, including when none of the IDs exist or the requested read state was already set. |
 | `400` | `{"error":"Invalid JSON body"}` | The body is malformed, empty, or contains more than one JSON value. |
 | `400` | `{"error":"No valid message ids provided"}` | No acceptable numeric ID remains. |
+| `400` | `{"error":"Too many message ids provided; maximum is 10000"}` | More than 10000 unique IDs remain after deduplication. |
 | `400` | `{"error":"Unknown action"}` | IDs are valid but `action` is unsupported, missing, or not a string. |
 | `500` | plain text | Storage failure. |
 

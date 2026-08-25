@@ -120,7 +120,7 @@ The in-image `/hoomail healthcheck` command requires:
 - an accepted SMTP TCP connection
 - a POP3 greeting beginning with `+OK`
 
-Docker runs that command every 30 seconds with a 3-second timeout, 3-second start period, and three retries. Inspect the result with:
+Docker runs that command every 30 seconds with a 10-second timeout, 3-second start period, and three retries. Inspect the result with:
 
 ```bash
 docker inspect --format '{{.State.Health.Status}}' hoomail
@@ -189,7 +189,7 @@ This health test does not send mail or verify persistence, Ingress, or external 
 Use the project/CI toolchains:
 
 - Bun 1.3.14
-- Go 1.26.5
+- Go 1.26.6
 - Playwright-managed Chromium for end-to-end tests
 
 `web/dist` is generated and gitignored, but Go embeds it at compile time. After a fresh checkout and after frontend changes, build the client before running any Go command that compiles the server:
@@ -247,7 +247,7 @@ application under test
                     └────────────────────────► POP3 :3110
 ```
 
-The release container is a scratch image containing the compiled server. The Vite bundle in `web/dist` is embedded into the Go binary at compile time. Browser navigation uses a GET/HEAD SPA fallback. The exact API routes listed above are supported; other API-shaped requests can return `404`, while malformed dynamic route shapes may reach endpoint validation and return validation errors.
+The release container is a scratch image containing the compiled server. The Vite bundle in `web/dist` is embedded into the Go binary at compile time. Browser navigation uses a GET/HEAD SPA fallback, except that `GET` or `HEAD` `/openapi.json` returns the generated OpenAPI document instead of falling back to the SPA. The exact API routes listed above are supported; other API-shaped requests can return `404`, while malformed dynamic route shapes may reach endpoint validation and return validation errors.
 
 ## Security
 

@@ -102,7 +102,7 @@ Container defaults:
 
 ### Exact healthcheck depth
 
-The image healthcheck runs every 30 seconds, with a 3-second timeout, 3-second start period, and three retries. It executes `/hoomail healthcheck`, which performs exactly these checks:
+The image healthcheck runs every 30 seconds, with a 10-second timeout, 3-second start period, and three retries. It executes `/hoomail healthcheck`, which performs exactly these checks:
 
 1. `GET /api/mailboxes` and require HTTP `200 OK`.
 2. Establish and close an SMTP TCP connection. It does **not** send a message or validate an SMTP greeting.

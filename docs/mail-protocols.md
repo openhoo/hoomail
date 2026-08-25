@@ -56,20 +56,26 @@ Hoomail advertises the ESMTP extension `SIZE 26214400`, an exact limit of $25 \t
 - An oversized message is not parsed or stored.
 - The count is the SMTP message content size: headers, body, and line endings, excluding the terminating SMTP dot and transparency dot-stuffing, as defined by the `SIZE` extension.
 
-MIME parsing or SQLite persistence failures are deliberately hidden from the client. The current server response is the generic permanent transaction failure:
+MIME parsing and SQLite persistence failures disclose no parser or database error details over SMTP. The two failure classes use different responses:
+
+- A MIME parsing failure returns the generic permanent transaction failure:
 
 ```text
 554 5.0.0 Error: transaction failed: message processing failed
 ```
 
-No parser or database error details are disclosed over SMTP.
+- A SQLite persistence failure after successful parsing returns a retryable temporary failure:
+
+```text
+451 4.3.0 temporary local failure, please retry
+```
 
 ### CHUNKING and `BDAT`
 
 Hoomail advertises `CHUNKING` in its `EHLO` response and accepts RFC 3030-style `BDAT <size> [LAST]` transfers after a successful `MAIL FROM` and at least one successful `RCPT TO`.
 
 - Each command is followed immediately by exactly `<size>` raw octets. A non-final accepted chunk receives `250 2.0.0 Continue`; the server retains the open transaction and accepts the next `BDAT` chunk.
-- The server concatenates accepted chunks in order and does not parse or persist the message until a chunk marked `LAST` completes. Successful final processing receives `250 2.0.0 OK: queued`; MIME parsing or persistence failure receives the same generic `554 5.0.0` processing failure documented above.
+- The server concatenates accepted chunks in order and does not parse or persist the message until a chunk marked `LAST` completes. Successful final processing receives `250 2.0.0 OK: queued`; final-processing failures match the `DATA` behavior above: a MIME parsing failure receives the generic `554 5.0.0` processing failure, and a persistence failure receives the retryable `451 4.3.0`.
 - The 25 MiB limit applies to the cumulative declared sizes of all chunks in the current transaction. If the next chunk would make the total exceed 26,214,400 bytes, Hoomail consumes and discards that chunk, replies `552 5.3.4 Max message size exceeded`, aborts the accumulated message, and resets the transaction.
 - While a chunked transfer is open, `MAIL FROM`, `RCPT TO`, and `DATA` are rejected with `502 5.5.1`; the client must continue with `BDAT` or abort with `RSET` or by closing the connection.
 - A valid `RSET` during chunking aborts the pending message and replies `250 2.0.0 Session reset`. Successful or failed `BDAT ... LAST`, an oversized chunk, `RSET`, and connection closure all discard chunk-transfer state; transaction reset also clears the sender and recipients, so a new message must start with `MAIL FROM` and `RCPT TO`.
