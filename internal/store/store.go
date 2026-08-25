@@ -45,7 +45,7 @@ func Open(path string, options ...Option) (*Store, error) {
 			return nil, fmt.Errorf("create database directory: %w", err)
 		}
 	}
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", dsn(path))
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
@@ -61,13 +61,24 @@ func Open(path string, options ...Option) (*Store, error) {
 	return store, nil
 }
 
+// dsn appends per-connection pragmas to the database path. Connection-scoped
+// pragmas only affect the connection that executes them, so with
+// SetMaxOpenConns(1) a one-shot setup PRAGMA is silently lost once
+// database/sql recycles the sole pooled connection. The modernc.org/sqlite
+// driver applies _pragma parameters on every new connection, for file paths,
+// file: URIs, and :memory: alike.
+func dsn(path string) string {
+	separator := "?"
+	if strings.Contains(path, "?") {
+		separator = "&"
+	}
+	return path + separator + "_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)"
+}
+
 func (store *Store) Close() error { return store.db.Close() }
 func (store *Store) DB() *sql.DB  { return store.db }
 
 func (store *Store) init(ctx context.Context) error {
-	if _, err := store.db.ExecContext(ctx, `PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;`); err != nil {
-		return fmt.Errorf("configure database: %w", err)
-	}
 	if _, err := store.db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("initialize schema: %w", err)
 	}

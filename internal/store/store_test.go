@@ -414,3 +414,59 @@ func TestPOP3SerializationHonorsContextCancellation(t *testing.T) {
 		})
 	}
 }
+
+// TestForeignKeysSurviveConnectionRecycling proves that foreign key
+// enforcement and ON DELETE CASCADE survive database/sql connection
+// recycling. Connection-scoped pragmas applied once during startup die with
+// their connection; with SetMaxOpenConns(1) the first recycle would silently
+// disable them for the rest of the process.
+func TestForeignKeysSurviveConnectionRecycling(t *testing.T) {
+	store := openTestStore(t)
+	db := store.DB()
+	ctx := context.Background()
+
+	mailbox, err := db.ExecContext(ctx, `INSERT INTO mailboxes (address, created_at) VALUES ('recycle@test', 1)`)
+	if err != nil {
+		t.Fatalf("seed mailbox: %v", err)
+	}
+	mailboxID, err := mailbox.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO messages (mailbox_id, received_at) VALUES (?, 1)`, mailboxID); err != nil {
+		t.Fatalf("seed message: %v", err)
+	}
+
+	// Force the pool to discard its current physical connection and open a
+	// fresh one on the next checkout: with a nanosecond lifetime every pooled
+	// connection is expired by the time we query again.
+	db.SetConnMaxLifetime(time.Nanosecond)
+	time.Sleep(5 * time.Millisecond)
+	if _, err := db.ExecContext(ctx, `SELECT 1`); err != nil {
+		t.Fatalf("trigger connection recycling: %v", err)
+	}
+	db.SetConnMaxLifetime(0)
+
+	var foreignKeys int
+	if err := db.QueryRowContext(ctx, `PRAGMA foreign_keys`).Scan(&foreignKeys); err != nil {
+		t.Fatalf("read foreign_keys pragma: %v", err)
+	}
+	if foreignKeys != 1 {
+		t.Fatalf("PRAGMA foreign_keys=%d on recycled connection, want 1", foreignKeys)
+	}
+
+	if _, err := db.ExecContext(ctx, `INSERT INTO messages (mailbox_id, received_at) VALUES (999999, 1)`); err == nil {
+		t.Fatal("insert referencing unknown mailbox succeeded; foreign keys are not enforced")
+	}
+
+	if _, err := db.ExecContext(ctx, `DELETE FROM mailboxes WHERE id = ?`, mailboxID); err != nil {
+		t.Fatalf("delete mailbox: %v", err)
+	}
+	var orphans int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM messages WHERE mailbox_id = ?`, mailboxID).Scan(&orphans); err != nil {
+		t.Fatalf("count orphaned messages: %v", err)
+	}
+	if orphans != 0 {
+		t.Fatalf("ON DELETE CASCADE did not run: %d orphaned message(s) remain", orphans)
+	}
+}
