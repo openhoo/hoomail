@@ -6,7 +6,7 @@ const runtimeDir = '.e2e-runtime'
 const binaryPath = `${runtimeDir}/hoomail`
 const httpPort = process.env.HOOMAIL_E2E_HTTP_PORT ?? '33100'
 const smtpPort = process.env.HOOMAIL_E2E_SMTP_PORT ?? '33125'
-const pop3Port = process.env.HOOMAIL_E2E_POP3_PORT ?? '33110'
+const pop3Port = process.env.HOOMAIL_E2E_POP3_PORT ?? String(Number(smtpPort) + 1)
 
 type PromiseWithResolvers<T> = {
   promise: Promise<T>

@@ -20,11 +20,11 @@ test('measures large-list rendering and keyboard navigation', async ({ page, req
 
   await page.goto('/')
   await mailboxButton(page, recipient).click()
-  const rows = page.locator('button.reactive-message[data-message-id]')
+  const rows = page.locator('button[data-message-id]')
   await expect(rows).toHaveCount(messageCount)
 
   const metrics = await page.evaluate(async () => {
-    const firstRow = document.querySelector<HTMLButtonElement>('button.reactive-message[data-message-id]')
+    const firstRow = document.querySelector<HTMLButtonElement>('button[data-message-id]')
     if (!firstRow) throw new Error('message list has no rows')
     firstRow.focus()
     let documentQueryCount = 0

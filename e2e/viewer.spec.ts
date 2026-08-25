@@ -104,15 +104,30 @@ test('message viewer tabs, inspection, and attachments expose the complete plain
   const linksAndImages = page.getByRole('region', { name: 'Links and images' })
   const mimeStructure = page.getByRole('region', { name: 'MIME structure' })
   await expect(summary).toBeVisible()
-  for (const [outcome, colorClass] of [
-    ['pass', 'text-green-500'],
-    ['fail', 'text-destructive'],
-    ['observed', 'text-blue-500'],
-    ['not-evaluated', 'text-amber-500'],
-  ]) {
-    const icon = page.locator(`li[data-outcome="${outcome}"] svg`).first()
-    await expect(icon).toBeVisible()
-    await expect(icon).toHaveClass(new RegExp(colorClass))
+  const outcomeTokens: Array<[outcome: string, token: string]> = [
+    ['pass', '--color-green-500'],
+    ['fail', '--color-destructive'],
+    ['observed', '--color-blue-500'],
+    ['not-evaluated', '--color-amber-500'],
+  ]
+  for (const [outcome, token] of outcomeTokens) {
+    await expect(page.locator(`li[data-outcome="${outcome}"] svg`).first()).toBeVisible()
+    const [iconColor, tokenColor] = await page.evaluate(
+      ([outcomeValue, cssToken]) => {
+        const icon = document.querySelector(`li[data-outcome="${outcomeValue}"] svg`)
+        if (!icon) throw new Error(`missing ${outcomeValue} outcome icon`)
+        const probe = document.createElement('span')
+        probe.style.color = `var(${cssToken})`
+        document.body.appendChild(probe)
+        try {
+          return [getComputedStyle(icon).color, getComputedStyle(probe).color] as const
+        } finally {
+          probe.remove()
+        }
+      },
+      [outcome, token],
+    )
+    expect(iconColor).toBe(tokenColor)
   }
   await expect(summary).toContainText('Static offline analysis. Authentication, delivery, and unsubscribe endpoints are not verified.')
   await expect(linksAndImages.getByRole('heading', { name: 'Links & images (2)' })).toBeVisible()
