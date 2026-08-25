@@ -545,3 +545,88 @@ func startTestServer(t *testing.T, messageStore Store) (string, func()) {
 		}
 	}
 }
+
+func TestLineLimitReappliedAfterNonLastBdatChunk(t *testing.T) {
+	messageStore := &recordingStore{}
+	service := New(messageStore)
+	service.server.MaxLineLength = 100
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = service.Serve(listener) }()
+	stop := func() { _ = service.Close() }
+	defer stop()
+
+	client := dialSMTP(t, listener.Addr().String())
+	defer client.close()
+	client.command(250, "EHLO test")
+	client.command(250, "MAIL FROM:<sender@example.test>")
+	client.command(250, "RCPT TO:<recipient@example.test>")
+
+	// A successful non-LAST BDAT chunk must re-enable line limiting once its
+	// bytes are consumed; previously the limit stayed disabled for all
+	// subsequent command reads until LAST or an error.
+	if _, err := fmt.Fprint(client.conn, "BDAT 5\r\nhello"); err != nil {
+		t.Fatal(err)
+	}
+	client.read(250)
+
+	// A command line longer than the limit must now be rejected instead of
+	// being buffered without bound.
+	if _, err := fmt.Fprintf(client.conn, "NOOP %s\r\n", strings.Repeat("x", service.server.MaxLineLength+10)); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	response := client.read(500)
+	if !strings.Contains(response, "Too long line") {
+		t.Fatalf("oversized command line was accepted after BDAT chunk: %q", response)
+	}
+}
+
+func TestBdatOverLimitDiscardKeepsStreamSynced(t *testing.T) {
+	messageStore := &recordingStore{}
+	service := New(messageStore)
+	service.server.MaxMessageBytes = 10
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = service.Serve(listener) }()
+	stop := func() { _ = service.Close() }
+	defer stop()
+
+	client := dialSMTP(t, listener.Addr().String())
+	defer client.close()
+	client.command(250, "EHLO test")
+	client.command(250, "MAIL FROM:<sender@example.test>")
+	client.command(250, "RCPT TO:<recipient@example.test>")
+
+	// An over-limit BDAT chunk must be discarded in full even when it
+	// contains a run far longer than MaxLineLength; previously the line
+	// limiter was still active during the discard, the copy aborted
+	// mid-chunk, and leftover chunk bytes desynchronized command parsing.
+	// The command write is separated from the chunk so the chunk bytes are
+	// consumed inside handleBdat's discard path rather than being slurped
+	// into the command-line read buffer.
+	if _, err := fmt.Fprint(client.conn, "BDAT 3002\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	chunk := strings.Repeat("x", 3000) + "\r\n"
+	if _, err := fmt.Fprint(client.conn, chunk); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if response := client.read(552); !strings.Contains(response, "Max message size exceeded") {
+		t.Fatalf("expected 552 for over-limit BDAT chunk: %q", response)
+	}
+
+	// The connection must remain usable for subsequent commands.
+	client.command(250, "NOOP")
+	client.command(221, "QUIT")
+}

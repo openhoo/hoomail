@@ -1025,8 +1025,14 @@ func (c *Conn) handleBdat(arg string) {
 	if c.server.MaxMessageBytes != 0 && c.bytesReceived+int64(size) > c.server.MaxMessageBytes {
 		c.writeResponse(552, EnhancedCode{5, 3, 4}, "Max message size exceeded")
 
-		// Discard chunk itself without passing it to backend.
+		// Discard chunk itself without passing it to backend. The chunk is
+		// arbitrary message content, so disable line limiting for the
+		// duration of the discard; otherwise a single run longer than
+		// MaxLineLength aborts the copy mid-chunk and desynchronizes
+		// subsequent command parsing.
+		c.lineLimitReader.LineLimit = 0
 		io.Copy(ioutil.Discard, io.LimitReader(c.text.R, int64(size)))
+		c.lineLimitReader.LineLimit = c.server.MaxLineLength
 
 		c.reset()
 		return
@@ -1094,6 +1100,10 @@ func (c *Conn) handleBdat(arg string) {
 
 	c.bytesReceived += int64(size)
 
+	// The chunk has been fully consumed, so restore the line limit now;
+	// otherwise every subsequent read (including command parsing) stays
+	// unbounded until LAST or an error arrives.
+	c.lineLimitReader.LineLimit = c.server.MaxLineLength
 	if last {
 		c.lineLimitReader.LineLimit = c.server.MaxLineLength
 
