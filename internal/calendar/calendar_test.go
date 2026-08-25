@@ -132,10 +132,51 @@ func TestParseICSAllDayDefaultsEndAndPublish(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("ParseICS returned %d events, want 1", len(events))
 	}
-	start := time.Date(2026, time.December, 24, 0, 0, 0, 0, time.Local).UnixMilli()
-	end := time.Date(2026, time.December, 25, 0, 0, 0, 0, time.Local).UnixMilli()
+	start := time.Date(2026, time.December, 24, 0, 0, 0, 0, time.UTC).UnixMilli()
+	end := time.Date(2026, time.December, 25, 0, 0, 0, 0, time.UTC).UnixMilli()
 	if events[0].Method != MethodPublish || !events[0].AllDay || events[0].DTStart != start || events[0].DTEnd == nil || *events[0].DTEnd != end {
 		t.Fatalf("all-day event mismatch: %#v", events[0])
+	}
+}
+
+func TestParseICSDateValueAnchorsUTCMidnight(t *testing.T) {
+	ics := "BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:date@example.com\nDTSTART;VALUE=DATE:20260825\nEND:VEVENT\nEND:VCALENDAR\n"
+	events := ParseICS(ics)
+	if len(events) != 1 {
+		t.Fatalf("ParseICS returned %d events, want 1", len(events))
+	}
+	want := time.Date(2026, time.August, 25, 0, 0, 0, 0, time.UTC)
+	if !events[0].AllDay || events[0].DTStart != want.UnixMilli() {
+		t.Fatalf("all-day DTSTART = %d, want UTC midnight instant %d", events[0].DTStart, want.UnixMilli())
+	}
+}
+
+func TestParseICSPreservesLiteralCaretInParameter(t *testing.T) {
+	ics := "BEGIN:VCALENDAR\r\n" +
+		"VERSION:2.0\r\n" +
+		"METHOD:REQUEST\r\n" +
+		"BEGIN:VEVENT\r\n" +
+		"UID:caret@example.com\r\n" +
+		"SEQUENCE:1\r\n" +
+		"DTSTART:20260723T100000Z\r\n" +
+		"ORGANIZER;CN=Owl^Nest:mailto:o@example.com\r\n" +
+		"ATTENDEE;CN=Research^notes:mailto:r@example.com\r\n" +
+		"END:VEVENT\r\n" +
+		"END:VCALENDAR\r\n"
+
+	events := ParseICS(ics)
+	if len(events) != 1 {
+		t.Fatalf("ParseICS returned %d events, want 1", len(events))
+	}
+	if len(events[0].Attendees) != 1 {
+		t.Fatalf("got %d attendees, want 1", len(events[0].Attendees))
+	}
+	attendee := events[0].Attendees[0]
+	if attendee.Name == nil || *attendee.Name != "Research^notes" {
+		t.Fatalf("attendee CN = %#v, want literal \"Research^notes\"", attendee.Name)
+	}
+	if events[0].OrganizerName == nil || *events[0].OrganizerName != "Owl^Nest" {
+		t.Fatalf("organizer CN = %#v, want literal \"Owl^Nest\"", events[0].OrganizerName)
 	}
 }
 

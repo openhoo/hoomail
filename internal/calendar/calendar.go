@@ -366,11 +366,6 @@ func decodeParameter(value string) string {
 	if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
 		value = value[1 : len(value)-1]
 	}
-	value = strings.ReplaceAll(value, "^^", "\x00")
-	value = strings.ReplaceAll(value, "^n", "\n")
-	value = strings.ReplaceAll(value, "^N", "\n")
-	value = strings.ReplaceAll(value, "^'", "\"")
-	value = strings.ReplaceAll(value, "\x00", "^")
 	value = strings.ReplaceAll(value, "\\\"", "\"")
 	value = strings.ReplaceAll(value, "\\\\", "\\")
 	return value
@@ -460,7 +455,7 @@ func parseCalendarTime(line contentLine) (time.Time, bool, error) {
 	allDay := strings.EqualFold(valueType, "DATE") || valueType == "" && (len(value) == 8 || len(value) == 9 && strings.HasSuffix(strings.ToUpper(value), "Z"))
 	if allDay {
 		value = strings.TrimSuffix(strings.ToUpper(value), "Z")
-		parsed, err := time.ParseInLocation("20060102", value, time.Local)
+		parsed, err := time.ParseInLocation("20060102", value, time.UTC)
 		return parsed, true, err
 	}
 
