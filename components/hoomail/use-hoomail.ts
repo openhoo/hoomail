@@ -154,7 +154,7 @@ export interface InspectionReport {
   htmlCompatibility?: HTMLCompatibility | null
 }
 
-type CacheEntry = { data?: unknown; error?: unknown; promise?: Promise<void>; revalidateAfter?: boolean; generation: number; listeners: Set<() => void> }
+type CacheEntry = { data?: unknown; error?: unknown; promise?: Promise<void>; revalidateAfter?: boolean; generation: number; fetcher?: (key: string) => Promise<unknown>; listeners: Set<() => void> }
 const cache = new Map<string, CacheEntry>()
 const MAX_INACTIVE_INSPECTIONS = 8
 
@@ -176,6 +176,9 @@ function entry(key: string) {
 
 async function fetchInto<T>(key: string, fetcher: (key: string) => Promise<T>, force = false) {
   const current = entry(key)
+  // Revalidation must reuse the fetcher that produced this entry; a JSON
+  // revalidation of a text resource would poison the entry with a parse error.
+  current.fetcher ??= fetcher
   if (current.promise) {
     if (force) current.revalidateAfter = true
     return current.promise
@@ -224,7 +227,7 @@ export function mutateCache<T>(matcher: CacheMatcher, updater?: (data: T | undef
       current.data = updater(current.data as T | undefined)
     }
     current.listeners.forEach((listener) => listener())
-    if (revalidate) void fetchInto(key, jsonFetcher, true)
+    if (revalidate) void fetchInto(key, current.fetcher ?? jsonFetcher, true)
   }
 }
 

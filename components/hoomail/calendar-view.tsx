@@ -14,6 +14,17 @@ function startOfDay(ts: number): number {
   return d.getTime()
 }
 
+/**
+ * Key for the UTC calendar day an instant falls on, expressed as local
+ * midnight of that calendar date so it matches month-grid cell keys. All-day
+ * events carry UTC-midnight epochs; local startOfDay would shift them one day
+ * west in browsers behind UTC.
+ */
+function utcDayKey(ts: number): number {
+  const d = new Date(ts)
+  return new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()).getTime()
+}
+
 /** Builds the 6x7 grid of days shown for a month (Monday-first). */
 function monthGrid(year: number, month: number): Date[] {
   const first = new Date(year, month, 1)
@@ -54,7 +65,7 @@ export function CalendarView({
   const eventsByDay = useMemo(() => {
     const map = new Map<number, CalendarEvent[]>()
     for (const event of events) {
-      const key = startOfDay(event.dtstart)
+      const key = event.allDay ? utcDayKey(event.dtstart) : startOfDay(event.dtstart)
       const list = map.get(key) ?? []
       list.push(event)
       map.set(key, list)
@@ -178,72 +189,76 @@ export function CalendarView({
           </div>
 
           <div role="rowgroup" className="grid min-h-0 flex-1 grid-cols-7 grid-rows-6">
-            {days.map((day) => {
-              const key = startOfDay(day.getTime())
-              const dayEvents = eventsByDay.get(key) ?? []
-              const inMonth = day.getMonth() === cursor.month
-              const isToday = key === startOfDay(Date.now())
-              const isSelected = key === selectedDay
+            {Array.from({ length: Math.ceil(days.length / 7) }, (_, w) => (
+              <div key={w} role="row" style={{ display: 'contents' }}>
+                {days.slice(w * 7, w * 7 + 7).map((day) => {
+                  const key = startOfDay(day.getTime())
+                  const dayEvents = eventsByDay.get(key) ?? []
+                  const inMonth = day.getMonth() === cursor.month
+                  const isToday = key === startOfDay(Date.now())
+                  const isSelected = key === selectedDay
 
-              return (
-                <button
-                  key={key}
-                  type="button"
-                  role="gridcell"
-                  data-calendar-day={key}
-                  tabIndex={isSelected ? 0 : -1}
-                  onKeyDown={(event) => {
-                    const delta = event.key === 'ArrowLeft' ? -1
-                      : event.key === 'ArrowRight' ? 1
-                        : event.key === 'ArrowUp' ? -7
-                          : event.key === 'ArrowDown' ? 7
-                            : 0
-                    if (delta === 0) return
-                    event.preventDefault()
-                    moveDayFocus(key, delta)
-                  }}
-                  onClick={() => setSelectedDay(key)}
-                  className={cn(
-                    'flex min-h-0 flex-col items-stretch gap-0.5 overflow-hidden border-b border-r border-border/60 p-1 text-left transition-colors',
-                    !inMonth && 'bg-muted/30',
-                    isSelected ? 'bg-accent' : 'hover:bg-accent/50'
-                  )}
-                  aria-label={`${day.toLocaleDateString()} — ${dayEvents.length} events`}
-                  aria-selected={isSelected}
-                >
-                  <span
-                    className={cn(
-                      'flex size-5 shrink-0 items-center justify-center rounded-full text-xs',
-                      isToday
-                        ? 'bg-primary font-bold text-primary-foreground'
-                        : inMonth
-                          ? 'text-foreground'
-                          : 'text-muted-foreground'
-                    )}
-                  >
-                    {day.getDate()}
-                  </span>
-                  {dayEvents.slice(0, 2).map((event) => (
-                    <span
-                      key={event.id}
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      role="gridcell"
+                      data-calendar-day={key}
+                      tabIndex={isSelected ? 0 : -1}
+                      onKeyDown={(event) => {
+                        const delta = event.key === 'ArrowLeft' ? -1
+                          : event.key === 'ArrowRight' ? 1
+                            : event.key === 'ArrowUp' ? -7
+                              : event.key === 'ArrowDown' ? 7
+                                : 0
+                        if (delta === 0) return
+                        event.preventDefault()
+                        moveDayFocus(key, delta)
+                      }}
+                      onClick={() => setSelectedDay(key)}
                       className={cn(
-                        'truncate rounded-sm px-1 py-px text-[12px] leading-tight',
-                        event.status === 'CANCELLED'
-                          ? 'bg-destructive/15 text-destructive line-through'
-                          : 'bg-primary/20 text-foreground'
+                        'flex min-h-0 flex-col items-stretch gap-0.5 overflow-hidden border-b border-r border-border/60 p-1 text-left transition-colors',
+                        !inMonth && 'bg-muted/30',
+                        isSelected ? 'bg-accent' : 'hover:bg-accent/50'
                       )}
+                      aria-label={`${day.toLocaleDateString()} — ${dayEvents.length} events`}
+                      aria-selected={isSelected}
                     >
-                      {event.summary || '(untitled)'}
-                    </span>
-                  ))}
-                  {dayEvents.length > 2 && (
-                    <span className="px-1 text-[11px] text-muted-foreground">
-                      +{dayEvents.length - 2} more
-                    </span>
-                  )}
-                </button>
-              )
-            })}
+                      <span
+                        className={cn(
+                          'flex size-5 shrink-0 items-center justify-center rounded-full text-xs',
+                          isToday
+                            ? 'bg-primary font-bold text-primary-foreground'
+                            : inMonth
+                              ? 'text-foreground'
+                              : 'text-muted-foreground'
+                        )}
+                      >
+                        {day.getDate()}
+                      </span>
+                      {dayEvents.slice(0, 2).map((event) => (
+                        <span
+                          key={event.id}
+                          className={cn(
+                            'truncate rounded-sm px-1 py-px text-[12px] leading-tight',
+                            event.status === 'CANCELLED'
+                              ? 'bg-destructive/15 text-destructive line-through'
+                              : 'bg-primary/20 text-foreground'
+                          )}
+                        >
+                          {event.summary || '(untitled)'}
+                        </span>
+                      ))}
+                      {dayEvents.length > 2 && (
+                        <span className="px-1 text-[11px] text-muted-foreground">
+                          +{dayEvents.length - 2} more
+                        </span>
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+            ))}
           </div>
         </div>
 

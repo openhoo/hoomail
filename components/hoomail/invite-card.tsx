@@ -12,7 +12,9 @@ function formatEventRange(event: IcalEvent): string {
     day: 'numeric',
   }
   if (event.allDay) {
-    return `${start.toLocaleDateString(undefined, dateFmt)} (all day)`
+    // All-day instants are UTC-midnight epochs; render their UTC calendar date
+    // so the displayed day cannot shift westward in browsers behind UTC.
+    return `${start.toLocaleDateString(undefined, { ...dateFmt, timeZone: 'UTC' })} (all day)`
   }
   const timeFmt: Intl.DateTimeFormatOptions = { hour: '2-digit', minute: '2-digit' }
   const startStr = `${start.toLocaleDateString(undefined, dateFmt)} ${start.toLocaleTimeString(undefined, timeFmt)}`

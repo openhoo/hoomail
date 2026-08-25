@@ -389,7 +389,7 @@ export function MessageViewer({
       {!contentReady && (
         <div
           className="absolute inset-0 z-10 flex items-center justify-center bg-background"
-          role={switchFailed ? 'alert' : 'status'}
+          role={switchFailed ? undefined : 'status'}
         >
           {switchFailed ? (
             <MessageLoadError onRetry={retrySelected} />
@@ -815,7 +815,7 @@ const previewTextFetcher = async (url: string): Promise<TextPreviewPayload> => {
     const { done, value } = await reader.read()
     if (done) break
     text += decoder.decode(value, { stream: true })
-    if (text.length >= TEXT_PREVIEW_CHAR_LIMIT) {
+    if (text.length > TEXT_PREVIEW_CHAR_LIMIT) {
       text = text.slice(0, TEXT_PREVIEW_CHAR_LIMIT)
       truncated = true
       void reader.cancel().catch(() => {})
