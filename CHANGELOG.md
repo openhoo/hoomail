@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.9.2 (2026-08-25)
+
+### Bug Fixes
+
+- **store:** apply sqlite pragmas on every connection (b9ec825)
+- **events:** drain sse subscribers on shutdown (1cc064d)
+- **httpserver:** drop unpkg swagger ui, keep openapi.json (0d4a392)
+- **mime:** treat lone cr as content and bound semantic depth (b5ec746)
+- **inspect:** rfc8617 arc parsing and truncation markers (d05d7b5)
+- **calendar:** rfc5545 params and utc date anchoring (a92b886)
+- **smtp:** resync stream after over-limit bdat discard (b14d0c7)
+- **web:** cache fetcher reuse, utc all-day rendering, single alert (cfde28a)
+- **e2e:** observable selectors, port contract, tz coverage (d9fcac2)
+- **chart:** raise probe timeouts to 10s (cbc88dd)
+
+### Other Changes
+
+- correct drift against implemented behavior (e7c1ce7)
+- **release:** restore concurrency guard (ff8d7a6)
+
 ## 0.9.1 (2026-08-24)
 
 ### Bug Fixes
