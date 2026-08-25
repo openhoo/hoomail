@@ -47,7 +47,7 @@ var categoryOrder = map[string]int{
 
 var truncationOrder = []string{
 	"raw bytes", "MIME depth", "MIME parts", "header fields", "header bytes",
-	"physical lines", "legacy body bytes", "HTML nodes", "HTML token bytes",
+	"physical lines", "legacy body bytes", "HTML nodes", "HTML token bytes", "style bytes",
 	"compatibility warnings", "resource values", "resources", "findings", "evidence", "report bytes",
 }
 
@@ -234,14 +234,14 @@ func (a *analyzer) runMessageRules() {
 func (a *analyzer) ruleLineEndings(complete bool) {
 	var evidence []Evidence
 	for index, line := range a.doc.Lines {
-		if line.Terminator == "CR" || line.Terminator == "LF" {
+		if line.Terminator == "LF" {
 			lineNumber := index + 1
 			value := line.Terminator
 			evidence = append(evidence, Evidence{Source: "raw-line", Line: &lineNumber, Value: &value})
 		}
 	}
 	if len(evidence) != 0 {
-		a.addFinding(finding("message.line-endings", "message", "fail", "error", "standard", "all", "Line endings", "Bare CR or LF line endings were found; Internet Message Format requires CRLF line endings.", evidence, rfc("RFC 5322 §2.3", "https://www.rfc-editor.org/rfc/rfc5322#section-2.3")))
+		a.addFinding(finding("message.line-endings", "message", "fail", "error", "standard", "all", "Line endings", "Bare LF line endings were found; Internet Message Format requires CRLF line endings.", evidence, rfc("RFC 5322 §2.3", "https://www.rfc-editor.org/rfc/rfc5322#section-2.3")))
 	} else if complete {
 		a.addFinding(finding("message.line-endings", "message", "pass", "none", "standard", "all", "Line endings", "All indexed physical lines use CRLF termination or the final EOF boundary.", nil, rfc("RFC 5322 §2.3", "https://www.rfc-editor.org/rfc/rfc5322#section-2.3")))
 	}
@@ -476,6 +476,7 @@ func (a *analyzer) ruleInternationalizedHeaders() {
 		for index := len(node.Children) - 1; index >= 0; index-- {
 			stack = append(stack, node.Children[index])
 		}
+		occurrences := map[string]int{}
 		for _, field := range node.HeaderFields {
 			if !validRange(field.RawValue, len(a.doc.Raw)) {
 				continue
@@ -483,7 +484,8 @@ func (a *analyzer) ruleInternationalizedHeaders() {
 			value := a.doc.Raw[field.RawValue.Start:field.RawValue.End]
 			path := node.Path
 			fieldName := field.Name
-			occurrence := 1
+			occurrences[strings.ToLower(fieldName)]++
+			occurrence := occurrences[strings.ToLower(fieldName)]
 			ev := Evidence{Source: "raw-header", Path: &path, Field: &fieldName, Occurrence: &occurrence}
 			if !utf8.Valid(value) {
 				invalid = append(invalid, ev)
@@ -1112,7 +1114,11 @@ func (a *analyzer) finishReport() (Report, error) {
 	compatibility := analyzeHTMLCompatibility(a.html)
 	if compatibility != nil {
 		if compatibility.Truncated {
-			a.addCause("HTML token bytes")
+			cause := compatibility.truncationCause
+			if cause == "" {
+				cause = "HTML token bytes"
+			}
+			a.addCause(cause)
 			a.addUnavailable("compatibility")
 		}
 		if compatibility.WarningsTruncated {
@@ -1878,6 +1884,11 @@ func parseARCInstanceFromAAR(value string) (int, bool) {
 	if len(parts) != 2 {
 		return 0, false
 	}
+	if instance, ok := arcInstanceTag(parts[0]); ok {
+		payload := strings.TrimSpace(parts[1])
+		_, valid := parseAuthenticationResults(payload)
+		return instance, valid && instance >= 1 && instance <= 50
+	}
 	head := strings.Fields(parts[0])
 	if len(head) < 2 {
 		return 0, false
@@ -1893,6 +1904,22 @@ func parseARCInstanceFromAAR(value string) (int, bool) {
 	}
 	_, ok := parseAuthenticationResults(authserv + ";" + parts[1])
 	return instance, ok && instance >= 1 && instance <= 50
+}
+
+func arcInstanceTag(segment string) (int, bool) {
+	fields := strings.Fields(segment)
+	if len(fields) != 1 {
+		return 0, false
+	}
+	tag := fields[0]
+	if len(tag) < 3 || !strings.EqualFold(tag[:2], "i=") {
+		return 0, false
+	}
+	instance, err := strconv.Atoi(tag[2:])
+	if err != nil {
+		return 0, false
+	}
+	return instance, true
 }
 func containsFold(values []string, target string) bool {
 	for _, value := range values {

@@ -63,6 +63,8 @@ type HTMLCompatibility struct {
 	WarningsTruncated bool                    `json:"warningsTruncated,omitempty"`
 	ClientsTruncated  bool                    `json:"clientsTruncated,omitempty"`
 	Truncated         bool                    `json:"truncated,omitempty"`
+
+	truncationCause string
 }
 
 type caniEmailFile struct {
@@ -123,6 +125,8 @@ func analyzeHTMLCompatibility(raw []byte) *HTMLCompatibility {
 	nodes := 0
 	inStyle := false
 	var styles strings.Builder
+	truncationCause := ""
+	stylesTruncated := false
 	t := html.NewTokenizer(bytes.NewReader(raw))
 	t.SetMaxBuf(MaxHTMLTokenBytes)
 	for {
@@ -130,6 +134,7 @@ func analyzeHTMLCompatibility(raw []byte) *HTMLCompatibility {
 		if typ == html.ErrorToken {
 			if err := t.Err(); err != nil && err != io.EOF {
 				truncated = true
+				truncationCause = "HTML token bytes"
 			}
 			break
 		}
@@ -141,6 +146,8 @@ func analyzeHTMLCompatibility(raw []byte) *HTMLCompatibility {
 				nodes++
 				if nodes > MaxHTMLNodes {
 					nodes = MaxHTMLNodes
+					truncated = true
+					truncationCause = "HTML nodes"
 					goto done
 				}
 			}
@@ -189,8 +196,11 @@ func analyzeHTMLCompatibility(raw []byte) *HTMLCompatibility {
 				text := tok.Data
 				if len(text) > remaining {
 					text = text[:remaining]
+					stylesTruncated = true
 				}
 				styles.WriteString(text)
+			} else if inStyle {
+				stylesTruncated = true
 			}
 		case html.EndTagToken:
 			if strings.EqualFold(tok.Data, "style") {
@@ -317,10 +327,16 @@ done:
 			clientsTruncated = true
 		}
 	}
+	isTruncated := truncated || stylesTruncated
+	cause := truncationCause
+	if cause == "" && stylesTruncated {
+		cause = "style bytes"
+	}
 	return &HTMLCompatibility{
 		DataVersion: canIEmailDataset.APIVersion, DataUpdated: canIEmailDataset.LastUpdateDate,
 		Nodes: nodes, Tests: tests, Score: score, Platforms: platformList, Warnings: warnings,
-		WarningsTruncated: warningsTruncated, ClientsTruncated: clientsTruncated, Truncated: truncated,
+		WarningsTruncated: warningsTruncated, ClientsTruncated: clientsTruncated, Truncated: isTruncated,
+		truncationCause: cause,
 	}
 }
 
