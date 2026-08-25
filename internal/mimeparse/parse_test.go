@@ -497,3 +497,59 @@ func TestParsePreservesDecodedDispositionParameters(t *testing.T) {
 		}
 	}
 }
+
+func TestParseLoneCarriageReturnIsContentNotTerminator(t *testing.T) {
+	raw := []byte("Content-Type: text/plain\rX: y\r\n\r\nbody")
+	document, err := Parse(raw, InspectionLimits)
+	if err != nil || document.SemanticError != nil || document.Root == nil {
+		t.Fatalf("indexed Parse: err=%v semantic=%v root=%v", err, document.SemanticError, document.Root)
+	}
+	if len(document.Lines) != 3 || document.Lines[0].Terminator != "CRLF" {
+		t.Fatalf("lines = %#v", document.Lines)
+	}
+	fields := document.Root.HeaderFields
+	if len(fields) != 1 || fields[0].Name != "Content-Type" {
+		t.Fatalf("header fields = %#v", fields)
+	}
+	if !document.Root.MalformedContentType || document.Root.MediaType != "text/plain" {
+		t.Fatalf("root media type = %q malformed=%v", document.Root.MediaType, document.Root.MalformedContentType)
+	}
+	if string(document.Root.DecodedBody) != "body" {
+		t.Fatalf("decoded body = %q", document.Root.DecodedBody)
+	}
+	withoutIndex, err := Parse(raw, Limits{})
+	if err != nil || withoutIndex.SemanticError != nil || withoutIndex.Root == nil {
+		t.Fatalf("semantic Parse: err=%v semantic=%v root=%v", err, withoutIndex.SemanticError, withoutIndex.Root)
+	}
+	if !withoutIndex.Root.MalformedContentType {
+		t.Fatalf("semantic root malformed content type = %v", withoutIndex.Root.MalformedContentType)
+	}
+	if string(withoutIndex.Root.DecodedBody) != "body" {
+		t.Fatalf("semantic decoded body = %q", withoutIndex.Root.DecodedBody)
+	}
+}
+
+func TestParseDeepNestingBeyondMaxDepthFailsCleanlyOnBothPaths(t *testing.T) {
+	var builder strings.Builder
+	for level := range InspectionLimits.MaxDepth + 8 {
+		builder.WriteString("Content-Type: multipart/mixed; boundary=b" + itoa(level) + "\r\n\r\n--b" + itoa(level) + "\r\n")
+	}
+	builder.WriteString("leaf")
+	raw := []byte(builder.String())
+
+	indexed, err := Parse(raw, InspectionLimits)
+	if err != nil {
+		t.Fatalf("indexed Parse: %v", err)
+	}
+	if !indexed.Truncated || !indexed.SemanticSkipped {
+		t.Fatalf("indexed document truncation flags: truncated=%v semanticSkipped=%v causes=%v", indexed.Truncated, indexed.SemanticSkipped, indexed.TruncationCauses)
+	}
+
+	withoutIndex, err := Parse(raw, Limits{})
+	if err != nil {
+		t.Fatalf("semantic Parse: %v", err)
+	}
+	if withoutIndex.SemanticError == nil {
+		t.Fatal("semantic parser did not report maximum nesting depth")
+	}
+}

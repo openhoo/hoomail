@@ -52,6 +52,9 @@ func buildRawIndex(raw []byte, limits Limits) *rawIndex {
 	return index
 }
 
+// scanLines splits raw into physical lines at LF only, mirroring go-message
+// readers: CR terminates a line solely as part of CRLF; a lone CR is line
+// content, not a terminator.
 func (index *rawIndex) scanLines(end int, eof bool) {
 	position := 0
 	for position < end {
@@ -60,22 +63,17 @@ func (index *rawIndex) scanLines(end int, eof bool) {
 			return
 		}
 		start := position
-		for position < end && index.raw[position] != '\r' && index.raw[position] != '\n' {
+		for position < end && index.raw[position] != '\n' {
 			position++
 		}
 		lineEnd := position
 		terminator := "EOF"
 		if position < end {
-			if index.raw[position] == '\r' {
-				position++
-				terminator = "CR"
-				if position < end && index.raw[position] == '\n' {
-					position++
-					terminator = "CRLF"
-				}
-			} else {
-				position++
-				terminator = "LF"
+			position++
+			terminator = "LF"
+			if lineEnd > start && index.raw[lineEnd-1] == '\r' {
+				lineEnd--
+				terminator = "CRLF"
 			}
 		} else if !eof {
 			return

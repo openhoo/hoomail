@@ -96,6 +96,9 @@ func readSemanticNode(entity *message.Entity, entityErr error, path string, rawN
 	if entity == nil {
 		return nil, entityErr, "", nil
 	}
+	if InspectionLimits.MaxDepth > 0 && depth > InspectionLimits.MaxDepth {
+		return nil, fmt.Errorf("mimeparse: maximum MIME nesting depth %d exceeded at %s", InspectionLimits.MaxDepth, path), "", nil
+	}
 	if digestChild && rawNode == nil && entity.Header.Get("Content-Type") == "" {
 		body, bodyErr := io.ReadAll(entity.Body)
 		disposition, dispositionParams, _ := entity.Header.ContentDisposition()
