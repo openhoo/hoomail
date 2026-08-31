@@ -63,7 +63,7 @@ docker run -d \
   -p 127.0.0.1:2525:2525 \
   -p 127.0.0.1:3110:3110 \
   -v hoomail-data:/app/data \
-  ghcr.io/openhoo/hoomail:0.9.2
+  ghcr.io/openhoo/hoomail:0.9.3
 ```
 
 These mappings are loopback-only by default. Deliberate non-loopback exposure requires a trusted, firewalled network.
@@ -135,7 +135,7 @@ docker inspect --format '{{.State.Health.Status}}' hoomail
 Print the embedded version without starting the services:
 
 ```bash
-docker run --rm ghcr.io/openhoo/hoomail:0.9.2 version
+docker run --rm ghcr.io/openhoo/hoomail:0.9.3 version
 ```
 
 ## Configuration
