@@ -63,7 +63,7 @@ docker run -d \
   -p 127.0.0.1:2525:2525 \
   -p 127.0.0.1:3110:3110 \
   -v hoomail-data:/app/data \
-  ghcr.io/openhoo/hoomail:latest
+  ghcr.io/openhoo/hoomail:0.9.2
 ```
 
 These mappings are loopback-only by default. Deliberate non-loopback exposure requires a trusted, firewalled network.
@@ -110,7 +110,13 @@ The same multi-platform release image is published to both registries with Build
 - `ghcr.io/openhoo/hoomail`
 - `openhoo/hoomail` on [Docker Hub](https://hub.docker.com/r/openhoo/hoomail)
 
-A GitHub artifact attestation is additionally published for the GHCR image digest. Releases publish an exact semantic-version tag, a moving `major.minor` tag, `sha-<7-character-release-commit>`, and `latest`. For reproducible deployments, pin an exact version or image digest rather than a moving tag.
+A GitHub artifact attestation is additionally published for the GHCR image
+digest, and both registry digests are signed with Cosign. GitHub Releases attach
+the Helm chart, sorted SHA-256 checksums, keyless Sigstore bundles, and artifact
+attestations. Releases publish an exact semantic-version tag, a moving
+`major.minor` tag, `sha-<7-character-release-commit>`, and `latest`. For
+reproducible deployments, pin an exact version or image digest rather than a
+moving tag.
 
 The scratch image contains the compiled Hoomail server and runs as UID/GID `65532`. `/app/data` must be writable by that identity.
 
@@ -129,7 +135,7 @@ docker inspect --format '{{.State.Health.Status}}' hoomail
 Print the embedded version without starting the services:
 
 ```bash
-docker run --rm ghcr.io/openhoo/hoomail:latest version
+docker run --rm ghcr.io/openhoo/hoomail:0.9.2 version
 ```
 
 ## Configuration

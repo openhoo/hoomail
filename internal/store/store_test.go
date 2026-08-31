@@ -91,7 +91,6 @@ func TestListMessagesEscapesLikeWildcards(t *testing.T) {
 	store := openTestStore(t, WithBroadcaster(func(events.Event) {}))
 	ctx := context.Background()
 	for _, subject := range []string{"literal 100%_\\ match", "literal 100XX match"} {
-		subject := subject
 		if _, err := store.StoreMessage(ctx, StoreMessageInput{Recipients: []string{"box@example.com"}, Subject: &subject, Headers: map[string]string{}}); err != nil {
 			t.Fatal(err)
 		}
