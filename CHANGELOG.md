@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.4 (2026-08-31)
+
+### Bug Fixes
+
+- **release:** embed license in Helm chart (#18) (829e33c)
+
 ## 0.9.3 (2026-08-31)
 
 ### Bug Fixes
