@@ -254,6 +254,20 @@ test.describe('all-day invitations stay on their UTC day west of UTC', () => {
     await page.getByRole('button', { name: 'Calendar', exact: true }).click()
     await eventsResponse
 
+    const calendar = page.getByRole('region', { name: 'Calendar' })
+    const currentMonth = await page.evaluate(() => {
+      const now = new Date()
+      return { year: now.getFullYear(), monthIndex: now.getMonth() }
+    })
+    const monthOffset = 2026 * 12 + 7 - (currentMonth.year * 12 + currentMonth.monthIndex)
+    const navigationButton = calendar.getByRole('button', {
+      name: monthOffset > 0 ? 'Next month' : 'Previous month',
+    })
+    for (let moved = 0; moved < Math.abs(monthOffset); moved += 1) {
+      await navigationButton.click()
+    }
+    await expect(calendar.getByRole('heading', { name: 'August 2026' })).toBeVisible()
+
     const aug25Epoch = zonedDayStartEpoch(2026, 7, 25, 'America/Los_Angeles')
     const aug24Epoch = zonedDayStartEpoch(2026, 7, 24, 'America/Los_Angeles')
 
