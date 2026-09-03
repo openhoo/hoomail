@@ -320,7 +320,7 @@ The UI has targeted feedback for Send-test failures, text-attachment preview fai
 Consequences include:
 
 - failed inbox, message-list, or calendar loads can appear empty;
-- a failed initial message-detail request renders **Could not load message.** with a **Retry** action; and
+- a failed initial message-detail request renders **Could not load message.** with a **Retry** action;
 - mailbox deletion and message read/unread/delete failures have no visible error notification and are handled through silent refresh where implemented; and
 - realtime connection state, disconnection, reconnection, and last-event time are not displayed.
 
