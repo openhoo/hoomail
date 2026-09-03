@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.9.5 (2026-09-03)
+
+### Bug Fixes
+
+- **hoomail:** harden message delivery and rendering (6c3adbf)
+
+### Other Changes
+
+- **ci:** update Hoostack tool pins (#20) (617b0ee)
+- **ci:** adopt HooNeedsUpdates v0.3.0 (46c4e77)
+- **ci:** adopt Hoonarqube v0.3.1 (094e1a4)
+- **ci:** converge released tool pins (26de1aa)
+
 ## 0.9.4 (2026-08-31)
 
 ### Bug Fixes
