@@ -556,7 +556,7 @@ gh workflow run Release \
   --field dry_run=true
 ```
 
-Hooversion is pinned to commit `f2186561c587b58c5ea08c74c15800cdd39eab42` (`v1.1.0`). Conventional Commits drive the version. The configured release scopes are `hoomail`, `client`, `server`, `smtp`, `docker`, `ghcr`, `image`, `helm`, `chart`, and `release`.
+Hooversion is pinned to commit `ac503b23b9b36ebbf39ee6103713c81f1f18b64d` (`v1.1.1`). Conventional Commits drive the version. The configured release scopes are `hoomail`, `client`, `server`, `smtp`, `docker`, `ghcr`, `image`, `helm`, `chart`, and `release`.
 
 When a release is published, automation:
 
@@ -566,7 +566,7 @@ When a release is published, automation:
 4. packages `charts/hoomail` and uploads its `.tgz` archive to that GitHub Release;
 5. builds and pushes the multi-platform image to GHCR and Docker Hub.
 
-Release automation can advance `main` with the generated release commit. Maintainers should update their local branch after the workflow completes.
+Because `main` is protected, the preparation run does not publish directly. It pushes the generated release commit to `release/v<version>` and writes a compare URL in the workflow summary. A maintainer must open that URL as a release pull request and squash-merge it into `main`, retaining the generated commit message byte-for-byte: both the generated subject `chore(release): hoomail <version>` and the complete generated release-notes body. Do not clear, replace, or edit the PR body. This preserves the release commit required by Hooversion so, after the squashed release commit lands and its push CI succeeds, the next release workflow can finalize the tag on that exact commit; chart, image, and GitHub Release publication then proceed. Maintainers should update their local branch after finalization.
 
 ### Required credentials
 
