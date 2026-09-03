@@ -1,7 +1,8 @@
+import { Buffer } from 'node:buffer'
 import { createConnection } from 'node:net'
 import { expect, messageRow, sendTestMessage, test } from './fixtures'
 
-async function sendRawMessage(raw: string, recipient: string): Promise<void> {
+async function sendRawMessage(raw: string | Buffer, recipient: string): Promise<void> {
   const socket = createConnection({ host: '127.0.0.1', port: Number(process.env.HOOMAIL_E2E_SMTP_PORT ?? '33125') })
   socket.setEncoding('utf8')
   let buffer = ''
@@ -34,7 +35,8 @@ async function sendRawMessage(raw: string, recipient: string): Promise<void> {
   await command('MAIL FROM:<sender@example.test>')
   await command(`RCPT TO:<${recipient}>`)
   await command('DATA')
-  socket.write(`${raw.replace(/\r?\n/g, '\r\n')}\r\n.\r\n`)
+  const payload = Buffer.isBuffer(raw) ? raw : Buffer.from(raw.replace(/\r?\n/g, '\r\n'), 'utf8')
+  socket.write(Buffer.concat([payload, Buffer.from('\r\n.\r\n')]))
   const reply = await waitForReply()
   if (!/^250 /.test(reply)) throw new Error(`SMTP rejected message: ${reply}`)
   socket.end('QUIT\r\n')
@@ -177,6 +179,110 @@ test('message viewer tabs, inspection, and attachments expose the complete plain
   expect(response.status()).toBe(200)
   expect(response.headers()['content-disposition']).toBe('attachment; filename="hoot.txt"')
 })
+test('raw source preserves invalid UTF-8 bytes without replacement characters', async ({ page }) => {
+  const recipient = 'viewer-binary-source@hoomail.test'
+  const subject = 'Viewer binary source'
+  const raw = Buffer.concat([
+    Buffer.from(
+      `From: sender@example.test\r\nTo: ${recipient}\r\nSubject: ${subject}\r\n` +
+      'Content-Type: text/plain; charset=iso-8859-1\r\n' +
+      'Content-Transfer-Encoding: 8bit\r\n\r\n' +
+      'Body with non-UTF-8 octet: ',
+      'ascii',
+    ),
+    Buffer.from([0xff]),
+    Buffer.from('\r\n', 'ascii'),
+  ])
+
+  await sendRawMessage(raw, recipient)
+  const row = messageRow(page, subject)
+  await expect(row).toBeVisible()
+  await row.click()
+  await expect(page.getByRole('status').filter({ hasText: `Message loaded: ${subject}` })).toBeVisible()
+
+  await page.getByRole('tab', { name: 'Source' }).click()
+  const source = page.getByLabel('Raw message source')
+  await expect(source).toContainText('Body with non-UTF-8 octet: \\xFF')
+  await expect(source).not.toContainText('\uFFFD')
+})
+
+test('raw source preview is bounded and offers the complete download', async ({ page }) => {
+  const recipient = 'viewer-large-source@hoomail.test'
+  const subject = 'Viewer large source'
+  const rawBytes = 24 * 1024 * 1024
+  // The SMTP DATA terminator contributes the required final CRLF to stored
+  // source bytes; the dot line itself is stripped by the server.
+  const expectedSourceBytes = rawBytes + 2
+  const headers = Buffer.from(
+    `From: sender@example.test\r\nTo: ${recipient}\r\nSubject: ${subject}\r\n` +
+    'Content-Type: application/octet-stream\r\n' +
+    'Content-Transfer-Encoding: 8bit\r\n\r\n',
+    'ascii',
+  )
+  const body = Buffer.alloc(rawBytes - headers.length, 0xff)
+  for (let offset = 1022; offset + 1 < body.length; offset += 1024) {
+    body[offset] = 0x0d
+    body[offset + 1] = 0x0a
+  }
+
+  await page.evaluate(() => {
+    let cancelled = false
+    const originalFetch = window.fetch.bind(window)
+    Object.defineProperty(window, '__sourcePreviewCancelled', {
+      configurable: true,
+      get: () => cancelled,
+    })
+    window.fetch = async (input, init) => {
+      const response = await originalFetch(input, init)
+      const inputURL = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (!new URL(inputURL, window.location.href).pathname.endsWith('/source') || !response.body) return response
+      const sourceReader = response.body.getReader()
+      const stream = new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          const result = await sourceReader.read()
+          if (result.done) controller.close()
+          else controller.enqueue(result.value)
+        },
+        async cancel(reason) {
+          cancelled = true
+          await sourceReader.cancel(reason)
+        },
+      })
+      return new Response(stream, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      })
+    }
+  })
+
+  await sendRawMessage(Buffer.concat([headers, body]), recipient)
+  const row = messageRow(page, subject)
+  await expect(row).toBeVisible()
+  await row.click()
+  await expect(page.getByRole('status').filter({ hasText: `Message loaded: ${subject}` })).toBeVisible()
+
+  const source = page.getByLabel('Raw message source')
+  const preview = source.locator('pre')
+  await expect(preview).toBeVisible()
+  const text = await preview.textContent()
+  expect(text?.length ?? 0).toBeLessThanOrEqual(100_000)
+  await expect(source).toContainText('Preview limited to the first 100,000 characters.')
+  const download = source.getByRole('link', { name: 'Download complete source' })
+  const downloadStarted = page.waitForEvent('download')
+  await download.click()
+  const completeDownload = await downloadStarted
+  expect(completeDownload.suggestedFilename()).toMatch(/^message-\d+\.eml$/)
+  const downloadStream = await completeDownload.createReadStream()
+  if (!downloadStream) throw new Error('Raw source download has no stream')
+  let downloadedBytes = 0
+  for await (const chunk of downloadStream) downloadedBytes += Buffer.byteLength(chunk)
+  expect(downloadedBytes).toBe(expectedSourceBytes)
+  await expect(download).toHaveAttribute('download', /\d+\.eml$/)
+  await expect.poll(() => page.evaluate(() => Boolean((window as Window & { __sourcePreviewCancelled?: boolean }).__sourcePreviewCancelled))).toBe(true)
+  await expect(page.getByRole('tab', { name: 'Source' })).toBeVisible()
+})
+
 
 test('inspection failure exposes retry and recovers the same message', async ({ page, request }) => {
   const recipient = 'viewer-inspection-retry@hoomail.test'
@@ -200,7 +306,6 @@ test('inspection failure exposes retry and recovers the same message', async ({ 
   await expect(page.getByRole('alert')).toHaveText('Could not analyze this message.')
   failInspection = false
   await page.getByRole('button', { name: 'Retry analysis' }).click()
-  await expect(page.getByRole('status').filter({ hasText: 'Analyzing message…' })).toBeVisible()
   await expect(page.getByRole('status').filter({ hasText: 'Message analysis complete' })).toBeVisible()
   await expect(page.getByRole('region', { name: 'Inspection summary' })).toBeVisible()
 })

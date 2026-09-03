@@ -86,21 +86,29 @@ func (store *Store) init(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	for _, migration := range []struct{ column, statement string }{
+	migrations := []struct{ column, statement string }{
 		{"ical_json", `ALTER TABLE messages ADD COLUMN ical_json TEXT`},
 		{"raw", `ALTER TABLE messages ADD COLUMN raw BLOB`},
 		{"snippet", `ALTER TABLE messages ADD COLUMN snippet TEXT NOT NULL DEFAULT ''`},
-	} {
-		if !columns[migration.column] {
-			if _, err := store.db.ExecContext(ctx, migration.statement); err != nil {
-				return fmt.Errorf("add messages.%s: %w", migration.column, err)
-			}
+	}
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin messages migration: %w", err)
+	}
+	defer tx.Rollback()
+	for _, migration := range migrations {
+		if columns[migration.column] {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, migration.statement); err != nil {
+			return fmt.Errorf("add messages.%s: %w", migration.column, err)
 		}
 	}
-	if !columns["snippet"] {
-		if err := store.backfillSnippets(ctx); err != nil {
-			return err
-		}
+	if err := store.backfillSnippets(ctx, tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit messages migration: %w", err)
 	}
 	return nil
 }
@@ -318,38 +326,50 @@ func (store *Store) ListMessages(ctx context.Context, mailboxID int64, query str
 
 const snippetLimit = 140
 
-func (store *Store) backfillSnippets(ctx context.Context) error {
-	rows, err := store.db.QueryContext(ctx, `SELECT id,text,html FROM messages WHERE snippet=''`)
-	if err != nil {
-		return fmt.Errorf("load snippet backlog: %w", err)
-	}
+func (store *Store) backfillSnippets(ctx context.Context, tx *sql.Tx) error {
+	const batchSize = 128
 	type pendingSnippet struct {
 		id      int64
 		snippet string
 	}
-	pending := []pendingSnippet{}
-	for rows.Next() {
-		var id int64
-		var text, html *string
-		if err := rows.Scan(&id, &text, &html); err != nil {
+	var afterID int64
+	for {
+		rows, err := tx.QueryContext(ctx, `SELECT id,text,html FROM messages WHERE snippet='' AND id>? ORDER BY id LIMIT ?`, afterID, batchSize)
+		if err != nil {
+			return fmt.Errorf("load snippet backlog: %w", err)
+		}
+		pending := make([]pendingSnippet, 0, batchSize)
+		var lastID int64
+		for rows.Next() {
+			var id int64
+			var text, html *string
+			if err := rows.Scan(&id, &text, &html); err != nil {
+				rows.Close()
+				return err
+			}
+			lastID = id
+			snippet := messageSnippet(text, html)
+			if snippet != "" {
+				pending = append(pending, pendingSnippet{id: id, snippet: snippet})
+			}
+		}
+		if err := rows.Err(); err != nil {
 			rows.Close()
 			return err
 		}
-		pending = append(pending, pendingSnippet{id: id, snippet: messageSnippet(text, html)})
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return err
-	}
-	if err := rows.Close(); err != nil {
-		return err
-	}
-	for _, item := range pending {
-		if _, err := store.db.ExecContext(ctx, `UPDATE messages SET snippet=? WHERE id=?`, item.snippet, item.id); err != nil {
-			return fmt.Errorf("backfill snippet: %w", err)
+		if err := rows.Close(); err != nil {
+			return err
 		}
+		if lastID == 0 {
+			return nil
+		}
+		for _, item := range pending {
+			if _, err := tx.ExecContext(ctx, `UPDATE messages SET snippet=? WHERE id=?`, item.snippet, item.id); err != nil {
+				return fmt.Errorf("backfill snippet: %w", err)
+			}
+		}
+		afterID = lastID
 	}
-	return nil
 }
 
 func messageSnippet(text, html *string) string {

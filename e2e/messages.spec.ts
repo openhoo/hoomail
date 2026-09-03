@@ -1,4 +1,4 @@
-import type { Locator, Page } from '@playwright/test'
+import type { Locator, Page, Request } from '@playwright/test'
 
 import {
   expect,
@@ -42,10 +42,28 @@ async function expectMessageCount(page: Page, count: number): Promise<void> {
   const text = count === 0 ? 'No messages' : `${count} messages`
   await expect(page.getByRole('status').filter({ hasText: text })).toHaveText(text)
 }
+async function expectNoSearchResults(page: Page, query: string): Promise<void> {
+  await expect(page.getByText(`No messages match "${query}".`, { exact: true })).toBeVisible()
+}
 
 async function expectUnread(row: Locator, unread: boolean): Promise<void> {
   await expect(row).toHaveAccessibleName(new RegExp(`, ${unread ? 'unread' : 'read'},`))
 }
+
+test('message rows distinguish subjects containing commas', async ({ page, request }) => {
+  const recipient = 'message-row-subjects@hoomail.test'
+  const exactSubject = 'Target'
+  const longerSubject = 'Target, Sender, Other'
+
+  await sendTestMessage(request, { to: recipient, subject: exactSubject, kind: 'plain' })
+  await expect(messageRow(page, exactSubject)).toBeVisible()
+  await sendTestMessage(request, { to: recipient, subject: longerSubject, kind: 'plain' })
+
+  const exactRow = messageRow(page, exactSubject)
+  await expect(exactRow).toBeVisible()
+  await expect(exactRow).toHaveAccessibleName(/, Target, unread,/)
+  await expect(messageRow(page, longerSubject)).toHaveAccessibleName(/, Target, Sender, Other, unread,/)
+})
 
 test('searches messages and supports keyboard navigation, selection, bulk actions, and range deletion', async ({
   page,
@@ -133,6 +151,79 @@ test('searches messages and supports keyboard navigation, selection, bulk action
   await expect(firstRow).toBeVisible()
   await expect(firstRow).toBeFocused()
   await expect(page.getByRole('list', { name: 'Messages' }).getByRole('button')).toHaveCount(1)
+})
+
+test('evicts inactive cache entries by recency while preserving active queries', async ({ page, request }) => {
+  const recipient = 'inactive-cache@hoomail.test'
+  const queries = Array.from({ length: 33 }, (_, index) => `inactive-cache-query-${index}`)
+  const preservedQuery = queries[1]
+  const untouchedQuery = queries[2]
+  const preservedSubject = `Preserved ${preservedQuery}`
+  const revalidationQuery = 'inactive-cache-query-revalidation'
+  const activeSubject = `Active ${revalidationQuery}`
+  await sendTestMessage(request, { to: recipient, subject: preservedSubject, kind: 'plain' })
+  await expect(messageRow(page, preservedSubject)).toBeVisible()
+  await sendTestMessage(request, { to: recipient, subject: activeSubject, kind: 'plain' })
+  await expect(messageRow(page, activeSubject)).toBeVisible()
+
+  const search = page.getByRole('searchbox', { name: 'Search messages' })
+  for (const query of queries) {
+    const response = mailboxMessagesResponse(page, query)
+    await search.fill(query)
+    await response
+    if (query === preservedQuery) await expect(messageRow(page, preservedSubject)).toBeVisible()
+    else await expectNoSearchResults(page, query)
+  }
+
+  await search.fill(preservedQuery)
+  await expect(messageRow(page, preservedSubject)).toBeVisible()
+
+  const revalidationResponse = mailboxMessagesResponse(page, revalidationQuery)
+  await search.fill(revalidationQuery)
+  await revalidationResponse
+  await expect(messageRow(page, activeSubject)).toBeVisible()
+
+  // The untouched query was evicted, so only the recently consumed query can
+  // be revalidated by this event.
+  const preservedRevalidation = mailboxMessagesResponse(page, preservedQuery)
+  await sendTestMessage(request, { to: recipient, subject: 'Cache revalidation event', kind: 'plain' })
+  await preservedRevalidation
+
+  // Opening and closing the dialog forces an unrelated app render while this
+  // query remains selected, so an active entry cannot be trimmed.
+  await page.getByRole('button', { name: 'Send test', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: 'Send a test email' })).toBeVisible()
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(messageRow(page, activeSubject)).toBeVisible()
+
+  const evictionQuery = 'inactive-cache-query-eviction'
+  const evictionResponse = mailboxMessagesResponse(page, evictionQuery)
+  await search.fill(evictionQuery)
+  await evictionResponse
+  await expectNoSearchResults(page, evictionQuery)
+
+  let preservedRequests = 0
+  let untouchedRequests = 0
+  const onRequest = (request: Request) => {
+    const url = new URL(request.url())
+    if (request.method() !== 'GET' || !/^\/api\/mailboxes\/\d+\/messages$/.test(url.pathname)) return
+    if (url.searchParams.get('q') === preservedQuery) preservedRequests += 1
+    if (url.searchParams.get('q') === untouchedQuery) untouchedRequests += 1
+  }
+  page.on('request', onRequest)
+  try {
+    await search.fill(preservedQuery)
+    await expect(messageRow(page, preservedSubject)).toBeVisible()
+    expect(preservedRequests).toBe(0)
+
+    const untouchedResponse = mailboxMessagesResponse(page, untouchedQuery)
+    await search.fill(untouchedQuery)
+    await untouchedResponse
+    await expectNoSearchResults(page, untouchedQuery)
+    expect(untouchedRequests).toBeGreaterThan(0)
+  } finally {
+    page.off('request', onRequest)
+  }
 })
 
 test('does not expose old search rows while a new query is pending', async ({ page, request }) => {

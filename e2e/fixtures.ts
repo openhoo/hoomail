@@ -16,11 +16,15 @@ export async function sendTestMessage(
 }
 
 export function messageRow(page: Page, subject: string) {
-  // AutoAnimate briefly leaves an identical exiting row in the DOM. The last
-  // match is the live list item while preserving the accessible-name contract.
+  // AutoAnimate briefly leaves an identical exiting row in the DOM. Filter
+  // by the exact rendered subject field, then keep the live row.
+  const subjectCell = page
+    .locator('[data-message-subject]')
+    .filter({ hasText: new RegExp(`^${escapeRegex(subject)}$`) })
   return page
     .getByRole('list', { name: 'Messages' })
-    .getByRole('button', { name: new RegExp(`The hoomail Owl, ${escapeRegex(subject)},`) })
+    .getByRole('button')
+    .filter({ has: subjectCell })
     .last()
 }
 

@@ -638,11 +638,11 @@ func (s *server) eventStream(response http.ResponseWriter, request *http.Request
 	response.Header().Set("Content-Type", "text/event-stream")
 	response.Header().Set("Cache-Control", "no-cache, no-transform")
 	response.Header().Set("Connection", "keep-alive")
+	stream, unsubscribe := s.subscribe()
+	defer unsubscribe()
 	response.WriteHeader(http.StatusOK)
 	_, _ = io.WriteString(response, "data: {\"type\":\"connected\"}\n\n")
 	flusher.Flush()
-	stream, unsubscribe := s.subscribe()
-	defer unsubscribe()
 	heartbeat := time.NewTicker(25 * time.Second)
 	defer heartbeat.Stop()
 	for {

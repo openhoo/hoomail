@@ -153,6 +153,51 @@ func TestOpenPOP3MailboxCreatesMissingInboxAndReturnsRawMessages(t *testing.T) {
 	}
 }
 
+func TestBroadcasterPanicDoesNotBreakStoreOrPOP3Lock(t *testing.T) {
+	var calls int
+	store := openTestStore(t, WithBroadcaster(func(events.Event) {
+		calls++
+		if calls == 1 {
+			panic("broadcaster failure")
+		}
+	}))
+	ctx := context.Background()
+	snapshot, err := store.OpenPOP3Mailbox(ctx, "panic@example.com")
+	if err != nil {
+		t.Fatalf("OpenPOP3Mailbox: %v", err)
+	}
+	if len(snapshot.Messages) != 0 {
+		t.Fatalf("new mailbox messages=%v", snapshot.Messages)
+	}
+	mailboxes, err := store.ListMailboxes(ctx)
+	if err != nil {
+		t.Fatalf("ListMailboxes after broadcaster panic: %v", err)
+	}
+	if len(mailboxes) != 1 || mailboxes[0].Address != "panic@example.com" {
+		t.Fatalf("mailboxes after broadcaster panic=%v", mailboxes)
+	}
+	stored, err := store.StoreMessage(ctx, StoreMessageInput{
+		Recipients: []string{"panic@example.com"},
+		Headers:    map[string]string{},
+	})
+	if err != nil {
+		t.Fatalf("StoreMessage after broadcaster panic: %v", err)
+	}
+	var count int
+	if err := store.DB().QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 || len(stored) != 1 {
+		t.Fatalf("stored=%v message count=%d", stored, count)
+	}
+	if err := store.WipeAll(ctx); err != nil {
+		t.Fatalf("WipeAll after broadcaster panic: %v", err)
+	}
+	if calls != 3 {
+		t.Fatalf("broadcaster calls=%d, want 3", calls)
+	}
+}
+
 func TestStoreMessageKeepsMailboxLastMessageAtMonotoneAcrossClockChanges(t *testing.T) {
 	var clockNow int64 = 1000
 	store := openTestStore(t, WithClock(func() time.Time { return time.UnixMilli(clockNow) }), WithBroadcaster(func(events.Event) {}))
@@ -378,6 +423,132 @@ func TestOpenBackfillsSnippetColumnForLegacyRows(t *testing.T) {
 	}
 }
 
+func TestOpenReconcilesExistingSnippetBacklog(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "partial-snippets.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`
+		CREATE TABLE mailboxes (id INTEGER PRIMARY KEY AUTOINCREMENT, address TEXT NOT NULL UNIQUE, created_at INTEGER NOT NULL, last_message_at INTEGER);
+		CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, mailbox_id INTEGER NOT NULL, from_address TEXT, from_name TEXT, to_json TEXT NOT NULL DEFAULT '[]', cc_json TEXT NOT NULL DEFAULT '[]', subject TEXT, html TEXT, text TEXT, headers_json TEXT NOT NULL DEFAULT '{}', size INTEGER NOT NULL DEFAULT 0, is_read INTEGER NOT NULL DEFAULT 0, received_at INTEGER NOT NULL, ical_json TEXT, raw BLOB, snippet TEXT NOT NULL DEFAULT '');
+		INSERT INTO mailboxes(address, created_at) VALUES ('legacy@example.com', 1);
+		INSERT INTO messages(mailbox_id,subject,text,snippet,received_at) VALUES (1,'completed','completed body','already stored',1);
+		INSERT INTO messages(mailbox_id,subject,text,snippet,received_at) VALUES (1,'interrupted','recover this body','',2);
+		INSERT INTO messages(mailbox_id,subject,text,snippet,received_at) VALUES (1,'empty','  '||char(10)||char(9),'',3);
+		CREATE TRIGGER reject_empty_snippet_rewrite BEFORE UPDATE OF snippet ON messages WHEN OLD.subject = 'empty' BEGIN SELECT RAISE(ABORT, 'empty snippet must not be rewritten'); END;
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("open partially migrated store: %v", err)
+	}
+	defer store.Close()
+	rows, err := store.ListMessages(context.Background(), 1, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, row := range rows {
+		if row.Subject == nil {
+			t.Fatalf("message subject is nil: %v", row)
+		}
+		got[*row.Subject] = row.Snippet
+	}
+	want := map[string]string{
+		"completed":   "already stored",
+		"interrupted": "recover this body",
+		"empty":       "",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("reconciled snippets=%v want %v", got, want)
+	}
+	for subject, wantSnippet := range want {
+		if got[subject] != wantSnippet {
+			t.Errorf("%s snippet=%q want %q", subject, got[subject], wantSnippet)
+		}
+	}
+}
+
+func TestSnippetMigrationRollsBackOnBackfillFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-snippets-failure.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`
+		CREATE TABLE mailboxes (id INTEGER PRIMARY KEY AUTOINCREMENT, address TEXT NOT NULL UNIQUE, created_at INTEGER NOT NULL, last_message_at INTEGER);
+		CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, mailbox_id INTEGER NOT NULL, from_address TEXT, from_name TEXT, to_json TEXT NOT NULL DEFAULT '[]', cc_json TEXT NOT NULL DEFAULT '[]', subject TEXT, html TEXT, text TEXT, headers_json TEXT NOT NULL DEFAULT '{}', size INTEGER NOT NULL DEFAULT 0, is_read INTEGER NOT NULL DEFAULT 0, received_at INTEGER NOT NULL);
+		INSERT INTO mailboxes(address, created_at) VALUES ('legacy@example.com', 1);
+		INSERT INTO messages(mailbox_id,text,received_at) VALUES (1,'legacy body',2);
+		CREATE TRIGGER fail_snippet_backfill BEFORE UPDATE ON messages BEGIN SELECT RAISE(ABORT, 'snippet backfill blocked'); END;
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Open(path); err == nil {
+		t.Fatal("Open unexpectedly succeeded despite backfill trigger")
+	}
+
+	db, err = sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := db.Query(`PRAGMA table_info(messages)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	columns := map[string]bool{}
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, dataType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &primaryKey); err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+		columns[name] = true
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if columns["ical_json"] || columns["raw"] || columns["snippet"] {
+		t.Fatalf("failed migration left columns behind: %#v", columns)
+	}
+	if _, err := db.Exec(`DROP TRIGGER fail_snippet_backfill`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("retry Open: %v", err)
+	}
+	defer store.Close()
+	messages, err := store.ListMessages(context.Background(), 1, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 1 || messages[0].Snippet != "legacy body" {
+		t.Fatalf("retry backfill=%v", messages)
+	}
+}
+
 func TestPOP3SerializationHonorsContextCancellation(t *testing.T) {
 	store := openTestStore(t)
 	tests := []struct {
@@ -390,6 +561,17 @@ func TestPOP3SerializationHonorsContextCancellation(t *testing.T) {
 		}},
 		{name: "delete", call: func(ctx context.Context) error {
 			_, err := store.DeletePOP3Messages(ctx, store.pop3Generation, []int64{1})
+			return err
+		}},
+		{name: "delete-mailbox", call: func(ctx context.Context) error {
+			_, err := store.DeleteMailbox(ctx, 1)
+			return err
+		}},
+		{name: "store-message", call: func(ctx context.Context) error {
+			_, err := store.StoreMessage(ctx, StoreMessageInput{
+				Recipients: []string{"blocked@example.com"},
+				Headers:    map[string]string{},
+			})
 			return err
 		}},
 		{name: "wipe", call: store.WipeAll},

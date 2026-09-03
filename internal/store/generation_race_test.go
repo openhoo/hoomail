@@ -232,6 +232,79 @@ func TestBulkMutationsSerializeAgainstWipeAll(t *testing.T) {
 		})
 	}
 }
+
+func TestWipeAllPublishesAfterUnlockingPOP3Serialization(t *testing.T) {
+	var streamMu sync.Mutex
+	var stream []events.Event
+	messagePublished := make(chan struct{})
+	resetPublished := make(chan struct{})
+	releasePublication := make(chan struct{})
+	var messageGate sync.Once
+	var resetGate sync.Once
+	store := openTestStore(t, WithBroadcaster(func(event events.Event) {
+		streamMu.Lock()
+		stream = append(stream, event)
+		streamMu.Unlock()
+		switch event.Type {
+		case events.TypeMessageNew:
+			messageGate.Do(func() {
+				close(messagePublished)
+				<-releasePublication
+			})
+		case events.TypeReset:
+			resetGate.Do(func() { close(resetPublished) })
+		}
+	}))
+
+	storeDone := make(chan error, 1)
+	go func() {
+		_, err := store.StoreMessage(context.Background(), generationMessageInput("sequenced@example.com", "store"))
+		storeDone <- err
+	}()
+	select {
+	case <-messagePublished:
+	case <-time.After(time.Second):
+		t.Fatal("StoreMessage did not reach event publication")
+	}
+
+	wipeDone := make(chan error, 1)
+	go func() { wipeDone <- store.WipeAll(context.Background()) }()
+	select {
+	case <-resetPublished:
+	case <-time.After(time.Second):
+		t.Fatal("WipeAll did not publish reset after StoreMessage publication blocked")
+	}
+	select {
+	case err := <-wipeDone:
+		if err != nil {
+			t.Fatalf("WipeAll: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WipeAll remained blocked by StoreMessage broadcaster")
+	}
+	var count int
+	if err := store.DB().QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("WipeAll did not commit before returning: message count=%d", count)
+	}
+
+	select {
+	case err := <-storeDone:
+		t.Fatalf("StoreMessage returned before broadcaster release: %v", err)
+	default:
+	}
+	close(releasePublication)
+	if err := <-storeDone; err != nil {
+		t.Fatalf("StoreMessage: %v", err)
+	}
+	streamMu.Lock()
+	defer streamMu.Unlock()
+	if len(stream) != 3 || stream[0].Type != events.TypeMailboxNew || stream[1].Type != events.TypeMessageNew || stream[2].Type != events.TypeReset {
+		t.Fatalf("event order=%v", stream)
+	}
+}
 func TestMarkReadDetailIgnoresResetReplacement(t *testing.T) {
 	log := &generationEventLog{}
 	store := openTestStore(t, WithBroadcaster(log.record))

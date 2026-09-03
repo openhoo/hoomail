@@ -47,10 +47,10 @@ func (store *Store) ReadMessage(ctx context.Context, id int64) (*MessageDetail, 
 	committed := false
 	var mailboxID int64
 	defer func() {
+		store.pop3Mu.Unlock()
 		if committed && marked {
 			store.emit(events.MessagesChanged(mailboxID))
 		}
-		store.pop3Mu.Unlock()
 	}()
 	tx, err := store.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -88,10 +88,10 @@ func (store *Store) MarkReadDetail(ctx context.Context, detail *MessageDetail) e
 	changed := false
 	committed := false
 	defer func() {
+		store.pop3Mu.Unlock()
 		if committed && changed {
 			store.emit(events.MessagesChanged(detail.Message.MailboxID))
 		}
-		store.pop3Mu.Unlock()
 	}()
 	if detail.generation != store.pop3Generation {
 		return nil
@@ -274,8 +274,8 @@ func (store *Store) DeletePOP3Messages(ctx context.Context, generation uint64, i
 	defer func() {
 		store.pop3Mu.Unlock()
 		if deleted {
-			for _, id := range affected {
-				store.emit(events.MessagesChanged(id))
+			for _, mailboxID := range affected {
+				store.emit(events.MessagesChanged(mailboxID))
 			}
 		}
 	}()
@@ -298,18 +298,25 @@ func (store *Store) MarkRead(ctx context.Context, id, mailboxID int64, wasRead i
 	if wasRead != 0 {
 		return nil
 	}
+	if err := store.acquirePop3(ctx); err != nil {
+		return err
+	}
+	changed := false
+	defer func() {
+		store.pop3Mu.Unlock()
+		if changed {
+			store.emit(events.MessagesChanged(mailboxID))
+		}
+	}()
 	result, err := store.db.ExecContext(ctx, `UPDATE messages SET is_read=1 WHERE id=? AND mailbox_id=? AND is_read=0`, id, mailboxID)
 	if err != nil {
 		return err
 	}
-	changed, err := result.RowsAffected()
+	rowsChanged, err := result.RowsAffected()
 	if err != nil {
 		return err
 	}
-	if changed == 0 {
-		return nil
-	}
-	store.emit(events.MessagesChanged(mailboxID))
+	changed = rowsChanged != 0
 	return nil
 }
 
@@ -332,12 +339,12 @@ func (store *Store) SetReadState(ctx context.Context, ids []int64, isRead bool) 
 	var affected []int64
 	committed := false
 	defer func() {
+		store.pop3Mu.Unlock()
 		if committed {
 			for _, mailboxID := range affected {
 				store.emit(events.MessagesChanged(mailboxID))
 			}
 		}
-		store.pop3Mu.Unlock()
 	}()
 	value := 0
 	if isRead {
@@ -374,12 +381,12 @@ func (store *Store) DeleteMessages(ctx context.Context, ids []int64) ([]int64, e
 	var affected []int64
 	committed := false
 	defer func() {
+		store.pop3Mu.Unlock()
 		if committed {
 			for _, mailboxID := range affected {
 				store.emit(events.MessagesChanged(mailboxID))
 			}
 		}
-		store.pop3Mu.Unlock()
 	}()
 	tx, err := store.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -440,6 +447,16 @@ func (store *Store) ListCalendarEvents(ctx context.Context, mailboxID int64) ([]
 }
 
 func (store *Store) DeleteMailbox(ctx context.Context, id int64) (bool, error) {
+	if err := store.acquirePop3(ctx); err != nil {
+		return false, err
+	}
+	deleted := false
+	defer func() {
+		store.pop3Mu.Unlock()
+		if deleted {
+			store.emit(events.MailboxDeleted(id))
+		}
+	}()
 	result, err := store.db.ExecContext(ctx, `DELETE FROM mailboxes WHERE id=?`, id)
 	if err != nil {
 		return false, err
@@ -448,11 +465,8 @@ func (store *Store) DeleteMailbox(ctx context.Context, id int64) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if count == 0 {
-		return false, nil
-	}
-	store.emit(events.MailboxDeleted(id))
-	return true, nil
+	deleted = count != 0
+	return deleted, nil
 }
 
 func (store *Store) WipeAll(ctx context.Context) error {
@@ -508,13 +522,25 @@ func (store *Store) StoreMessage(ctx context.Context, input StoreMessageInput) (
 		}
 		icalJSON = string(data)
 	}
+	if err := store.acquirePop3(ctx); err != nil {
+		return nil, err
+	}
+	pending := []events.Event{}
+	stored := []StoredMessage{}
+	committed := false
+	defer func() {
+		store.pop3Mu.Unlock()
+		if committed {
+			for _, event := range pending {
+				store.emit(event)
+			}
+		}
+	}()
 	tx, err := store.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
-	pending := []events.Event{}
-	stored := []StoredMessage{}
 	for _, rawAddress := range input.Recipients {
 		address := strings.TrimSpace(strings.ToLower(rawAddress))
 		if address == "" {
@@ -559,16 +585,18 @@ func (store *Store) StoreMessage(ctx context.Context, input StoreMessageInput) (
 	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
-	for _, event := range pending {
-		store.emit(event)
-	}
+	committed = true
 	return stored, nil
 }
 
 func (store *Store) emit(event events.Event) {
-	if store.broadcast != nil {
-		store.broadcast(event)
+	if store.broadcast == nil {
+		return
 	}
+	defer func() {
+		_ = recover()
+	}()
+	store.broadcast(event)
 }
 
 func applyCalendarEvents(ctx context.Context, tx *sql.Tx, mailboxID, messageID int64, parsed []calendar.ParsedCalendarEvent, now int64) error {

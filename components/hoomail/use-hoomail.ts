@@ -154,28 +154,41 @@ export interface InspectionReport {
   htmlCompatibility?: HTMLCompatibility | null
 }
 
-type CacheEntry = { data?: unknown; error?: unknown; promise?: Promise<void>; revalidateAfter?: boolean; generation: number; fetcher?: (key: string) => Promise<unknown>; listeners: Set<() => void> }
+type CacheEntry = { data?: unknown; error?: unknown; promise?: Promise<void>; revalidateAfter?: boolean; generation: number; fetcher?: (key: string) => Promise<unknown>; listeners: Set<() => void>; lastUsed: number }
 const cache = new Map<string, CacheEntry>()
+const MAX_INACTIVE_RESOURCES = 32
 const MAX_INACTIVE_INSPECTIONS = 8
+let cacheRecency = 0
 
-function trimInspectionCache() {
-  const inactive: string[] = []
-  for (const [key, value] of cache) {
-    if (key.endsWith('/inspect') && value.listeners.size === 0 && !value.promise) inactive.push(key)
+function touchCacheEntry(value: CacheEntry) {
+  value.lastUsed = ++cacheRecency
+}
+
+function trimCache() {
+  const inactive = [...cache.entries()]
+    .filter(([, value]) => value.listeners.size === 0 && !value.promise)
+    .sort(([, left], [, right]) => left.lastUsed - right.lastUsed)
+  for (let index = 0; index < inactive.length - MAX_INACTIVE_RESOURCES; index += 1) {
+    cache.delete(inactive[index][0])
   }
-  for (let index = 0; index < inactive.length - MAX_INACTIVE_INSPECTIONS; index += 1) {
-    cache.delete(inactive[index])
+
+  const inspections = inactive.filter(([key]) => key.endsWith('/inspect'))
+  for (let index = 0; index < inspections.length - MAX_INACTIVE_INSPECTIONS; index += 1) {
+    cache.delete(inspections[index][0])
   }
 }
 
-function entry(key: string) {
+function getCacheEntry(key: string) {
   let value = cache.get(key)
-  if (!value) { value = { generation: 0, listeners: new Set() }; cache.set(key, value) }
+  if (!value) {
+    value = { generation: 0, listeners: new Set(), lastUsed: 0 }
+    cache.set(key, value)
+  }
   return value
 }
 
 async function fetchInto<T>(key: string, fetcher: (key: string) => Promise<T>, force = false) {
-  const current = entry(key)
+  const current = getCacheEntry(key)
   // Revalidation must reuse the fetcher that produced this entry; a JSON
   // revalidation of a text resource would poison the entry with a parse error.
   current.fetcher ??= fetcher
@@ -198,7 +211,7 @@ async function fetchInto<T>(key: string, fetcher: (key: string) => Promise<T>, f
       current.revalidateAfter = false
       void fetchInto(key, fetcher)
     }
-    trimInspectionCache()
+    trimCache()
   })
   current.promise = promise
   current.listeners.forEach((listener) => listener())
@@ -206,7 +219,9 @@ async function fetchInto<T>(key: string, fetcher: (key: string) => Promise<T>, f
 }
 
 function retryCachedResource<T>(key: string, fetcher: (key: string) => Promise<T>) {
-  const current = entry(key)
+  const current = getCacheEntry(key)
+  // A retry is an explicit user consumption, unlike background revalidation.
+  touchCacheEntry(current)
   current.generation++
   current.data = undefined
   current.error = undefined
@@ -216,15 +231,28 @@ function retryCachedResource<T>(key: string, fetcher: (key: string) => Promise<T
   void fetchInto(key, fetcher)
 }
 
+
 export type CacheMatcher = string | ((key: string) => boolean)
 export function mutateCache<T>(matcher: CacheMatcher, updater?: (data: T | undefined) => T | undefined, revalidate = true) {
   const keys = typeof matcher === 'string' ? [matcher] : [...cache.keys()].filter(matcher)
   if (typeof matcher === 'string' && keys.length === 0) keys.push(matcher)
   for (const key of keys) {
-    const current = entry(key)
+    const current = getCacheEntry(key)
+    current.generation++
     if (updater) {
-      current.generation++
       current.data = updater(current.data as T | undefined)
+      current.error = undefined
+      // For a non-revalidating clear, release an older request. Its result is
+      // generation-fenced, while a new consumer can start fresh immediately
+      // (including when an ID is reused after reset).
+      if (current.data === undefined && !revalidate) {
+        current.promise = undefined
+        current.revalidateAfter = false
+      }
+    } else if (revalidate) {
+      // A forced revalidation supersedes any result from the previous
+      // generation and must expose a pending state instead of stale errors.
+      current.error = undefined
     }
     current.listeners.forEach((listener) => listener())
     if (revalidate) void fetchInto(key, current.fetcher ?? jsonFetcher, true)
@@ -234,7 +262,10 @@ export function mutateCache<T>(matcher: CacheMatcher, updater?: (data: T | undef
 export function useCachedResource<T>(key: string | null, fetcher: (key: string) => Promise<T> = jsonFetcher, keepPreviousData = false) {
   const [, render] = useState(0)
   const previous = useRef<T | undefined>(undefined)
-  const current = key ? entry(key) : null
+  const current = key ? getCacheEntry(key) : null
+  // Rendering with a key selects the resource for this consumer. Maintenance
+  // lookups below must not update recency for inactive entries.
+  if (current) touchCacheEntry(current)
   const data = current?.data as T | undefined
   const error = current?.error
   if (key === null) previous.current = undefined
@@ -242,7 +273,7 @@ export function useCachedResource<T>(key: string | null, fetcher: (key: string) 
 
   useEffect(() => {
     if (!key) return
-    const current = entry(key)
+    const current = getCacheEntry(key)
     const listener = () => render((value) => value + 1)
     current.listeners.add(listener)
     // A fetch can settle between the render-time snapshot and this subscription;
@@ -252,7 +283,7 @@ export function useCachedResource<T>(key: string | null, fetcher: (key: string) 
     return () => {
       current.listeners.delete(listener)
       if (key.endsWith('/source')) cache.delete(key)
-      else if (key.endsWith('/inspect')) trimInspectionCache()
+      trimCache()
     }
   }, [key, fetcher])
 

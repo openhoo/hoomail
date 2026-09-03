@@ -239,9 +239,9 @@ Startup, readiness, and liveness probes are exec probes that run `/hoomail healt
 
 | Probe | Enabled | Initial delay | Period | Timeout | Failure threshold |
 | --- | --- | ---: | ---: | ---: | ---: |
-| `startupProbe` | `true` | `0s` | `2s` | `3s` | `30` |
-| `readinessProbe` | `true` | `1s` | `10s` | `3s` | `3` |
-| `livenessProbe` | `true` | `5s` | `30s` | `3s` | `3` |
+| `startupProbe` | `true` | `0s` | `2s` | `10s` | `30` |
+| `readinessProbe` | `true` | `1s` | `10s` | `10s` | `3` |
+| `livenessProbe` | `true` | `5s` | `30s` | `10s` | `3` |
 
 Each probe supports only:
 
@@ -539,13 +539,13 @@ The chart's selector labels are stable ownership selectors. Put organization-spe
 
 ### Trigger and version flow
 
-Automatic release starts only after a successful CI workflow that:
+Automatic release processing starts only after a successful CI workflow that:
 
 - was triggered by a `push`;
 - ran for `main`;
 - came from this repository rather than a fork;
-- corresponds to the current `main` commit rather than a stale workflow run;
-- is not the generated `chore(release):` commit.
+- corresponds to the current `main` commit rather than a stale workflow run; and
+- prepares a protected release branch for an ordinary push, or finalizes and publishes the protected release after the generated `chore(release):` commit is merged.
 
 Maintainers can also dispatch the `Release` workflow manually. A manual dry run previews Hooversion without release commits, tags, GitHub Releases, chart publication, or images:
 
@@ -591,7 +591,7 @@ The image build uses zstd-compressed OCI layers at compression level 19, embeds 
 - maximum-mode BuildKit provenance (`provenance: mode=max`);
 - OCI labels for revision, version, source, and `org.opencontainers.image.licenses=Apache-2.0`.
 
-The same built index digest is pushed to GHCR and Docker Hub. In addition, GitHub Actions publishes a GitHub artifact attestation whose subject name is the **GHCR** image and whose subject is that index digest. The workflow does not publish a separate GitHub artifact attestation for the Docker Hub subject and contains no separate Docker Hub signing step. Do not describe or operationally assume the Docker Hub reference is independently GitHub-attested or signed.
+The same built index digest is pushed to GHCR and Docker Hub. In addition, GitHub Actions publishes a GitHub artifact attestation whose subject name is the **GHCR** image and whose subject is that index digest; this attestation is GHCR-only. Cosign signs that shared index digest under both the GHCR and Docker Hub image references. Do not treat the Docker Hub reference as independently GitHub-attested: its Cosign signature is separate from the GitHub artifact attestation.
 
 For supply-chain policy, distinguish these artifacts rather than treating “SBOM,” “provenance,” “artifact attestation,” and “signature” as interchangeable terms.
 
@@ -608,4 +608,4 @@ The operational contracts in this document are defined by:
 - [`pvc.yaml`](../charts/hoomail/templates/pvc.yaml) — generated-PVC behavior.
 - [`serviceaccount.yaml`](../charts/hoomail/templates/serviceaccount.yaml) — optional account creation and disabled token automount.
 - [`test-connection.yaml`](../charts/hoomail/templates/tests/test-connection.yaml) — Helm test execution and security context.
-- [Release workflow](../.github/workflows/release.yml) and [Hooversion configuration](../hooversion.config.ts) — release triggers, credentials, tags, platforms, chart packaging, SBOM/provenance, attestation, and OCI metadata.
+- [Release workflow](../.github/workflows/release.yml) and [Hooversion manifest/configuration](../hooversion.yaml) — release triggers, credentials, tags, platforms, chart packaging, SBOM/provenance, attestation, and OCI metadata.

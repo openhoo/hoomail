@@ -17,7 +17,7 @@ At startup, Hoomail:
 
 The configured path names one logical SQLite database. For a file-backed database that successfully enters WAL mode, SQLite may also create `-wal` and `-shm` sidecar files beside the database. Backups and volume handling must treat such a database and its active sidecars as one unit. In-memory databases and file-backed databases that do not enter WAL mode have no WAL sidecars to manage. See [deployment](deployment.md) for the configured path and persistent-volume guidance.
 
-Parent-directory creation is skipped for `:memory:` and `file:` URI database paths. The application does not run a general migration framework: the current schema is created with `CREATE ... IF NOT EXISTS`, and the three legacy message columns above are the only explicit column migrations. When an upgrade adds `snippet` to a legacy table, Hoomail also performs a one-time backfill that rewrites existing rows to derive their snippets from the stored text or HTML content; rows created after the migration have their snippets computed at ingest time.
+Parent-directory creation is skipped for `:memory:` and `file:` URI database paths. The application does not run a general migration framework: the current schema is created with `CREATE ... IF NOT EXISTS`, and the three legacy message columns above are the only explicit column migrations. Those legacy column additions and the snippet backfill run atomically in one transaction; a failure rolls back all of them so the next startup can retry without leaving a partially migrated table. On every startup, Hoomail scans rows whose `snippet` is still empty and backfills them from the stored text or HTML content; rows created after migration have their snippets computed at ingest time.
 
 ## Stored data model
 
@@ -59,7 +59,7 @@ New messages start unread. The raw MIME and parsed representations are both reta
 
 ### Attachments and inline resources
 
-Every MIME part classified as an attachment is stored as a BLOB with its filename, content type, normalized Content-ID when present, byte count, and content bytes. The bytes are copied for every recipient's independent message copy.
+Each MIME part selected as an attachment is stored as a BLOB with its filename, content type, byte count, and content bytes. Resources exposed from the selected `multipart/related` branch or parts explicitly marked `Content-Disposition: inline` additionally retain a normalized Content-ID when present; Content-ID headers on ordinary attachment candidates are not persisted.
 
 There are three related but intentionally different views of attachment data:
 
@@ -104,7 +104,7 @@ Individual message deletion does not remove reconciled calendar state; see [Cale
 
 ## HTML preview and inspection
 
-Preview sanitization and inspection are related but separate projections. SQLite retains selected decoded bodies and complete raw MIME without a schema migration. The message-detail endpoint rewrites scoped CID references and sanitizes a copy for display. SMTP ingestion and inspection share one semantic MIME parser and presentation selector: SMTP owns envelope handling and storage projection, while inspection additionally builds bounded raw header, line, body, boundary, and wire-order indexes.
+Preview sanitization and inspection are related but separate projections. SQLite retains selected decoded bodies and complete raw MIME; legacy schemas receive only the explicit message-column additions described in [SQLite lifecycle](#sqlite-lifecycle). The message-detail endpoint rewrites scoped CID references and sanitizes a copy for display. SMTP ingestion and inspection share one semantic MIME parser and presentation selector: SMTP owns envelope handling and storage projection, while inspection additionally builds bounded raw header, line, body, boundary, and wire-order indexes.
 
 ### Standards and compatibility
 
@@ -113,9 +113,9 @@ Rich HTML email—including table layouts, branding, color, typography, and elab
 
 ### Inspection ownership and offline report
 
-Raw bytes are authoritative when present. Inspection preserves duplicate header fields, casing, whitespace, physical line endings, MIME boundaries, and stable 1-based part paths from bounded raw indexes. Semantic nodes own normalized media metadata, transfer-decoded content, charset-converted text, and the selected text/HTML presentation. Raw and decoded sizes therefore have different meanings: raw size covers a complete indexed entity body excluding multipart boundaries; decoded size exists only after transfer decoding and, for text, charset conversion succeeds. Multipart decoded size is unknown.
+Raw bytes are authoritative when present. Inspection preserves duplicate header fields, casing, whitespace, physical line endings, MIME boundaries, and stable 1-based part paths from bounded raw indexes. Semantic nodes own normalized media metadata, transfer-decoded content, charset-converted text, and the selected text/HTML presentation. Raw and decoded sizes therefore have different meanings: raw size covers bytes in the indexed entity-body span; for multipart entities, that span includes boundary delimiter bytes. Decoded size exists only after transfer decoding and, for text, charset conversion succeeds. Multipart decoded size is unknown.
 
-Legacy rows require no database migration. When raw is absent, stored selected HTML/text bodies are fallback evidence; stored header JSON is decoded only to preserve corrupt-row error behavior and is not treated as raw header evidence. When raw exists, raw bytes are authoritative and stored bodies are used only when semantic presentation selection is unavailable. Fallback-derived findings identify that provenance and never imply reconstructed MIME selection or raw/authentication conformance.
+Legacy rows are supported after the explicit message-column migration described above. When raw is absent, stored selected HTML/text bodies are fallback evidence; stored header JSON is decoded only to preserve corrupt-row error behavior and is not treated as raw header evidence. When raw exists, raw bytes are authoritative and stored bodies are used only when semantic presentation selection is unavailable. Fallback-derived findings identify that provenance and never imply reconstructed MIME selection or raw/authentication conformance.
 
 The inspection endpoint returns report schema version `1` with:
 
@@ -177,9 +177,9 @@ Calendar timestamps are stored as Unix milliseconds.
 | Timed value with a loadable `TZID` | That named system time zone. |
 | Timed value with an unknown `TZID` | Silently falls back to the server's local time zone. |
 | Floating timed value with no `TZID` | Server local time zone. |
-| `VALUE=DATE` or date-only value | All-day date in the server local time zone. |
+| `VALUE=DATE` or date-only value | All-day date anchored at UTC midnight; its calendar day is derived from the UTC date components. |
 
-Embedded `VTIMEZONE` definitions are not interpreted; named zones must be loadable by the Go runtime. Deployment time-zone configuration can therefore change the milliseconds assigned to floating, all-day, or unknown-zone values.
+Embedded `VTIMEZONE` definitions are not interpreted; named zones must be loadable by the Go runtime. Deployment time-zone configuration can therefore change the milliseconds assigned to floating or unknown-zone values.
 
 End-time precedence is:
 
