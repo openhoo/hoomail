@@ -754,6 +754,59 @@ func TestSSEClosedSubscriptionReturns(t *testing.T) {
 	}
 }
 
+type flushBroadcastWriter struct {
+	http.ResponseWriter
+	onFlush func()
+}
+
+func (writer *flushBroadcastWriter) Flush() {
+	writer.onFlush()
+	writer.ResponseWriter.(http.Flusher).Flush()
+}
+
+func TestSSESubscribesBeforeConnectedGreeting(t *testing.T) {
+	hub := events.NewHub()
+	handler := &server{store: testStore(t), subscribe: hub.Subscribe}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	request := httptest.NewRequest(http.MethodGet, "/api/events", nil).WithContext(ctx)
+	recorder := httptest.NewRecorder()
+	eventFlushed := make(chan struct{})
+	var flushes int
+	writer := &flushBroadcastWriter{
+		ResponseWriter: recorder,
+		onFlush: func() {
+			flushes++
+			switch flushes {
+			case 1:
+				hub.Broadcast(events.MessagesChanged(1))
+			case 2:
+				close(eventFlushed)
+			}
+		},
+	}
+	done := make(chan struct{})
+	go func() {
+		handler.ServeHTTP(writer, request)
+		close(done)
+	}()
+	select {
+	case <-eventFlushed:
+		cancel()
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("SSE event broadcast during greeting was lost")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("SSE handler did not drain after cancellation")
+	}
+	if got, want := recorder.Body.String(), "data: {\"type\":\"connected\"}\n\ndata: {\"type\":\"messages:changed\",\"mailboxId\":1}\n\n"; got != want {
+		t.Fatalf("SSE body=%q want %q", got, want)
+	}
+}
+
 func TestStaticSPAFallback(t *testing.T) {
 	static := fstest.MapFS{"index.html": {Data: []byte("<main>app</main>")}, "assets/app.js": {Data: []byte("js")}}
 	handler := New(testStore(t), StaticConfig{FS: static}, nil)

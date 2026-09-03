@@ -255,6 +255,7 @@ export function MessageList({
                         </div>
                         <div className="flex items-center gap-1.5">
                           <span
+                            data-message-subject
                             className={cn(
                               'min-w-0 flex-1 truncate text-sm',
                               message.is_read ? 'text-muted-foreground' : 'text-foreground'

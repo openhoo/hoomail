@@ -23,10 +23,15 @@ import (
 const errThreshold = 3
 
 type Conn struct {
-	conn   net.Conn
-	text   *textproto.Conn
-	server *Server
-	helo   string
+	// conn is owned by the connection handler and may be replaced by the TLS
+	// wrapper after a successful STARTTLS handshake.
+	conn net.Conn
+	// transport is the accepted connection and remains immutable for the
+	// lifetime of Conn. Shutdown closes it from outside the handler goroutine.
+	transport net.Conn
+	text      *textproto.Conn
+	server    *Server
+	helo      string
 
 	// Number of errors witnessed on this connection
 	errCount int
@@ -48,8 +53,9 @@ type Conn struct {
 
 func newConn(c net.Conn, s *Server) *Conn {
 	sc := &Conn{
-		server: s,
-		conn:   c,
+		server:    s,
+		conn:      c,
+		transport: c,
 	}
 
 	sc.init()
@@ -181,6 +187,43 @@ func (c *Conn) Close() error {
 	}
 
 	return c.conn.Close()
+}
+
+func (c *Conn) hasBDATPipe() bool {
+	c.locker.Lock()
+	defer c.locker.Unlock()
+	return c.bdatPipe != nil
+}
+
+func (c *Conn) startBDAT() (*io.PipeReader, *io.PipeWriter, chan error, bool) {
+	c.locker.Lock()
+	defer c.locker.Unlock()
+	if c.bdatPipe != nil {
+		return nil, c.bdatPipe, c.dataResult, false
+	}
+	reader, writer := io.Pipe()
+	result := make(chan error, 1)
+	c.bdatPipe = writer
+	c.dataResult = result
+	return reader, writer, result, true
+}
+
+func (c *Conn) abortBDAT() {
+	c.locker.Lock()
+	pipe := c.bdatPipe
+	c.bdatPipe = nil
+	c.locker.Unlock()
+	if pipe != nil {
+		pipe.CloseWithError(ErrDataReset)
+	}
+}
+
+// closeTransport interrupts the connection without invoking Session.Logout.
+// Shutdown uses this from outside the owning handler goroutine; the handler's
+// deferred Close performs session cleanup after its active callback returns.
+func (c *Conn) closeTransport() error {
+	c.abortBDAT()
+	return c.transport.Close()
 }
 
 // TLSConnectionState returns the connection's TLS connection state.
@@ -320,7 +363,7 @@ func (c *Conn) handleMail(arg string) {
 		c.writeResponse(502, EnhancedCode{5, 5, 1}, "Please introduce yourself first.")
 		return
 	}
-	if c.bdatPipe != nil {
+	if c.hasBDATPipe() {
 		c.writeResponse(502, EnhancedCode{5, 5, 1}, "MAIL not allowed during message transfer")
 		return
 	}
@@ -674,7 +717,7 @@ func (c *Conn) handleRcpt(arg string) {
 		c.writeResponse(502, EnhancedCode{5, 5, 1}, "Missing MAIL FROM command.")
 		return
 	}
-	if c.bdatPipe != nil {
+	if c.hasBDATPipe() {
 		c.writeResponse(502, EnhancedCode{5, 5, 1}, "RCPT not allowed during message transfer")
 		return
 	}
@@ -959,7 +1002,7 @@ func (c *Conn) handleData(arg string) {
 		c.writeResponse(501, EnhancedCode{5, 5, 4}, "DATA command should not have any arguments")
 		return
 	}
-	if c.bdatPipe != nil {
+	if c.hasBDATPipe() {
 		c.writeResponse(502, EnhancedCode{5, 5, 1}, "DATA not allowed during message transfer")
 		return
 	}
@@ -1042,46 +1085,42 @@ func (c *Conn) handleBdat(arg string) {
 		c.bdatStatus = c.createStatusCollector()
 	}
 
-	if c.bdatPipe == nil {
-		var r *io.PipeReader
-		r, c.bdatPipe = io.Pipe()
-
-		c.dataResult = make(chan error, 1)
-
+	reader, bdatPipe, dataResult, started := c.startBDAT()
+	if started {
 		go func() {
 			defer func() {
 				if err := recover(); err != nil {
 					c.handlePanic(err, c.bdatStatus)
 
-					c.dataResult <- errPanic
-					r.CloseWithError(errPanic)
+					dataResult <- errPanic
+					reader.CloseWithError(errPanic)
 				}
 			}()
 
 			var err error
 			if !c.server.LMTP {
-				err = c.Session().Data(r)
+				err = c.Session().Data(reader)
 			} else {
 				lmtpSession, ok := c.Session().(LMTPSession)
 				if !ok {
-					err = c.Session().Data(r)
+					err = c.Session().Data(reader)
 					for _, rcpt := range c.recipients {
 						c.bdatStatus.SetStatus(rcpt, err)
 					}
 				} else {
-					err = lmtpSession.LMTPData(r, c.bdatStatus)
+					err = lmtpSession.LMTPData(reader, c.bdatStatus)
 				}
 			}
 
-			c.dataResult <- err
-			r.CloseWithError(err)
+			dataResult <- err
+			reader.CloseWithError(err)
 		}()
 	}
 
 	c.lineLimitReader.LineLimit = 0
 
 	chunk := io.LimitReader(c.text.R, int64(size))
-	_, err = io.Copy(c.bdatPipe, chunk)
+	_, err = io.Copy(bdatPipe, chunk)
 	if err != nil {
 		// Backend might return an error early using CloseWithError without consuming
 		// the whole chunk.
@@ -1107,9 +1146,9 @@ func (c *Conn) handleBdat(arg string) {
 	if last {
 		c.lineLimitReader.LineLimit = c.server.MaxLineLength
 
-		c.bdatPipe.Close()
+		bdatPipe.Close()
 
-		err := <-c.dataResult
+		err := <-dataResult
 
 		if c.server.LMTP {
 			c.bdatStatus.fillRemaining(err)

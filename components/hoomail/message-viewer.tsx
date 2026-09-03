@@ -104,7 +104,7 @@ export function MessageViewer({
     data: rawSource,
     error: rawSourceError,
     isLoading: rawSourceLoading,
-  } = useCachedResource<string>(
+  } = useCachedResource<RawSourcePreview>(
     activeTab === 'source' && message ? `/api/messages/${message.id}/source` : null,
     textFetcher,
   )
@@ -374,8 +374,20 @@ export function MessageViewer({
                   </Badge>
                 </div>
                 <pre className="whitespace-pre-wrap break-all font-mono text-xs leading-relaxed text-muted-foreground">
-                  {rawSource || 'Raw message unavailable.'}
+                  {rawSource?.text || 'Raw message unavailable.'}
                 </pre>
+                {rawSource?.truncated && (
+                  <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                    <span>Preview limited to the first 100,000 characters.</span>
+                    <a
+                      href={`/api/messages/${message.id}/source`}
+                      download={`message-${message.id}.eml`}
+                      className="text-primary underline-offset-2 hover:underline"
+                    >
+                      Download complete source
+                    </a>
+                  </div>
+                )}
               </div>
             </ScrollArea>
           )}
@@ -788,41 +800,180 @@ function AttachmentChip({ attachment }: { attachment: AttachmentMeta }) {
   )
 }
 
-const textFetcher = (url: string) =>
-  fetch(url).then((r) => {
-    if (!r.ok) throw new Error('failed')
-    return r.text()
-  })
+const RAW_SOURCE_BYTE_LIMIT = 256 * 1024
+const RAW_SOURCE_CHAR_LIMIT = 100_000
+type RawSourcePreview = { text: string; truncated: boolean }
+
+const textFetcher = async (url: string): Promise<RawSourcePreview> => {
+  const response = await fetch(url)
+  if (!response.ok) throw new Error('failed')
+  if (!response.body) throw new Error('stream unavailable')
+
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  const decoder = new TextDecoder('utf-8', { fatal: true })
+  let byteLength = 0
+  let decoded = ''
+  let invalid = false
+  let projectedLength = 0
+  let truncated = false
+  const cancelReader = async () => {
+    try {
+      await reader.cancel()
+    } catch {
+      // The stream may already be closed by the server.
+    }
+  }
+
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    const remaining = RAW_SOURCE_BYTE_LIMIT - byteLength
+    if (remaining <= 0) {
+      truncated = true
+      await cancelReader()
+      break
+    }
+    const chunk = value.byteLength > remaining ? value.slice(0, remaining) : value
+    chunks.push(chunk)
+    byteLength += chunk.byteLength
+    if (chunk.byteLength < value.byteLength) truncated = true
+
+    let invalidDetected = false
+    if (!invalid) {
+      try {
+        decoded += decoder.decode(chunk, { stream: true })
+        if (decoded.length > RAW_SOURCE_CHAR_LIMIT) {
+          decoded = decoded.slice(0, RAW_SOURCE_CHAR_LIMIT)
+          truncated = true
+        }
+      } catch {
+        invalid = true
+        invalidDetected = true
+        const projected = projectRawSourceLength(chunks)
+        projectedLength = projected.length
+        if (projected.truncated) truncated = true
+      }
+    }
+    if (invalid && !invalidDetected) {
+      const projected = projectRawSourceLength([chunk], projectedLength)
+      projectedLength = projected.length
+      if (projected.truncated) truncated = true
+    }
+    if (truncated) {
+      await cancelReader()
+      break
+    }
+  }
+
+  if (!invalid && !truncated) {
+    try {
+      decoded += decoder.decode()
+    } catch {
+      invalid = true
+    }
+  }
+  if (!invalid) {
+    return {
+      text: decoded.slice(0, RAW_SOURCE_CHAR_LIMIT),
+      truncated: truncated || decoded.length > RAW_SOURCE_CHAR_LIMIT,
+    }
+  }
+  const projected = projectRawSource(chunks)
+  return { text: projected.text, truncated: truncated || projected.truncated }
+}
+
+function rawSourceToken(byte: number): string {
+  if (byte === 0x09 || byte === 0x0a || byte === 0x0d) return String.fromCharCode(byte)
+  if (byte === 0x5c) return '\\\\'
+  if (byte >= 0x20 && byte <= 0x7e) return String.fromCharCode(byte)
+  return `\\x${byte.toString(16).toUpperCase().padStart(2, '0')}`
+}
+
+function projectRawSourceLength(
+  chunks: readonly Uint8Array[],
+  startLength = 0,
+): { length: number; truncated: boolean } {
+  let length = startLength
+  for (const bytes of chunks) {
+    for (const byte of bytes) {
+      const value = rawSourceToken(byte)
+      if (length + value.length > RAW_SOURCE_CHAR_LIMIT) {
+        return { length, truncated: true }
+      }
+      length += value.length
+    }
+  }
+  return { length, truncated: false }
+}
+
+function projectRawSource(chunks: readonly Uint8Array[]): RawSourcePreview {
+  const parts: string[] = []
+  const chunk: string[] = []
+  let length = 0
+  let truncated = false
+  outer: for (const bytes of chunks) {
+    for (const byte of bytes) {
+      const value = rawSourceToken(byte)
+      if (length + value.length > RAW_SOURCE_CHAR_LIMIT) {
+        truncated = true
+        break outer
+      }
+      chunk.push(value)
+      length += value.length
+      if (chunk.length === 2048) {
+        parts.push(chunk.join(''))
+        chunk.length = 0
+      }
+    }
+  }
+  if (chunk.length > 0) parts.push(chunk.join(''))
+  return { text: parts.join(''), truncated }
+}
 
 const TEXT_PREVIEW_CHAR_LIMIT = 100_000
+const TEXT_PREVIEW_BYTE_LIMIT = 256 * 1024
 type TextPreviewPayload = { text: string; truncated: boolean }
 
 const previewTextFetcher = async (url: string): Promise<TextPreviewPayload> => {
   const response = await fetch(url)
   if (!response.ok) throw new Error('failed')
-  if (!response.body) {
-    const text = await response.text()
-    return {
-      text: text.slice(0, TEXT_PREVIEW_CHAR_LIMIT),
-      truncated: text.length > TEXT_PREVIEW_CHAR_LIMIT,
-    }
-  }
+  if (!response.body) throw new Error('stream unavailable')
+
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
+  let byteLength = 0
   let text = ''
   let truncated = false
   for (;;) {
     const { done, value } = await reader.read()
     if (done) break
-    text += decoder.decode(value, { stream: true })
+    const remaining = TEXT_PREVIEW_BYTE_LIMIT - byteLength
+    if (remaining <= 0) {
+      truncated = true
+      await reader.cancel().catch(() => {})
+      break
+    }
+    const chunk = value.byteLength > remaining ? value.slice(0, remaining) : value
+    byteLength += chunk.byteLength
+    if (chunk.byteLength < value.byteLength) truncated = true
+    text += decoder.decode(chunk, { stream: true })
     if (text.length > TEXT_PREVIEW_CHAR_LIMIT) {
       text = text.slice(0, TEXT_PREVIEW_CHAR_LIMIT)
       truncated = true
-      void reader.cancel().catch(() => {})
+      await reader.cancel().catch(() => {})
+      break
+    }
+    if (truncated) {
+      await reader.cancel().catch(() => {})
       break
     }
   }
-  return { text, truncated }
+  if (!truncated) text += decoder.decode()
+  return {
+    text: text.slice(0, TEXT_PREVIEW_CHAR_LIMIT),
+    truncated: truncated || text.length > TEXT_PREVIEW_CHAR_LIMIT,
+  }
 }
 
 function TextPreview({ url, active }: { url: string; active: boolean }) {

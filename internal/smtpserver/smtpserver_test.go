@@ -460,6 +460,41 @@ func TestGracefulShutdownAfterClientLogout(t *testing.T) {
 	}
 }
 
+func TestShutdownClosesStalledDataConnection(t *testing.T) {
+	service := New(&recordingStore{})
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- service.Serve(listener) }()
+
+	client := dialSMTP(t, listener.Addr().String())
+	defer client.close()
+	client.command(250, "EHLO test")
+	client.command(250, "MAIL FROM:<sender@example.test>")
+	client.command(250, "RCPT TO:<recipient@example.test>")
+	client.command(354, "DATA")
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	shutdownDone := make(chan error, 1)
+	go func() { shutdownDone <- service.Shutdown(ctx) }()
+
+	waitForClosed(t, client.conn)
+	if err := <-shutdownDone; err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	select {
+	case err := <-serveDone:
+		if err != nil {
+			t.Fatalf("Serve: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Serve did not return after stalled DATA shutdown")
+	}
+}
+
 type smtpTestClient struct {
 	t      *testing.T
 	conn   net.Conn

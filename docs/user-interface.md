@@ -137,7 +137,7 @@ HTML and Plain text are disabled when that body part is absent. On each newly op
 2. Plain text, when HTML is absent; or
 3. Source, when neither body representation is available.
 
-The **Source** tab lazily fetches `GET /api/messages/{id}/source` when activated and renders the complete stored RFC 822 message—every header and body byte—under a **raw message** badge. It shows **Loading raw message…** while the fetch runs, **Could not load raw message.** on failure, and **Raw message unavailable.** when the stored source is empty. Fetching the source never marks the message read and emits no event.
+The **Source** tab lazily fetches `GET /api/messages/{id}/source` when activated and renders a bounded preview under a **raw message** badge. The preview reads at most `256 KiB` of raw source and displays at most the first `100,000` characters. Valid source bytes are decoded strictly as UTF-8. If strict decoding fails anywhere, the preview uses a reversible one-byte projection instead: printable ASCII and tab, line-feed, and carriage-return bytes remain literal; a backslash byte is doubled; and every other byte is shown as an uppercase `\xHH` escape (for example, `0xFF` appears as `\xFF`). Invalid bytes are never replaced with U+FFFD. If the source exceeds either preview limit, the UI shows **Preview limited to the first 100,000 characters.** and a same-origin **Download complete source** link for the full stored RFC 822 message. It shows **Loading raw message…** while the fetch runs, **Could not load raw message.** on failure, and **Raw message unavailable.** when the stored source is empty. Fetching the source never marks the message read and emits no event.
 
 All enabled tab buttons participate in normal sequential Tab navigation. The tab list also supports:
 
@@ -157,7 +157,7 @@ The UI then adds only security and containment metadata: `html`/`body` maximum-w
 - explicitly styled message content keeps its safe sender-provided typography, colors, spacing, and background; and
 - unstyled message content uses browser document defaults rather than inheriting or being recolored by the app theme.
 
-Sanitization, CSP, and iframe sandboxing are separate defenses. The message is rendered in an iframe with an empty `sandbox` attribute, no scripts or same-origin permission, and no referrer. Only the visible email iframe is in the Tab order. The viewer keeps the previous frame visible until the replacement document is ready, preserving the stable viewer shell during message switches.
+Sanitization, CSP, and iframe sandboxing are separate defenses. The message is rendered in an iframe with an empty `sandbox` attribute, no scripts or same-origin permission, and no referrer. Only the visible email iframe is in the Tab order. The viewer keeps the previous frame visible until the replacement document's load fires or a bounded 150 ms fallback reveals the replacement, preserving the stable viewer shell during message switches.
 
 Remote content is blocked by default and the preview never requests sender-controlled images, stylesheets, fonts, frames, media, or CSS resources. CID raster images and strictly sanitized static CID SVG images can load only from Hoomail's own captured-attachment endpoint. This differs from mail clients that proxy or optionally load remote images; see [Gmail's image policy](https://support.google.com/mail/answer/145919) and [Outlook external-image protection](https://support.microsoft.com/en-us/outlook/external-image-protection-in-outlook-com-43c0c17e-8fd1-41c6-93fe-ffe54638e82b).
 
@@ -165,7 +165,7 @@ Safe absolute HTTP(S) and `mailto:` link destinations are preserved for inspecti
 
 ### Attachments
 
-Only regular attachments listed by the viewer have download controls; inline CID resources and recognized calendar parts are omitted. Preview is intentionally limited to the same conservative media allowlist used by the attachment endpoint:
+Only regular attachments listed by the viewer have download controls; inline CID resources are omitted, and recognized calendar parts are omitted when the message has parsed iCalendar events. An unparseable calendar part, or one whose events are all incomplete, can remain downloadable. Preview is intentionally limited to the same conservative media allowlist used by the attachment endpoint:
 
 | Content type | Preview |
 | --- | --- |
@@ -207,7 +207,7 @@ Current limitations:
 - Monday is fixed as the first day of the week; there is no user setting for Sunday-first or another regional start day.
 - Events are grouped only under the local-calendar day containing their start time. A multi-day event is not painted across every day of its duration.
 - This is a month view, not a week, agenda, or multi-day-span view.
-- Event dates and times use the browser's locale and time zone.
+- Timed event dates and times use the browser's locale and time zone; all-day events retain their source UTC calendar date.
 
 A day cell shows up to two event titles, followed by **+N more** when additional events exist. Selecting a day shows its complete event list below the grid, including status, local time or all-day state, location, and organizer. Cancelled events are struck through; tentative events have a distinct status treatment.
 
@@ -297,9 +297,9 @@ Hoomail uses server-sent events (SSE) for event-specific refreshes:
 - a new or deleted inbox refreshes the inbox list;
 - a new message or message change refreshes the inbox list plus that inbox's unfiltered list and any cached filtered message lists;
 - a calendar change refreshes that inbox's calendar events; and
-- a full reset refreshes the inbox list, clears cached message lists and calendar events, and invalidates cached message details and inspections.
+- a full reset refreshes the inbox list, clears cached message lists and calendar events, and invalidates cached message details, source responses, inspections, and attachments.
 
-New mail can therefore appear in the current list without a manual page reload. Message and inspection caches are invalidated by realtime handling only for a full reset, not for ordinary message or calendar events.
+New mail can therefore appear in the current list without a manual page reload. Message, source, inspection, and attachment caches are invalidated when SSE connects or reconnects and on a full reset; ordinary message and calendar events refresh their relevant mailbox/list caches without invalidating message details.
 
 Observable loading and inspection status text includes:
 
@@ -311,7 +311,7 @@ Observable loading and inspection status text includes:
 - **Could not analyze this message.** and **Retry analysis** after an Inspect request fails; and
 - attachment text-preview loading and failure text.
 
-The message viewer deliberately retains the previously displayed detail while the next message request is pending, keeping the viewer shell and existing iframe mounted until replacement content is ready.
+The message viewer deliberately retains the previously displayed detail while the next message request is pending, keeping the viewer shell and existing iframe mounted until the replacement document's load fires or a bounded 150 ms fallback reveals it.
 
 ## Current error and status limitations
 
@@ -320,7 +320,7 @@ The UI has targeted feedback for Send-test failures, text-attachment preview fai
 Consequences include:
 
 - failed inbox, message-list, or calendar loads can appear empty;
-- a failed initial message-detail request can remain on **Loading message…**;
+- a failed initial message-detail request renders **Could not load message.** with a **Retry** action; and
 - mailbox deletion and message read/unread/delete failures have no visible error notification and are handled through silent refresh where implemented; and
 - realtime connection state, disconnection, reconnection, and last-event time are not displayed.
 

@@ -106,8 +106,15 @@ func NewServer(be Backend) *Server {
 // Serve accepts incoming connections on the Listener l.
 func (s *Server) Serve(l net.Listener) error {
 	s.locker.Lock()
-	s.listeners = append(s.listeners, l)
-	s.locker.Unlock()
+	select {
+	case <-s.done:
+		s.locker.Unlock()
+		_ = l.Close()
+		return ErrServerClosed
+	default:
+		s.listeners = append(s.listeners, l)
+		s.locker.Unlock()
+	}
 
 	var tempDelay time.Duration // how long to sleep on accept failure
 
@@ -136,11 +143,22 @@ func (s *Server) Serve(l net.Listener) error {
 			return err
 		}
 
-		s.wg.Add(1)
+		conn := newConn(c, s)
+		s.locker.Lock()
+		select {
+		case <-s.done:
+			s.locker.Unlock()
+			_ = conn.Close()
+			return nil
+		default:
+			s.conns[conn] = struct{}{}
+			s.wg.Add(1)
+			s.locker.Unlock()
+		}
 		go func() {
 			defer s.wg.Done()
 
-			err := s.handleConn(newConn(c, s))
+			err := s.handleConn(conn)
 			if err != nil {
 				s.ErrorLog.Printf("error handling %v: %s", c.RemoteAddr(), err)
 			}
@@ -260,52 +278,24 @@ func (s *Server) ListenAndServeTLS() error {
 // Close returns any error returned from closing the server's underlying
 // listener(s).
 func (s *Server) Close() error {
-	select {
-	case <-s.done:
+	listeners, conns, alreadyClosed := s.beginShutdown()
+	if alreadyClosed {
 		return ErrServerClosed
-	default:
-		close(s.done)
 	}
-
-	var err error
-	s.locker.Lock()
-	for _, l := range s.listeners {
-		if lerr := l.Close(); lerr != nil && err == nil {
-			err = lerr
-		}
-	}
-
-	for conn := range s.conns {
-		conn.Close()
-	}
-	s.locker.Unlock()
-
-	return err
+	return closeResources(listeners, conns)
 }
 
-// Shutdown gracefully shuts down the server without interrupting any
-// active connections. Shutdown works by first closing all open
-// listeners and then waiting indefinitely for connections to return to
-// idle and then shut down.
-// If the provided context expires before the shutdown is complete,
-// Shutdown returns the context's error, otherwise it returns any
-// error returned from closing the Server's underlying Listener(s).
+// Shutdown closes all open listeners and active connections, then waits for
+// every connection goroutine to return. If the provided context expires before
+// the shutdown is complete, Shutdown returns the context's error, otherwise
+// it returns any error returned from closing the Server's underlying
+// Listener(s).
 func (s *Server) Shutdown(ctx context.Context) error {
-	select {
-	case <-s.done:
+	listeners, conns, alreadyClosed := s.beginShutdown()
+	if alreadyClosed {
 		return ErrServerClosed
-	default:
-		close(s.done)
 	}
-
-	var err error
-	s.locker.Lock()
-	for _, l := range s.listeners {
-		if lerr := l.Close(); lerr != nil && err == nil {
-			err = lerr
-		}
-	}
-	s.locker.Unlock()
+	err := closeResources(listeners, conns)
 
 	connDone := make(chan struct{})
 	go func() {
@@ -319,4 +309,34 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	case <-connDone:
 		return err
 	}
+}
+
+func (s *Server) beginShutdown() ([]net.Listener, []*Conn, bool) {
+	s.locker.Lock()
+	defer s.locker.Unlock()
+	select {
+	case <-s.done:
+		return nil, nil, true
+	default:
+		close(s.done)
+	}
+	listeners := append([]net.Listener(nil), s.listeners...)
+	conns := make([]*Conn, 0, len(s.conns))
+	for conn := range s.conns {
+		conns = append(conns, conn)
+	}
+	return listeners, conns, false
+}
+
+func closeResources(listeners []net.Listener, conns []*Conn) error {
+	var err error
+	for _, listener := range listeners {
+		if closeErr := listener.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}
+	for _, conn := range conns {
+		_ = conn.closeTransport()
+	}
+	return err
 }
