@@ -109,7 +109,7 @@ func newEmailHTMLPolicy() *bluemonday.Policy {
 
 func configureEmailStyles(policy *bluemonday.Policy) {
 	properties := []string{
-		"color", "background-color",
+		"color", "background-color", "background",
 		"font-family", "font-size", "font-style", "font-weight", "line-height",
 		"text-align", "text-decoration", "text-decoration-color", "text-decoration-style", "text-transform",
 		"letter-spacing", "word-spacing", "white-space", "vertical-align", "direction",
@@ -144,7 +144,7 @@ func safeEmailCSSValue(property string, value string) bool {
 		}
 	}
 	switch property {
-	case "color", "background-color", "text-decoration-color", "border-color", "border-top-color", "border-right-color", "border-bottom-color", "border-left-color":
+	case "color", "background", "background-color", "text-decoration-color", "border-color", "border-top-color", "border-right-color", "border-bottom-color", "border-left-color":
 		return cssColorPattern.MatchString(value)
 	case "font-family":
 		return cssFontFamilyPattern.MatchString(value)
