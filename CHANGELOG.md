@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.6 (2026-09-07)
+
+### Bug Fixes
+
+- sichere Hintergrundfarben von E-Mail-Buttons erhalten (#29) (6786879)
+
+### Other Changes
+
+- **ui:** fix limitations list punctuation (96fe3e8)
+
 ## 0.9.5 (2026-09-03)
 
 ### Bug Fixes
