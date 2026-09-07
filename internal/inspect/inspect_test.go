@@ -27,6 +27,26 @@ func TestSanitizeEmailHTMLUsesParserAllowlist(t *testing.T) {
 	}
 }
 
+func TestSanitizeEmailHTMLRetainsColorOnlyButtonBackground(t *testing.T) {
+	input := `<html><body><a href="https://safe.test" style="background:#007194;color:#ffffff;display:inline-block; padding:12px 24px;border-radius:4px">Book now</a><a href="https://safe.test/secondary" style="background:transparent;color:#007194;display:inline-block; padding:12px 24px;border-radius:4px">Learn more</a><div style="background:url(https://ordinary.invalid/bg.png); background:u\72l(https://escaped.invalid/bg.png); background:image-set(url(https://set.invalid/bg.png) 1x); background:var(--remote-background); color:#123456; padding:8px">Safe content</div></body></html>`
+	got := SanitizeEmailHTML(input)
+
+	for _, retained := range []string{
+		`<a style="background: #007194; color: #ffffff; display: inline-block; padding: 12px 24px; border-radius: 4px" href="https://safe.test" target="_blank" rel="noopener noreferrer">Book now</a>`,
+		`<a style="background: transparent; color: #007194; display: inline-block; padding: 12px 24px; border-radius: 4px" href="https://safe.test/secondary" target="_blank" rel="noopener noreferrer">Learn more</a>`,
+		`<div style="color: #123456; padding: 8px">Safe content</div>`,
+	} {
+		if !strings.Contains(got, retained) {
+			t.Errorf("sanitized HTML missing %q:\n%s", retained, got)
+		}
+	}
+	for _, removed := range []string{"ordinary.invalid", "escaped.invalid", "set.invalid", "image-set(", "var("} {
+		if strings.Contains(got, removed) {
+			t.Errorf("sanitized HTML retained unsafe background primitive %q:\n%s", removed, got)
+		}
+	}
+}
+
 func TestSanitizeEmailHTMLAllowsOnlyValidatedEmbeddedDataImages(t *testing.T) {
 	svg := `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="9" onload="bad()"><script>bad()</script><rect width="14" height="9" fill="#004b76"/></svg>`
 	svgURL := "data:image/svg+xml;base64," + base64.StdEncoding.EncodeToString([]byte(svg))
