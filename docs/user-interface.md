@@ -157,11 +157,11 @@ The UI then adds only security and containment metadata: `html`/`body` maximum-w
 - explicitly styled message content keeps its safe sender-provided typography, colors, spacing, and background; and
 - unstyled message content uses browser document defaults rather than inheriting or being recolored by the app theme.
 
-Sanitization, CSP, and iframe sandboxing are separate defenses. The message is rendered in an iframe with an empty `sandbox` attribute, no scripts or same-origin permission, and no referrer. Only the visible email iframe is in the Tab order. The viewer keeps the previous frame visible until the replacement document's load fires or a bounded 150 ms fallback reveals the replacement, preserving the stable viewer shell during message switches.
+Sanitization, CSP, and iframe sandboxing are separate defenses. The message is rendered in an iframe whose sandbox permits only `allow-popups` and `allow-popups-to-escape-sandbox`; scripts, same-origin access, forms, top-level navigation, downloads, and other sandbox privileges remain disabled, and the frame uses no referrer. Pages opened by sanitized links run outside the email sandbox with neither `window.opener` nor a referrer. Only the visible email iframe is in the Tab order. The viewer keeps the previous frame visible until the replacement document's load fires or a bounded 150 ms fallback reveals the replacement, preserving the stable viewer shell during message switches.
 
 Remote content is blocked by default and the preview never requests sender-controlled images, stylesheets, fonts, frames, media, or CSS resources. CID raster images and strictly sanitized static CID SVG images can load only from Hoomail's own captured-attachment endpoint. This differs from mail clients that proxy or optionally load remote images; see [Gmail's image policy](https://support.google.com/mail/answer/145919) and [Outlook external-image protection](https://support.microsoft.com/en-us/outlook/external-image-protection-in-outlook-com-43c0c17e-8fd1-41c6-93fe-ffe54638e82b).
 
-Safe absolute HTTP(S) and `mailto:` link destinations are preserved for inspection, but links do not navigate or open windows from the empty-sandbox preview. Review the destination in **Inspect** before opening it separately; Inspect's explicit open control uses a new tab with opener isolation.
+Safe absolute HTTP(S) and `mailto:` link destinations are preserved for inspection, and sanitized links can open a new tab through the popup-only sandbox permissions. The opened page is not sandboxed, but opener and referrer information are withheld. Review the destination in **Inspect** before opening it separately; Inspect's explicit open control uses a new tab with opener isolation.
 
 ### Attachments
 
