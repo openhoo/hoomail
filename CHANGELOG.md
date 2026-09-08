@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.7 (2026-09-08)
+
+### Bug Fixes
+
+- **viewer:** öffne Maillinks sicher in neuen Tabs (#31) (b0e3e2c)
+
 ## 0.9.6 (2026-09-07)
 
 ### Bug Fixes
