@@ -293,7 +293,7 @@ The `html` field is a safe display projection, not a raw copy:
 
 This policy intentionally accepts standards-valid rich HTML; it is a security boundary, not a rule that email must resemble plain correspondence. Client-specific CSS support remains a compatibility concern, and Hoomail does not emulate Gmail or Outlook pixel-for-pixel. The selected, charset-decoded HTML is stored without display sanitization, and the complete original MIME remains stored unchanged.
 
-Safe absolute HTTP(S) and `mailto:` anchors are externalized with `target="_blank"` and `rel="noopener noreferrer"`, but the empty-sandbox preview cannot navigate or open them. Inspection exposes destinations for explicit review/opening. Remote images may appear in inspection diagnostics but are never fetched by the detail projection or preview.
+Safe absolute HTTP(S) and `mailto:` anchors are externalized with `target="_blank"` and `rel="noopener noreferrer"`. The preview iframe permits these links to open a new tab with only `allow-popups` and `allow-popups-to-escape-sandbox`; the opened page runs outside the email sandbox and receives neither `window.opener` nor a referrer. Remote images may appear in inspection diagnostics but are never fetched by the detail projection or preview.
 
 The response's `attachments` array omits:
 

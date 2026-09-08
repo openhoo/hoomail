@@ -665,7 +665,7 @@ function HtmlFrame({
         key={doc}
         title="Email HTML content"
         srcDoc={doc}
-        sandbox=""
+        sandbox="allow-popups allow-popups-to-escape-sandbox"
         referrerPolicy="no-referrer"
         tabIndex={visibleDoc === doc ? 0 : -1}
         aria-hidden={visibleDoc === doc ? undefined : 'true'}
@@ -677,7 +677,7 @@ function HtmlFrame({
           key={prevDoc}
           title="Previous email content"
           srcDoc={prevDoc}
-          sandbox=""
+          sandbox="allow-popups allow-popups-to-escape-sandbox"
           referrerPolicy="no-referrer"
           tabIndex={-1}
           aria-hidden="true"

@@ -370,6 +370,79 @@ test('switching plain to invite and back restores HTML without stale invite cont
   await expect(htmlFrame.locator('body')).not.toContainText(inviteTitle)
 })
 
+test('HTML-Vorschau öffnet einen lokalen Link in einem Popup ohne Übernahme der Mail-Sandbox', async ({ context, page }) => {
+  const recipient = 'popup-viewer@hoomail.test'
+  const subject = 'Popup-Link-Vorschau'
+  const target = new URL('/e2e-popup-target.html#appointment-fragment', page.url())
+  const targetRequests: Array<Record<string, string>> = []
+
+  await context.route(`${target.origin}${target.pathname}`, async (route) => {
+    targetRequests.push(route.request().headers())
+    await route.fulfill({
+      status: 200,
+      contentType: 'text/html',
+      body: `<!doctype html><html><body><script>
+        document.body.textContent = JSON.stringify({
+          scriptRan: true,
+          openerNull: window.opener === null,
+          referrer: document.referrer,
+          hash: window.location.hash,
+        })
+      </script></body></html>`,
+    })
+  })
+
+  try {
+    const raw = [
+      'From: Absender <sender@example.test>',
+      `To: ${recipient}`,
+      `Subject: ${subject}`,
+      'MIME-Version: 1.0',
+      'Content-Type: text/html; charset=utf-8',
+      '',
+      `<!doctype html><html><body><script>document.body.dataset.mailScript = 'executed'</script><a href="${target.href}">Termin öffnen</a></body></html>`,
+    ].join('\r\n')
+
+    await sendRawMessage(raw, recipient)
+    const row = page
+      .getByRole('list', { name: 'Messages' })
+      .getByRole('button', { name: new RegExp(`Absender, ${subject},`) })
+      .last()
+    await expect(row).toBeVisible()
+    await row.click()
+    await expect(page.getByRole('status').filter({ hasText: `Message loaded: ${subject}` })).toBeVisible()
+
+    const frame = page.frameLocator('iframe[title="Email HTML content"]')
+    await expect(frame.getByRole('link', { name: 'Termin öffnen' })).toBeVisible()
+    await expect(frame.locator('body')).not.toHaveAttribute('data-mail-script', 'executed')
+
+    const [popup] = await Promise.all([
+      page.waitForEvent('popup'),
+      frame.getByRole('link', { name: 'Termin öffnen' }).click(),
+    ])
+    await popup.waitForLoadState('domcontentloaded')
+    const targetState = await popup.locator('body').evaluate((body) => JSON.parse(body.textContent ?? '{}') as {
+      scriptRan: boolean
+      openerNull: boolean
+      referrer: string
+      hash: string
+    })
+    expect(targetState).toEqual({
+      scriptRan: true,
+      openerNull: true,
+      referrer: '',
+      hash: '#appointment-fragment',
+    })
+    expect(new URL(popup.url()).hash).toBe('#appointment-fragment')
+    expect(targetRequests).toHaveLength(1)
+    expect(targetRequests[0]?.referer).toBeUndefined()
+    await popup.close()
+  } finally {
+    await context.unroute(`${target.origin}${target.pathname}`)
+  }
+})
+
+
 test('HTML preview applies its canvas while preserving sender content styling and privacy', async ({ page }) => {
   const remoteRequests: string[] = []
   // Whole-lifecycle recorders: track every HTTP(S) page request plus everything
@@ -453,7 +526,6 @@ test('HTML preview applies its canvas while preserving sender content styling an
   await expect(page.getByRole('status').filter({ hasText: 'Message loaded: Sender faithful privacy preview' })).toBeVisible()
 
   const iframe = page.locator('iframe[title="Email HTML content"]')
-  await expect(iframe).toHaveAttribute('sandbox', '')
   await expect(iframe).toHaveAttribute('referrerpolicy', 'no-referrer')
   const frame = page.frameLocator('iframe[title="Email HTML content"]')
   const senderTable = frame.getByRole('table').filter({ hasText: 'Sender table' })
