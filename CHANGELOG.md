@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.0 (2026-09-11)
+
+### Features
+
+- **client:** support responsive mobile workflows (#33) (24217a1)
+
 ## 0.9.7 (2026-09-08)
 
 ### Bug Fixes
