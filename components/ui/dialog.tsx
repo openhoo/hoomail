@@ -204,7 +204,7 @@ function DialogContent({
         data-slot="dialog-content"
         data-open=""
         className={cn(
-          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "fixed top-1/2 left-1/2 z-50 box-border grid max-h-[calc(100dvh-2rem)] w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 touch-pan-y overflow-y-auto overscroll-contain rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           className
         )}
         onKeyDown={(event) => {
@@ -242,7 +242,7 @@ function DialogContent({
         {showCloseButton && (
           <DialogClose
             aria-label="Close"
-            className="absolute top-2 right-2 inline-flex size-7 items-center justify-center rounded-[min(var(--radius-md),12px)] border border-transparent transition-all outline-none hover:bg-muted hover:text-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+            className="absolute top-2 right-2 inline-flex size-7 touch-manipulation items-center justify-center rounded-[min(var(--radius-md),12px)] border border-transparent transition-all outline-none [@media(pointer:coarse)]:size-11 hover:bg-muted hover:text-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
           >
             <XIcon />
             <span className="sr-only">Close</span>
@@ -282,7 +282,7 @@ function DialogFooter({
     >
       {children}
       {showCloseButton && (
-        <DialogClose className="inline-flex h-8 items-center justify-center rounded-lg border border-border bg-background px-2.5 text-sm font-medium hover:bg-muted hover:text-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50">
+        <DialogClose className="inline-flex h-8 min-w-11 touch-manipulation items-center justify-center rounded-lg border border-border bg-background px-2.5 text-sm font-medium [@media(pointer:coarse)]:min-h-11 hover:bg-muted hover:text-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50">
           Close
         </DialogClose>
       )}

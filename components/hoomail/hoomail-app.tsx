@@ -1,6 +1,6 @@
 import type { JSX } from 'preact'
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
-import { CalendarDays, Mail } from '@/components/ui/icons'
+import { CalendarDays, ChevronLeft, Inbox, Mail } from '@/components/ui/icons'
 import { Button } from '@/components/ui/button'
 import { asyncComponent } from '@/components/ui/async-component'
 import { MailboxSidebar } from './mailbox-sidebar'
@@ -28,17 +28,31 @@ const SendTestDialog = asyncComponent(() => import('./dialogs').then((module) =>
 const ResetDialog = asyncComponent(() => import('./dialogs').then((module) => module.ResetDialog))
 
 
-export function HoomailApp() {
+type MobilePane = 'inboxes' | 'list' | 'reader' | 'calendar'
 
+function focusVisible(selector: string) {
+  requestAnimationFrame(() => {
+    const target = [...document.querySelectorAll<HTMLElement>(selector)]
+      .find((element) => element.offsetParent !== null)
+    target?.focus({ preventScroll: true })
+  })
+}
+
+export function HoomailApp() {
   const [selectedMailboxId, setSelectedMailboxId] = useState<number | null>(null)
   const [selectedMessageId, setSelectedMessageId] = useState<number | null>(null)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [searchQuery, setSearchQuery] = useState('')
   const [view, setView] = useState<'mail' | 'calendar'>('mail')
+  const [mobilePane, setMobilePane] = useState<MobilePane>('list')
   const [sendTestOpen, setSendTestOpen] = useState(false)
   const [resetOpen, setResetOpen] = useState(false)
   const anchorIdRef = useRef<number | null>(null)
   const pendingMessageFocusRef = useRef<number | null>(null)
+  const pendingListFocusRef = useRef(false)
+  const mobileReturnPaneRef = useRef<MobilePane>('list')
+  const selectedMessageIdRef = useRef<number | null>(selectedMessageId)
+  selectedMessageIdRef.current = selectedMessageId
 
   const { mailboxes } = useMailboxes()
   const { messages } = useMessages(selectedMailboxId, searchQuery)
@@ -46,8 +60,8 @@ export function HoomailApp() {
   const { events } = useCalendarEvents(selectedMailboxId, view === 'calendar')
   const openMessageStateRef = useRef({ messages, selectedMailboxId })
   openMessageStateRef.current = { messages, selectedMailboxId }
-  const actionStateRef = useRef({ messages, selectedMailboxId, selectedMessageId, searchQuery })
-  actionStateRef.current = { messages, selectedMailboxId, selectedMessageId, searchQuery }
+  const actionStateRef = useRef({ messages, selectedMailboxId, selectedMessageId, searchQuery, mobilePane })
+  actionStateRef.current = { messages, selectedMailboxId, selectedMessageId, searchQuery, mobilePane }
 
   // Auto-select the first mailbox when none is selected
   useEffect(() => {
@@ -73,6 +87,9 @@ export function HoomailApp() {
     setSelectedMessageId(null)
     setSelectedIds(new Set())
     setSearchQuery('')
+    setMobilePane('inboxes')
+    pendingMessageFocusRef.current = null
+    pendingListFocusRef.current = false
   }, [])
 
   useRealtime({
@@ -83,6 +100,8 @@ export function HoomailApp() {
         setSelectedMailboxId(null)
         setSelectedMessageId(null)
         setSelectedIds(new Set())
+        setMobilePane('inboxes')
+        mobileReturnPaneRef.current = 'list'
       }
     },
   })
@@ -99,6 +118,10 @@ export function HoomailApp() {
       setSelectedMailboxId(null)
       setSelectedMessageId(null)
       setSelectedIds(new Set())
+      setMobilePane('inboxes')
+      mobileReturnPaneRef.current = 'list'
+      pendingMessageFocusRef.current = null
+      pendingListFocusRef.current = false
     }
     mutateCache('/api/mailboxes')
   }
@@ -110,6 +133,41 @@ export function HoomailApp() {
     setSelectedIds(new Set())
     setSearchQuery('')
     anchorIdRef.current = null
+    if (view === 'calendar') {
+      setMobilePane('calendar')
+      mobileReturnPaneRef.current = 'calendar'
+    } else {
+      setMobilePane('list')
+      pendingMessageFocusRef.current = null
+      pendingListFocusRef.current = window.matchMedia('(max-width: 1023px)').matches
+      mobileReturnPaneRef.current = 'list'
+    }
+  }
+
+  const openInboxes = () => {
+    mobileReturnPaneRef.current = mobilePane === 'calendar' ? 'calendar' : 'list'
+    setMobilePane('inboxes')
+    focusVisible('[data-mobile-inboxes-back]')
+  }
+
+  const closeInboxes = () => {
+    const destination = mobileReturnPaneRef.current
+    setMobilePane(destination)
+    if (destination === 'list') {
+      pendingMessageFocusRef.current = selectedMessageIdRef.current
+      pendingListFocusRef.current = true
+    } else if (destination === 'reader') {
+      focusVisible('[data-mobile-reader-back]')
+    } else if (destination === 'calendar') {
+      focusVisible('[data-mobile-calendar-back], [data-calendar-pane-focus]')
+    }
+  }
+
+  const returnToInbox = () => {
+    pendingMessageFocusRef.current = selectedMessageIdRef.current ?? messages[0]?.id ?? null
+    pendingListFocusRef.current = true
+    setView('mail')
+    setMobilePane('list')
   }
 
   const handleSearchChange = (query: string) => {
@@ -124,9 +182,15 @@ export function HoomailApp() {
 
   const openMessage = useCallback((id: number) => {
     const { messages, selectedMailboxId } = openMessageStateRef.current
+    setView('mail')
+    setMobilePane('reader')
+    pendingListFocusRef.current = false
     setSelectedMessageId(id)
     setSelectedIds(new Set())
     anchorIdRef.current = id
+    if (window.matchMedia('(max-width: 1023px)').matches) {
+      focusVisible('[data-mobile-reader-back], [data-reader-pane-focus]')
+    }
 
     const current = messages.find((message) => message.id === id)
     if (!current || current.is_read !== 0 || selectedMailboxId == null) return
@@ -168,13 +232,39 @@ export function HoomailApp() {
 
   useEffect(() => {
     const id = pendingMessageFocusRef.current
-    if (view !== 'mail' || id == null) return
-    const row = document.querySelector<HTMLButtonElement>(`button.reactive-message[data-message-id="${id}"]`)
-    if (!row) return
+    if (view !== 'mail') return
+    if (!pendingListFocusRef.current && id == null) return
+
+    const rows = [...document.querySelectorAll<HTMLButtonElement>(
+      'button.reactive-message[data-message-id]'
+    )].filter((row) => row.offsetParent !== null)
+    const row = (id == null ? null : rows.find((candidate) => candidate.dataset.messageId === String(id)))
+      ?? rows[0]
+    if (row) {
+      pendingMessageFocusRef.current = null
+      pendingListFocusRef.current = false
+      row.focus({ preventScroll: true })
+      row.scrollIntoView({ block: 'nearest' })
+      return
+    }
+
+    const listShell = [...document.querySelectorAll<HTMLElement>('[data-message-list-shell]')]
+      .find((element) => element.offsetParent !== null)
+    if (!listShell) return
     pendingMessageFocusRef.current = null
-    row.focus()
-    row.scrollIntoView({ block: 'nearest' })
-  }, [messages, view])
+    pendingListFocusRef.current = false
+    listShell.focus({ preventScroll: true })
+  }, [messages, view, mobilePane])
+
+  const toggleMessageSelection = (id: number) => {
+    setSelectedIds((previous) => {
+      const next = new Set(previous)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+    anchorIdRef.current = id
+  }
 
   /** Click / Shift+Click / Ctrl+Click semantics like a desktop mail client */
   const handleRowClick = (id: number, event: JSX.TargetedMouseEvent<HTMLButtonElement>) => {
@@ -206,7 +296,7 @@ export function HoomailApp() {
   }
 
   const handleAction = useCallback(async (action: 'delete' | 'read' | 'unread', ids: number[]) => {
-    const { messages, selectedMailboxId, selectedMessageId, searchQuery } = actionStateRef.current
+    const { messages, selectedMailboxId, selectedMessageId, searchQuery, mobilePane } = actionStateRef.current
     const actionContext = { mailboxId: selectedMailboxId, searchQuery: searchQuery.trim(), ids: new Set(ids) }
     // Optimistic delete: drop the rows from the cache immediately so the
     // exit animation starts right away instead of after the round-trip
@@ -221,6 +311,7 @@ export function HoomailApp() {
       )
       const focusTarget = survivingMessages[Math.min(Math.max(0, deletedIndex), survivingMessages.length - 1)]
       pendingMessageFocusRef.current = focusTarget?.id ?? null
+      if (mobilePane === 'list') pendingListFocusRef.current = true
       mutateCache<{ messages: MessageListItem[] }>(
         (key) => key.startsWith(`/api/mailboxes/${selectedMailboxId}/messages`),
         (data) => data ? { messages: data.messages.filter((message) => !idSet.has(message.id)) } : data,
@@ -255,11 +346,24 @@ export function HoomailApp() {
   }, [])
 
   const openMessageFromCalendar = (messageId: number) => {
-    pendingMessageFocusRef.current = messageId
+    const isMobile = window.matchMedia('(max-width: 1023px)').matches
+    pendingMessageFocusRef.current = isMobile ? null : messageId
+    pendingListFocusRef.current = false
     setView('mail')
+    setMobilePane('reader')
     openMessage(messageId)
+    if (isMobile) focusVisible('[data-mobile-reader-back], [data-reader-pane-focus]')
   }
 
+  const closeMessage = () => {
+    const id = selectedMessageIdRef.current
+    pendingMessageFocusRef.current = id
+    pendingListFocusRef.current = true
+    setSelectedMessageId(null)
+    setSelectedIds(new Set())
+    setMobilePane('list')
+    anchorIdRef.current = id
+  }
   // Keyboard navigation: arrows move through the list, Delete removes,
   // Ctrl/Cmd+A selects all, Escape clears the multi-selection.
   // Refs avoid stale closures inside the long-lived keydown listener.
@@ -318,7 +422,14 @@ export function HoomailApp() {
         // during rapid key-repeat events.
         nextRow.focus()
         nextRow.scrollIntoView({ block: 'nearest' })
-        if (nextId !== selectedMessageId) openMessage(nextId)
+        if (nextId !== selectedMessageId) {
+          if (window.matchMedia('(max-width: 1023px)').matches) {
+            setSelectedMessageId(nextId)
+            anchorIdRef.current = nextId
+          } else {
+            openMessage(nextId)
+          }
+        }
         return
       }
 
@@ -369,23 +480,52 @@ export function HoomailApp() {
   const displayedDetail = detail
 
   return (
-    <main className="flex h-dvh overflow-hidden bg-background text-foreground">
+    <main data-hoomail-shell className="hoomail-shell flex h-dvh min-h-0 min-w-0 max-w-full overflow-hidden bg-background text-foreground">
       <h1 className="sr-only">Hoomail email testing inbox</h1>
-      <MailboxSidebar
-        mailboxes={mailboxes}
-        selectedId={selectedMailboxId}
-        onSelect={selectMailbox}
-        onDelete={handleDeleteMailbox}
-        onOpenSendTest={() => setSendTestOpen(true)}
-        onOpenReset={() => setResetOpen(true)}
-      />
-      <div className="flex min-w-0 flex-1 flex-col">
-        <nav aria-label="Primary views" className="flex h-10 shrink-0 items-center gap-1 border-b border-border px-3">
+      <div
+        id="inboxes-pane"
+        data-mobile-pane="inboxes"
+        data-mobile-active={mobilePane === 'inboxes' ? 'true' : 'false'}
+        className="hoomail-sidebar-pane h-full"
+      >
+        <MailboxSidebar
+          mailboxes={mailboxes}
+          selectedId={selectedMailboxId}
+          onSelect={selectMailbox}
+          onDelete={handleDeleteMailbox}
+          onOpenSendTest={() => setSendTestOpen(true)}
+          onOpenReset={() => setResetOpen(true)}
+          onBack={closeInboxes}
+        />
+      </div>
+      <div
+        data-mobile-content-active={mobilePane === 'inboxes' ? 'false' : 'true'}
+        className="hoomail-content flex min-w-0 flex-1 flex-col"
+      >
+        <nav aria-label="Primary views" className="hoomail-view-nav flex min-h-10 shrink-0 items-center gap-1 border-b border-border px-3">
+          <Button
+            size="sm"
+            variant={mobilePane === 'inboxes' ? 'secondary' : 'ghost'}
+            data-mobile-inboxes
+            aria-controls="inboxes-pane"
+            aria-expanded={mobilePane === 'inboxes'}
+            aria-label="Inboxes"
+            className="hoomail-touch-target px-2.5 text-xs lg:hidden"
+            onClick={openInboxes}
+          >
+            <Inbox className="size-3.5" aria-hidden="true" />
+            Inboxes
+          </Button>
           <Button
             size="sm"
             variant={view === 'mail' ? 'secondary' : 'ghost'}
-            className="h-7 px-2.5 text-xs"
-            onClick={() => setView('mail')}
+            className="hoomail-touch-target px-2.5 text-xs"
+            onClick={() => {
+              pendingMessageFocusRef.current = selectedMessageIdRef.current ?? messages[0]?.id ?? null
+              pendingListFocusRef.current = true
+              setView('mail')
+              setMobilePane('list')
+            }}
             aria-pressed={view === 'mail'}
           >
             <Mail className="size-3.5" aria-hidden="true" />
@@ -394,10 +534,14 @@ export function HoomailApp() {
           <Button
             size="sm"
             variant={view === 'calendar' ? 'secondary' : 'ghost'}
-            className="h-7 px-2.5 text-xs"
+            className="hoomail-touch-target px-2.5 text-xs"
             onClick={() => {
+              pendingMessageFocusRef.current = null
+              pendingListFocusRef.current = false
               if (selectedMailboxId != null) mutateCache(`/api/mailboxes/${selectedMailboxId}/events`)
               setView('calendar')
+              setMobilePane('calendar')
+              focusVisible('[data-mobile-calendar-back], [data-calendar-pane-focus]')
             }}
             aria-pressed={view === 'calendar'}
           >
@@ -405,9 +549,18 @@ export function HoomailApp() {
             Calendar
           </Button>
         </nav>
-        <div className="flex min-h-0 flex-1">
-          {view === 'mail' ? (
-            <>
+        <div className="hoomail-workspace flex min-h-0 min-w-0 flex-1">
+          <div
+            data-view-pane="mail"
+            hidden={view !== 'mail'}
+            aria-hidden={view === 'mail' ? undefined : 'true'}
+            className="hoomail-mail-panes flex min-h-0 min-w-0 flex-1"
+          >
+            <div
+              data-mobile-pane="list"
+              data-mobile-active={mobilePane === 'list' ? 'true' : 'false'}
+              className="hoomail-list-pane flex min-h-0 min-w-0 shrink-0"
+            >
               <MessageList
                 mailbox={selectedMailbox}
                 messages={messages}
@@ -416,23 +569,70 @@ export function HoomailApp() {
                 searchQuery={searchQuery}
                 onSearchChange={handleSearchChange}
                 onRowClick={handleRowClick}
+                onToggleSelection={toggleMessageSelection}
                 onAction={handleAction}
               />
-              <MessageViewer
-                message={displayedDetail?.message ?? null}
-                attachments={displayedDetail?.attachments ?? []}
-                selectedMessageId={selectedMessageId}
-                isLoading={messageLoading}
-                detailError={messageError}
+            </div>
+            <div
+              data-mobile-pane="reader"
+              data-mobile-active={mobilePane === 'reader' ? 'true' : 'false'}
+              className="hoomail-reader-pane flex min-h-0 min-w-0 flex-1 flex-col"
+            >
+              <div className="hoomail-reader-backbar shrink-0 border-b border-border px-3 py-1 lg:hidden">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  data-mobile-reader-back
+                  className="hoomail-touch-target px-2 text-xs"
+                  onClick={closeMessage}
+                  aria-label="Back to messages"
+                >
+                  <ChevronLeft className="size-4" aria-hidden="true" />
+                  Back to messages
+                </Button>
+              </div>
+              <div data-reader-pane-focus tabIndex={-1} className="hoomail-reader-content flex min-h-0 min-w-0 flex-1 outline-none">
+                <MessageViewer
+                  message={displayedDetail?.message ?? null}
+                  attachments={displayedDetail?.attachments ?? []}
+                  selectedMessageId={selectedMessageId}
+                  isLoading={messageLoading}
+                  detailError={messageError}
+                />
+              </div>
+            </div>
+          </div>
+          <div
+            data-view-pane="calendar"
+            data-mobile-pane="calendar"
+            data-mobile-active={mobilePane === 'calendar' ? 'true' : 'false'}
+            hidden={view !== 'calendar'}
+            aria-hidden={view === 'calendar' ? undefined : 'true'}
+            className="hoomail-calendar-pane flex min-h-0 min-w-0 flex-1 flex-col"
+          >
+            <div className="hoomail-calendar-backbar shrink-0 border-b border-border px-3 py-1 lg:hidden">
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                data-mobile-calendar-back
+                className="hoomail-touch-target px-2 text-xs"
+                onClick={returnToInbox}
+                aria-label="Back to inbox"
+              >
+                <ChevronLeft className="size-4" aria-hidden="true" />
+                Back to inbox
+              </Button>
+            </div>
+            <div data-calendar-pane-focus tabIndex={-1} className="hoomail-calendar-focus flex min-h-0 min-w-0 flex-1 outline-none">
+              <CalendarView
+                mailbox={selectedMailbox}
+                events={events}
+                onOpenMessage={openMessageFromCalendar}
               />
-            </>
-          ) : (
-            <CalendarView
-              mailbox={selectedMailbox}
-              events={events}
-              onOpenMessage={openMessageFromCalendar}
-            />
-          )}
+            </div>
+          </div>
         </div>
       </div>
       {sendTestOpen && <SendTestDialog open onOpenChange={setSendTestOpen} />}

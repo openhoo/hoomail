@@ -31,7 +31,7 @@ const InspectPanel = asyncComponent(
 
 const IFRAME_CONTAINMENT_STYLES = `
   <style>
-    html, body { max-width: 100%; }
+    html, body { max-width: 100%; overflow-x: auto; }
     img { max-width: 100%; }
   </style>
 `
@@ -254,8 +254,8 @@ export function MessageViewer({
             : 'Loading message'}
       </span>
       <div className={`flex min-h-0 min-w-0 flex-1 flex-col ${contentReady ? 'visible' : 'invisible'}`}>
-        <header className="shrink-0 border-b border-border px-5 py-4">
-        <h2 className="text-lg font-semibold leading-snug text-balance">
+        <header className="min-w-0 shrink-0 border-b border-border px-3 py-3 sm:px-5 sm:py-4">
+        <h2 className="min-w-0 break-words text-lg font-semibold leading-snug text-balance">
           {message.subject || '(no subject)'}
         </h2>
         <dl className="mt-2 flex flex-col gap-0.5 text-sm">
@@ -294,7 +294,7 @@ export function MessageViewer({
         )}
 
         {attachments.length > 0 && (
-          <div className="mt-3 flex flex-wrap gap-1.5">
+          <div className="mt-3 flex min-w-0 max-w-full flex-wrap gap-1.5">
             {attachments.map((att) => (
               <AttachmentChip key={att.id} attachment={att} />
             ))}
@@ -307,8 +307,8 @@ export function MessageViewer({
         onValueChange={setTab}
         className="flex min-h-0 flex-1 flex-col gap-0"
       >
-        <div className="shrink-0 border-b border-border px-5 py-2">
-          <TabsList className="h-8">
+        <div className="min-w-0 max-w-full shrink-0 overflow-x-auto overscroll-x-contain border-b border-border px-3 py-2 sm:px-5">
+          <TabsList className="h-8 min-w-max">
             <TabsTrigger value="html" disabled={htmlDoc == null} className="text-xs">
               HTML
             </TabsTrigger>
@@ -349,7 +349,7 @@ export function MessageViewer({
 
         <TabsContent value="text" className="min-h-0 flex-1 data-[state=inactive]:hidden">
           <ScrollArea className="h-full" aria-label="Plain text message">
-            <pre className="whitespace-pre-wrap px-5 py-4 font-mono text-sm leading-relaxed">
+            <pre className="whitespace-pre-wrap break-words px-5 py-4 font-mono text-sm leading-relaxed">
               {message.text ?? 'No plain text part.'}
             </pre>
           </ScrollArea>
@@ -443,13 +443,13 @@ function ViewportToolbar({
   downloadDisabled: boolean
 }) {
   const dimensionFieldClass =
-    'h-7 w-[4.5rem] rounded-md border border-input bg-background px-2 text-center font-mono text-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40'
+    'min-h-9 w-[4.5rem] shrink-0 rounded-md border border-input bg-background px-2 text-center font-mono text-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40'
 
   return (
     <div
       role="group"
       aria-label="Email viewport"
-      className="flex min-h-11 shrink-0 flex-wrap items-center gap-2 border-b border-border bg-background px-3 py-2"
+      className="flex min-h-11 min-w-0 max-w-full shrink-0 flex-wrap items-center gap-2 border-b border-border bg-background px-3 py-2"
     >
       <Smartphone className="size-4 text-muted-foreground" aria-hidden="true" />
       <label className="sr-only" for="email-preview-size">Preview size</label>
@@ -458,7 +458,7 @@ function ViewportToolbar({
         aria-label="Preview size"
         value={preset}
         onChange={(event) => onPresetChange(event.currentTarget.value as ViewportPreset)}
-        className="h-7 rounded-md border border-input bg-background px-2 text-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
+        className="h-9 min-w-0 max-w-full rounded-md border border-input bg-background px-2 text-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
       >
         <option value="fit">Fit to panel</option>
         {VIEWPORT_PRESETS.map((option) => (
@@ -479,7 +479,7 @@ function ViewportToolbar({
       </Button>
 
       {preset !== 'fit' && (
-        <div role="group" className="flex min-w-0 flex-wrap items-center gap-1" aria-label="Custom viewport dimensions">
+        <div role="group" className="flex min-w-0 max-w-full flex-wrap items-center gap-1" aria-label="Custom viewport dimensions">
           <ViewportDimensionField
             id="email-preview-width"
             label="Preview width"
@@ -512,10 +512,10 @@ function ViewportToolbar({
         Email viewport
       </span>
       {downloadState === 'loading' && (
-        <span role="status" aria-live="polite" className="text-xs text-muted-foreground">Preparing screenshot…</span>
+        <span role="status" aria-live="polite" className="max-w-full break-words text-xs text-muted-foreground">Preparing screenshot…</span>
       )}
       {downloadState === 'error' && (
-        <span role="alert" className="text-xs text-destructive">Could not download HTML screenshot.</span>
+        <span role="alert" className="max-w-full break-words text-xs text-destructive">Could not download HTML screenshot.</span>
       )}
     </div>
   )
@@ -735,32 +735,32 @@ function AttachmentChip({ attachment }: { attachment: AttachmentMeta }) {
   const chipBody = (
     <>
       {chipIcon}
-      <span className="max-w-48 truncate">{name}</span>
-      <span className="text-muted-foreground">{formatBytes(attachment.size)}</span>
+      <span className="min-w-0 max-w-48 truncate">{name}</span>
+      <span className="shrink-0 text-muted-foreground">{formatBytes(attachment.size)}</span>
     </>
   )
 
   const chip = (
-    <span className="inline-flex items-center overflow-hidden rounded-md border border-border bg-secondary text-xs text-secondary-foreground">
+    <span className="inline-flex max-w-full items-center overflow-hidden rounded-md border border-border bg-secondary text-xs text-secondary-foreground">
       {previewKind ? (
         <button
           type="button"
           onClick={() => setOpen(true)}
-          className="inline-flex items-center gap-1.5 px-2 py-1 transition-colors hover:bg-accent"
+          className="inline-flex min-h-10 min-w-0 max-w-full items-center gap-1.5 overflow-hidden px-2 py-1 transition-colors hover:bg-accent"
           aria-label={`Preview ${name}`}
         >
           {chipBody}
         </button>
       ) : (
-        <span className="inline-flex items-center gap-1.5 px-2.5 py-1">{chipBody}</span>
+        <span className="inline-flex min-h-10 min-w-0 max-w-full items-center gap-1.5 px-2.5 py-1">{chipBody}</span>
       )}
       <a
         href={`${url}?download=1`}
         download={attachment.filename || undefined}
-        className="self-stretch border-l border-border px-1.5 py-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        className="inline-flex min-h-10 min-w-10 shrink-0 items-center justify-center self-stretch border-l border-border px-2 py-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         aria-label={`Download ${name}`}
       >
-        <Download className="size-3 h-full" aria-hidden="true" />
+        <Download className="size-4" aria-hidden="true" />
       </a>
     </span>
   )
@@ -994,9 +994,9 @@ function TextPreview({ url, active }: { url: string; active: boolean }) {
 
 function HeaderRow({ label, children }: { label: string; children: ComponentChildren }) {
   return (
-    <div className="flex items-baseline gap-2">
+    <div className="flex min-w-0 items-baseline gap-2">
       <dt className="w-10 shrink-0 text-xs text-muted-foreground">{label}</dt>
-      <dd className="min-w-0 flex-1 truncate">{children}</dd>
+      <dd className="min-w-0 flex-1 break-words">{children}</dd>
     </div>
   )
 }

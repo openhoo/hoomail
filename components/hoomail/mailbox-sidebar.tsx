@@ -1,6 +1,6 @@
 import { useAutoAnimate } from '@formkit/auto-animate/preact'
 import { getTransitionSizes, type AutoAnimationPlugin } from '@formkit/auto-animate'
-import { Inbox, RotateCcw, Send, Trash2 } from '@/components/ui/icons'
+import { ChevronLeft, Inbox, RotateCcw, Send, Trash2 } from '@/components/ui/icons'
 import { Button } from '@/components/ui/button'
 import {
   ContextMenu,
@@ -76,6 +76,7 @@ export function MailboxSidebar({
   onDelete,
   onOpenSendTest,
   onOpenReset,
+  onBack,
 }: {
   mailboxes: Mailbox[]
   selectedId: number | null
@@ -83,24 +84,52 @@ export function MailboxSidebar({
   onDelete: (id: number) => void
   onOpenSendTest: () => void
   onOpenReset: () => void
+  onBack?: () => void
 }) {
   const [mailboxListRef] = useAutoAnimate<HTMLElement>(createMotionPlugin(220))
+
+  const deleteMailboxAndRestoreFocus = (id: number, index: number) => {
+    const focusTargetId = mailboxes[index + 1]?.id ?? mailboxes[index - 1]?.id
+    void Promise.resolve(onDelete(id)).then(() => requestAnimationFrame(() => {
+      const focusTarget = focusTargetId == null
+        ? document.querySelector<HTMLButtonElement>('[data-mailbox-fallback]')
+        : document.querySelector<HTMLButtonElement>(`[data-mailbox-id="${focusTargetId}"] [data-mailbox-select]`)
+      focusTarget?.focus()
+    }))
+  }
   return (
-    <aside aria-labelledby="inboxes-heading" className="flex h-full w-72 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
-      <header className="flex items-center gap-2.5 border-b border-sidebar-border px-4 py-3.5">
+    <aside
+      data-mailbox-sidebar
+      aria-labelledby="inboxes-heading"
+      className="flex h-full min-w-0 w-72 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground"
+    >
+      <header className="flex min-w-0 items-center gap-2.5 border-b border-sidebar-border px-4 py-3.5">
         <img
           src="/hoomail-logo.png"
           alt="hoomail owl logo"
           width={30}
           height={30}
-          className="rounded-md"
+          className="shrink-0 rounded-md"
         />
-        <div className="flex flex-col">
+        <div className="flex min-w-0 flex-1 flex-col">
           <span className="text-base font-semibold leading-tight tracking-tight">hoomail</span>
           <span className="text-xs text-muted-foreground leading-tight">email testing inbox</span>
         </div>
+        {onBack && (
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            data-mobile-inboxes-back
+            className="hoomail-touch-target shrink-0 px-2 text-xs lg:hidden"
+            onClick={onBack}
+            aria-label="Back to mail"
+          >
+            <ChevronLeft className="size-4" aria-hidden="true" />
+            Back
+          </Button>
+        )}
       </header>
-
       <div className="flex items-center justify-between px-4 pt-3 pb-1.5">
         <h2 id="inboxes-heading" className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
           Inboxes
@@ -119,16 +148,18 @@ export function MailboxSidebar({
             </div>
           )}
           {mailboxes.map((mailbox, index) => (
-            <div key={mailbox.id} data-mailbox-id={mailbox.id}>
-                <ContextMenu>
-                  <ContextMenuTrigger>
+            <div key={mailbox.id} data-mailbox-id={mailbox.id} className="min-w-0">
+              <ContextMenu>
+                <ContextMenuTrigger className="min-w-0">
+                  <div className="group flex min-w-0 items-stretch gap-1">
                     <button
                       type="button"
+                      data-mailbox-select
                       aria-current={selectedId === mailbox.id ? "true" : undefined}
                       aria-label={`${mailbox.address}, ${mailbox.total_count} messages, ${mailbox.unread_count} unread`}
                       onClick={() => onSelect(mailbox.id)}
                       className={cn(
-                        'flex w-full items-center gap-2 overflow-hidden rounded-md px-2.5 text-left transition-colors',
+                        'flex min-h-11 min-w-0 flex-1 items-center gap-2 overflow-hidden rounded-md px-2.5 text-left transition-colors',
                         selectedId === mailbox.id
                           ? 'bg-sidebar-accent text-sidebar-accent-foreground'
                           : 'hover:bg-sidebar-accent/60'
@@ -151,25 +182,33 @@ export function MailboxSidebar({
                         <span className="sr-only">{mailbox.unread_count} unread</span>
                       </InlinePresence>
                     </button>
-                  </ContextMenuTrigger>
-                  <ContextMenuContent className="w-52">
-                    <ContextMenuItem
-                      variant="destructive"
-                      onClick={() => {
-                        const focusTargetId = mailboxes[index + 1]?.id ?? mailboxes[index - 1]?.id
-                        void Promise.resolve(onDelete(mailbox.id)).then(() => requestAnimationFrame(() => {
-                          const focusTarget = focusTargetId == null
-                            ? document.querySelector<HTMLButtonElement>('[data-mailbox-fallback]')
-                            : document.querySelector<HTMLButtonElement>(`[data-mailbox-id="${focusTargetId}"] button`)
-                          focusTarget?.focus()
-                        }))
+                    <Button
+                      type="button"
+                      size="icon-sm"
+                      variant="ghost"
+                      data-mailbox-delete
+                      aria-label={`Delete inbox ${mailbox.address}`}
+                      className="hoomail-touch-target shrink-0 self-stretch text-destructive hover:text-destructive lg:hidden"
+                      onClick={(event) => {
+                        event.preventDefault()
+                        event.stopPropagation()
+                        deleteMailboxAndRestoreFocus(mailbox.id, index)
                       }}
                     >
                       <Trash2 className="size-4" aria-hidden="true" />
-                      Delete inbox
-                    </ContextMenuItem>
-                  </ContextMenuContent>
-                </ContextMenu>
+                    </Button>
+                  </div>
+                </ContextMenuTrigger>
+                <ContextMenuContent className="w-52">
+                  <ContextMenuItem
+                    variant="destructive"
+                    onClick={() => deleteMailboxAndRestoreFocus(mailbox.id, index)}
+                  >
+                    <Trash2 className="size-4" aria-hidden="true" />
+                    Delete inbox
+                  </ContextMenuItem>
+                </ContextMenuContent>
+              </ContextMenu>
             </div>
           ))}
         </nav>
@@ -177,11 +216,11 @@ export function MailboxSidebar({
 
       <div className="border-t border-sidebar-border p-3">
         <div className="flex gap-2">
-          <Button data-mailbox-fallback size="sm" className="flex-1" onClick={onOpenSendTest}>
+          <Button data-mailbox-fallback size="sm" className="hoomail-touch-target min-w-0 flex-1" onClick={onOpenSendTest}>
             <Send className="size-3.5" aria-hidden="true" />
             Send test
           </Button>
-          <Button size="sm" variant="outline" className="flex-1" onClick={onOpenReset}>
+          <Button size="sm" variant="outline" className="hoomail-touch-target min-w-0 flex-1" onClick={onOpenReset}>
             <RotateCcw className="size-3.5" aria-hidden="true" />
             Reset
           </Button>

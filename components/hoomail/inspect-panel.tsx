@@ -165,7 +165,7 @@ export function InspectPanel({ messageId, active }: { messageId: number; active:
     <>
       <span role="status" aria-live="polite" className="sr-only">Message analysis complete</span>
       <ScrollArea className="h-full" aria-label="Message inspection results">
-        <div className="flex flex-col gap-6 px-5 py-4">
+        <div className="flex min-w-0 flex-col gap-6 px-3 py-4 sm:px-5">
           <InspectionSummary report={inspection} />
 
           {CATEGORY_META.map(([category, label]) => {
@@ -228,8 +228,8 @@ function InspectionSummary({ report }: { report: InspectionReport }) {
         ))}
       </dl>
       {report.analysis.state === 'partial' && (
-        <div className="mt-3 border-t border-border/60 pt-3 text-xs leading-relaxed text-muted-foreground">
-          {report.analysis.parsedThroughPath && <p>Parsed through MIME path <code className="font-mono">{report.analysis.parsedThroughPath}</code>.</p>}
+        <div className="mt-3 break-words border-t border-border/60 pt-3 text-xs leading-relaxed text-muted-foreground">
+          {report.analysis.parsedThroughPath && <p>Parsed through MIME path <code className="break-all font-mono">{report.analysis.parsedThroughPath}</code>.</p>}
           {report.analysis.unavailableRuleFamilies.length > 0 && (
             <p>Unavailable checks: {report.analysis.unavailableRuleFamilies.join(', ')}.</p>
           )}
@@ -266,13 +266,13 @@ function FindingRow({ finding }: { finding: InspectionFinding }) {
         <OutcomeIcon className={cn('mt-0.5 size-4 shrink-0', outcome.className)} aria-hidden="true" />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-1.5">
-            <p className="mr-auto text-sm font-medium leading-snug">{finding.label}</p>
+            <p className="mr-auto break-words text-sm font-medium leading-snug">{finding.label}</p>
             <MetaBadge value={finding.severity} />
             <MetaBadge value={finding.basis} />
             <MetaBadge value={finding.applicability} />
           </div>
           <span className="sr-only">{outcome.label}</span>
-          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{finding.detail}</p>
+          <p className="mt-1 break-words text-xs leading-relaxed text-muted-foreground">{finding.detail}</p>
           {finding.evidence.length > 0 && <EvidenceList evidence={finding.evidence} truncated={finding.evidenceTruncated} />}
           {finding.reference && <ReferenceLink reference={finding.reference} />}
         </div>
@@ -298,7 +298,7 @@ function EvidenceList({ evidence, truncated }: { evidence: InspectionEvidence[];
       <ul className="flex flex-col gap-1.5">
         {evidence.map((item, index) => (
           <li key={index} className="text-xs leading-relaxed text-muted-foreground">
-            <span className="font-medium text-foreground">{evidenceLocation(item)}</span>
+            <span className="break-words font-medium text-foreground">{evidenceLocation(item)}</span>
             {item.value !== undefined && <span className="block break-words font-mono">{item.value}</span>}
           </li>
         ))}
@@ -325,7 +325,7 @@ function ReferenceLink({ reference }: { reference: { label: string; url: string 
       href={reference.url}
       target="_blank"
       rel="noopener noreferrer"
-      className="mt-2 inline-flex items-center gap-1 rounded-sm text-xs font-medium text-foreground underline underline-offset-2 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+      className="mt-2 inline-flex max-w-full items-center gap-1 break-words rounded-sm text-xs font-medium text-foreground underline underline-offset-2 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
       aria-label={`Open source ${reference.label} in a new tab`}
     >
       {reference.label}
@@ -339,12 +339,12 @@ function ResourceRow({ resource }: { resource: InspectionResource }) {
   const Icon = meta.icon
   const canOpen = resource.url !== '' && safeExternalURL(resource.url, true)
   return (
-    <li className="flex items-start gap-2.5 px-3 py-2.5">
+    <li className="flex min-w-0 items-start gap-2.5 px-3 py-2.5">
       <Icon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="text-xs font-medium">{meta.label}</span>
-          {resource.path && <code className="font-mono text-[12px] text-muted-foreground">{resource.path}</code>}
+          {resource.path && <code className="break-all font-mono text-[12px] text-muted-foreground">{resource.path}</code>}
           {resource.occurrenceCount > 1 && <Badge variant="secondary" className="text-[12px]">{resource.occurrenceCount} occurrences</Badge>}
         </div>
         {resource.url && <p className="break-all font-mono text-xs">{resource.url}</p>}
