@@ -77,7 +77,7 @@ export function SendTestDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="max-h-[calc(100dvh-2rem)] sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Send a test email</DialogTitle>
           <DialogDescription>
@@ -120,7 +120,7 @@ export function SendTestDialog({
             <div
               role="radiogroup"
               aria-labelledby="message-type-label"
-              className="grid grid-cols-2 gap-1.5"
+              className="grid grid-cols-2 gap-2 sm:gap-1.5"
               onKeyDown={(event) => {
                 const radios = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]')]
                 const current = radios.indexOf(document.activeElement as HTMLButtonElement)
@@ -166,7 +166,7 @@ export function SendTestDialog({
                       return value === 'plain' ? 'hoomail delivery test' : 'Owl standup meeting'
                     })
                   }}
-                  className="justify-start text-xs"
+                  className="justify-start text-xs [@media(pointer:coarse)]:min-h-11"
                 >
                   {label}
                 </Button>
@@ -182,11 +182,21 @@ export function SendTestDialog({
           </div>
           {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
         </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={sending}>
+        <DialogFooter className="gap-3 sm:gap-2">
+          <Button
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            disabled={sending}
+            className="w-full sm:w-auto"
+          >
             Cancel
           </Button>
-          <Button onClick={send} disabled={sending} aria-busy={sending || undefined}>
+          <Button
+            onClick={send}
+            disabled={sending}
+            aria-busy={sending || undefined}
+            className="w-full sm:w-auto"
+          >
             {sending ? (
               <>
                 <span className="sr-only" role="status">Sending test email</span>
@@ -254,7 +264,7 @@ export function ResetDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-sm">
+      <DialogContent className="max-h-[calc(100dvh-2rem)] sm:max-w-sm">
         <DialogHeader>
           <DialogTitle>Reset hoomail?</DialogTitle>
           <DialogDescription>
@@ -263,11 +273,22 @@ export function ResetDialog({
           </DialogDescription>
         </DialogHeader>
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={resetting}>
+        <DialogFooter className="gap-3 sm:gap-2">
+          <Button
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            disabled={resetting}
+            className="w-full sm:w-auto"
+          >
             Cancel
           </Button>
-          <Button variant="destructive" onClick={reset} disabled={resetting} aria-busy={resetting || undefined}>
+          <Button
+            variant="destructive"
+            onClick={reset}
+            disabled={resetting}
+            aria-busy={resetting || undefined}
+            className="w-full sm:w-auto"
+          >
             {resetting ? (
               <>
                 <span className="sr-only" role="status">Resetting hoomail</span>

@@ -1,5 +1,5 @@
 import { createContext, type ComponentChildren, type JSX } from 'preact'
-import { useContext, useEffect, useRef, useState } from 'preact/hooks'
+import { useContext, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 import { createPortal } from 'preact/compat'
 
 import { cn } from '@/lib/utils'
@@ -95,7 +95,27 @@ function ContextMenuPortal({ children }: { children?: ComponentChildren }) {
 function ContextMenuContent({ className, children, ...props }: JSX.HTMLAttributes<HTMLDivElement>) {
   const { open, x, y, close } = useMenu()
   const ref = useRef<HTMLDivElement>(null)
+  const [placement, setPlacement] = useState({ left: x, top: y })
 
+  useLayoutEffect(() => {
+    if (!open) return
+    const content = ref.current
+    if (!content) return
+    const viewport = window.visualViewport
+    const viewportWidth = viewport?.width ?? window.innerWidth
+    const viewportHeight = viewport?.height ?? window.innerHeight
+    const gutter = 8
+    const rect = content.getBoundingClientRect()
+    const nextPlacement = {
+      left: Math.min(Math.max(x, gutter), Math.max(gutter, viewportWidth - rect.width - gutter)),
+      top: Math.min(Math.max(y, gutter), Math.max(gutter, viewportHeight - rect.height - gutter)),
+    }
+    setPlacement((current) =>
+      current.left === nextPlacement.left && current.top === nextPlacement.top
+        ? current
+        : nextPlacement
+    )
+  }, [open, x, y])
   useEffect(() => {
     if (!open) return
     const dismiss = () => close(false)
@@ -133,7 +153,7 @@ function ContextMenuContent({ className, children, ...props }: JSX.HTMLAttribute
     window.addEventListener('scroll', dismissOutside, true)
     window.addEventListener('wheel', dismissOutside)
     window.addEventListener('resize', dismiss)
-    requestAnimationFrame(() => ref.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus())
+    requestAnimationFrame(() => ref.current?.querySelector<HTMLElement>('[role="menuitem"]:not(:disabled)')?.focus())
     return () => {
       window.removeEventListener('pointerdown', dismiss)
       window.removeEventListener('blur', dismiss)
@@ -152,10 +172,10 @@ function ContextMenuContent({ className, children, ...props }: JSX.HTMLAttribute
         role="menu"
         data-slot="context-menu-content"
         className={cn(
-          'fixed z-50 max-h-[calc(100vh-1rem)] min-w-36 overflow-auto rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 outline-none',
+          'fixed z-50 max-h-[calc(100dvh-1rem)] max-w-[calc(100vw-1rem)] min-w-36 touch-pan-y overflow-auto overscroll-contain rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 outline-none',
           className
         )}
-        style={{ left: Math.min(x, window.innerWidth - 224), top: Math.min(y, window.innerHeight - 160) }}
+        style={{ left: placement.left, top: placement.top }}
         onPointerDown={(event) => event.stopPropagation()}
         {...props}
       >
@@ -176,7 +196,7 @@ function ContextMenuItem({ className, variant = 'default', disabled, onClick, ..
       data-slot="context-menu-item"
       data-variant={variant}
       className={cn(
-        'group/context-menu-item relative flex w-full cursor-default items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-sm outline-none hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*=size-])]:size-4',
+        'group/context-menu-item relative flex min-h-7 w-full touch-manipulation cursor-default items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-sm outline-none [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:px-3 [@media(pointer:coarse)]:py-2 hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*=size-])]:size-4',
         variant === 'destructive' && 'text-destructive hover:bg-destructive/10 hover:text-destructive focus:bg-destructive/10 focus:text-destructive',
         className
       )}

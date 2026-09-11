@@ -78,7 +78,7 @@ function partstatBadge(partstat?: string): { label: string; className: string } 
  */
 export function InviteCard({ events }: { events: IcalEvent[] }) {
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex min-w-0 flex-col gap-2">
       {events.map((event, i) => {
         const info = methodInfo(event)
         const Icon = info.icon
@@ -88,11 +88,11 @@ export function InviteCard({ events }: { events: IcalEvent[] }) {
           <div
             key={`${event.uid}-${i}`}
             className={cn(
-              'rounded-lg border p-3.5',
+              'min-w-0 rounded-lg border p-3.5',
               cancelled ? 'border-destructive/30 bg-destructive/5' : 'border-primary/25 bg-primary/5'
             )}
           >
-            <div className="flex items-center gap-2">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
               <Icon
                 className={cn('size-4 shrink-0', cancelled ? 'text-destructive' : 'text-primary')}
                 aria-hidden="true"
@@ -109,42 +109,42 @@ export function InviteCard({ events }: { events: IcalEvent[] }) {
 
             <p
               className={cn(
-                'mt-2 text-base font-semibold leading-snug text-balance',
+                'mt-2 break-words text-base font-semibold leading-snug text-balance',
                 cancelled && 'line-through decoration-destructive/60'
               )}
             >
               {event.summary || '(untitled event)'}
             </p>
-            <p className="mt-0.5 text-sm text-muted-foreground">{formatEventRange(event)}</p>
+            <p className="mt-0.5 break-words text-sm text-muted-foreground">{formatEventRange(event)}</p>
 
             {event.location && (
-              <p className="mt-1.5 flex items-center gap-1.5 text-sm">
-                <MapPin className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-                {event.location}
+              <p className="mt-1.5 flex min-w-0 items-start gap-1.5 text-sm">
+                <MapPin className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                <span className="min-w-0 break-words">{event.location}</span>
               </p>
             )}
 
             {event.organizerAddress && (
-              <p className="mt-1 flex items-center gap-1.5 text-sm">
-                <User className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-                <span className="text-muted-foreground">Organizer:</span>
-                <span className="text-xs">
+              <p className="mt-1 flex min-w-0 items-start gap-1.5 text-sm">
+                <User className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                <span className="shrink-0 text-muted-foreground">Organizer:</span>
+                <span className="min-w-0 break-words text-xs">
                   {event.organizerName || event.organizerAddress}
                 </span>
               </p>
             )}
 
             {event.attendees.length > 0 && (
-              <div className="mt-1 flex items-start gap-1.5 text-sm">
+              <div className="mt-1 flex min-w-0 items-start gap-1.5 text-sm">
                 <Users
                   className="mt-0.5 size-3.5 shrink-0 text-muted-foreground"
                   aria-hidden="true"
                 />
-                <div className="flex flex-wrap gap-x-3 gap-y-0.5">
+                <div className="flex min-w-0 flex-wrap gap-x-3 gap-y-0.5">
                   {event.attendees.map((att) => {
                     const ps = partstatBadge(att.partstat)
                     return (
-                      <span key={att.address} className="text-xs">
+                      <span key={att.address} className="min-w-0 break-words text-xs">
                         {att.name || att.address}
                         <span className={cn('ml-1 text-[12px]', ps.className)}>({ps.label})</span>
                       </span>
@@ -155,7 +155,7 @@ export function InviteCard({ events }: { events: IcalEvent[] }) {
             )}
 
             {event.description && (
-              <p className="mt-2 border-t border-border/60 pt-2 text-xs leading-relaxed text-muted-foreground">
+              <p className="mt-2 break-words border-t border-border/60 pt-2 text-xs leading-relaxed text-muted-foreground">
                 {event.description}
               </p>
             )}

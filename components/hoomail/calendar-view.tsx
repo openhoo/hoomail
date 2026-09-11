@@ -132,15 +132,15 @@ export function CalendarView({
 
   return (
     <section aria-label="Calendar" className="flex min-w-0 flex-1 flex-col bg-background">
-      <header className="flex h-12 shrink-0 items-center justify-between border-b border-border px-5">
-        <div className="flex items-center gap-2">
-          <CalendarDays className="size-4 text-primary" aria-hidden="true" />
-          <h2 className="text-sm font-semibold">{monthLabel}</h2>
-          <span className="text-xs tabular-nums text-muted-foreground">
+      <header className="flex min-h-12 flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-border px-3 py-2 sm:px-5">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <CalendarDays className="size-4 shrink-0 text-primary" aria-hidden="true" />
+          <h2 className="min-w-0 truncate text-sm font-semibold">{monthLabel}</h2>
+          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
             {events.length} {events.length === 1 ? 'event' : 'events'}
           </span>
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex shrink-0 items-center gap-1">
           <Button
             size="sm"
             variant="ghost"
@@ -174,14 +174,14 @@ export function CalendarView({
         </div>
       </header>
 
-      <div className="flex min-h-0 flex-1 flex-col">
-        <div role="grid" aria-label={monthLabel} className="flex min-h-0 flex-[3] flex-col">
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+        <div role="grid" aria-label={monthLabel} className="flex min-h-[19rem] flex-[3] flex-col">
           <div role="row" className="grid shrink-0 grid-cols-7 border-b border-border">
             {WEEKDAYS.map((day) => (
               <div
                 key={day}
                 role="columnheader"
-                className="px-2 py-1.5 text-center text-[12px] font-medium uppercase tracking-wider text-muted-foreground"
+                className="px-1 py-1.5 text-center text-[12px] font-medium uppercase tracking-wider text-muted-foreground sm:px-2"
               >
                 {day}
               </div>
@@ -217,7 +217,7 @@ export function CalendarView({
                       }}
                       onClick={() => setSelectedDay(key)}
                       className={cn(
-                        'flex min-h-0 flex-col items-stretch gap-0.5 overflow-hidden border-b border-r border-border/60 p-1 text-left transition-colors',
+                        'flex min-h-11 min-w-0 flex-col items-stretch gap-0.5 overflow-hidden border-b border-r border-border/60 p-1.5 text-left touch-manipulation transition-colors',
                         !inMonth && 'bg-muted/30',
                         isSelected ? 'bg-accent' : 'hover:bg-accent/50'
                       )}
@@ -240,7 +240,7 @@ export function CalendarView({
                         <span
                           key={event.id}
                           className={cn(
-                            'truncate rounded-sm px-1 py-px text-[12px] leading-tight',
+                            'min-w-0 truncate rounded-sm px-1 py-px text-[12px] leading-tight',
                             event.status === 'CANCELLED'
                               ? 'bg-destructive/15 text-destructive line-through'
                               : 'bg-primary/20 text-foreground'
@@ -262,8 +262,8 @@ export function CalendarView({
           </div>
         </div>
 
-        <div className="flex min-h-0 flex-[2] flex-col border-t border-border">
-          <div className="shrink-0 px-4 py-2">
+        <div className="flex min-h-40 min-w-0 flex-[2] flex-col border-t border-border">
+          <div className="shrink-0 px-3 py-2 sm:px-4">
             <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
               {new Date(selectedDay).toLocaleDateString(undefined, {
                 weekday: 'long',
@@ -276,7 +276,7 @@ export function CalendarView({
             {selectedDayEvents.length === 0 && (
               <p className="px-4 pb-4 text-xs text-muted-foreground">No events on this day.</p>
             )}
-            <ul className="flex flex-col gap-2 px-4 pb-4">
+            <ul className="flex flex-col gap-2 px-3 pb-4 sm:px-4">
               {selectedDayEvents.map((event) => {
                 const cancelled = event.status === 'CANCELLED'
                 return (
@@ -289,16 +289,16 @@ export function CalendarView({
                       disabled={event.lastMessageId == null}
                       aria-label={`${event.summary || 'untitled event'}, ${eventTime(event)}${event.location ? `, ${event.location}` : ''}${event.lastMessageId == null ? ', no source message available' : ''}`}
                       className={cn(
-                        'w-full rounded-lg border p-3 text-left transition-colors',
+                        'min-h-11 min-w-0 w-full rounded-lg border p-3 text-left touch-manipulation transition-colors',
                         cancelled
                           ? 'border-destructive/30 bg-destructive/5 hover:bg-destructive/10'
                           : 'border-border bg-card hover:bg-accent/50'
                       )}
                     >
-                      <div className="flex items-center justify-between gap-2">
+                      <div className="flex min-w-0 items-center justify-between gap-2">
                         <span
                           className={cn(
-                            'min-w-0 flex-1 truncate text-sm font-semibold',
+                            'min-w-0 flex-1 break-words text-sm font-semibold',
                             cancelled && 'line-through decoration-destructive/60'
                           )}
                         >
@@ -318,17 +318,17 @@ export function CalendarView({
                           {event.status.toLowerCase()}
                         </Badge>
                       </div>
-                      <p className="mt-0.5 text-xs text-muted-foreground">{eventTime(event)}</p>
+                      <p className="mt-0.5 break-words text-xs text-muted-foreground">{eventTime(event)}</p>
                       {event.location && (
-                        <p className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
-                          <MapPin className="size-3 shrink-0" aria-hidden="true" />
-                          {event.location}
+                        <p className="mt-1 flex min-w-0 items-start gap-1 text-xs text-muted-foreground">
+                          <MapPin className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
+                          <span className="min-w-0 break-words">{event.location}</span>
                         </p>
                       )}
                       {event.organizerAddress && (
-                        <p className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
-                          <User className="size-3 shrink-0" aria-hidden="true" />
-                          {event.organizerName || event.organizerAddress}
+                        <p className="mt-0.5 flex min-w-0 items-start gap-1 text-xs text-muted-foreground">
+                          <User className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
+                          <span className="min-w-0 break-words">{event.organizerName || event.organizerAddress}</span>
                         </p>
                       )}
                     </button>

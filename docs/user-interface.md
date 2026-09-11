@@ -4,6 +4,14 @@ Hoomail is organized around inboxes. Select an inbox in the left sidebar, then u
 
 This guide describes the current mouse, keyboard, focus, loading, and error behavior. It also calls out limitations that may matter during manual testing and accessibility review.
 
+## Phone and tablet layout
+
+Below 1024 CSS pixels, Hoomail shows one pane at a time. **Inboxes** opens the inbox list and its **Send test** and **Reset** actions. Select an inbox to see its messages, then open a message to read it. **Back to messages** returns to the list; **Mail** and **Calendar** remain available in the top navigation, and **Back to inbox** returns from the calendar to the message list.
+
+Message rows have touch-accessible selection checkboxes and an **Actions** button, so selecting multiple messages, marking them read or unread, and deleting them do not require modifier keys or right-click. Inbox rows also expose a delete action on narrow screens. The same context-menu targeting rules apply to touch and desktop actions.
+
+At 1024 pixels and above, the inbox sidebar, message list, and reader appear together. Resizing between these layouts keeps the current reader mounted. Reader tabs and wide email content scroll within their own regions rather than widening the application. Dialogs are height-limited and scrollable, including in short landscape viewports; the calendar scrolls when there is not enough room for its day grid and event list.
+
 ## Inboxes and global actions
 
 ### Inbox creation and selection
@@ -256,8 +264,9 @@ Arrow navigation moves native browser focus before changing the open message, ke
 Inbox and message context menus can be opened with:
 
 - right-click;
-- the keyboard **Context Menu** key; or
-- `Shift`+`F10`.
+- the keyboard **Context Menu** key;
+- `Shift`+`F10`; or
+- a message row's **Actions** button on narrow screens.
 
 When a context menu opens, its first item receives focus.
 

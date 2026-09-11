@@ -18,6 +18,25 @@ import { cn } from '@/lib/utils'
 import { formatRelativeTime, type Mailbox, type MessageListItem } from './use-hoomail'
 
 /**
+ * Open the row's existing context menu from a real, visible touch button.
+ * Dispatching the same bubbling event keeps pointer, keyboard, and context
+ * menu actions on one path rather than maintaining a second action menu.
+ */
+function openRowContextMenu(event: JSX.TargetedMouseEvent<HTMLButtonElement>) {
+  event.preventDefault()
+  event.stopPropagation()
+  const trigger = event.currentTarget.closest<HTMLElement>('[data-slot="context-menu-trigger"]')
+  if (!trigger) return
+  const rect = event.currentTarget.getBoundingClientRect()
+  trigger.dispatchEvent(new MouseEvent('contextmenu', {
+    bubbles: true,
+    cancelable: true,
+    clientX: Math.round(rect.left + rect.width / 2),
+    clientY: Math.round(rect.top + rect.height / 2),
+  }))
+}
+
+/**
  * AutoAnimate plugin emitting exact-duration ease-out effects for every action.
  * The library's options path stretches additions to duration * 1.5 with ease-in,
  * and its built-in reduced-motion guard only covers options, not plugins.
@@ -81,6 +100,7 @@ export function MessageList({
   searchQuery,
   onSearchChange,
   onRowClick,
+  onToggleSelection,
   onAction,
 }: {
   mailbox: Mailbox | null
@@ -90,9 +110,11 @@ export function MessageList({
   searchQuery: string
   onSearchChange: (q: string) => void
   onRowClick: (id: number, event: JSX.TargetedMouseEvent<HTMLButtonElement>) => void
+  onToggleSelection: (id: number) => void
   onAction: (action: 'delete' | 'read' | 'unread', ids: number[]) => void
 }) {
   const searchRef = useRef<HTMLInputElement>(null)
+  const hasSelection = selectedIds.size > 0
   const multiSelected = selectedIds.size > 1
   const hasSelectedMessage = selectedId != null && messages.some((message) => message.id === selectedId)
   const [messageListRef] = useAutoAnimate<HTMLUListElement>(createMotionPlugin(220))
@@ -101,11 +123,14 @@ export function MessageList({
   /** Ids an action should apply to when triggered from a row's context menu */
   const actionTargets = (rowId: number): number[] =>
     selectedIds.has(rowId) ? [...selectedIds] : [rowId]
+ 
 
   return (
     <section
+      data-message-list-shell
+      tabIndex={-1}
       aria-labelledby="message-list-heading"
-      className="flex h-full w-96 shrink-0 flex-col border-r border-border bg-background"
+      className="flex h-full min-w-0 w-96 shrink-0 flex-col border-r border-border bg-background outline-none"
     >
       <header className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-border px-4">
         <h2 id="message-list-heading" className="min-w-0 flex-1 truncate text-sm font-medium">
@@ -132,7 +157,7 @@ export function MessageList({
               value={searchQuery}
               onInput={(event) => onSearchChange(event.currentTarget.value)}
               placeholder="Search subject, sender, body…"
-              className="h-8 pl-8 pr-8 text-sm"
+              className="h-8 min-w-0 pl-8 pr-12 text-sm hoomail-touch-target"
               aria-label="Search messages"
             />
             {searchQuery && (
@@ -142,7 +167,7 @@ export function MessageList({
                   onSearchChange('')
                   searchRef.current?.focus()
                 }}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
+                className="hoomail-touch-target absolute right-0 top-1/2 flex -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground"
                 aria-label="Clear search"
               >
                 <X className="size-3.5" aria-hidden="true" />
@@ -153,15 +178,15 @@ export function MessageList({
       )}
 
       <div ref={toolbarRef}>
-        {multiSelected && (
+        {hasSelection && (
           <div className="border-b border-border bg-accent/50">
-            <div className="flex items-center justify-between gap-2 px-3 py-1.5">
+            <div className="hoomail-bulk-toolbar flex flex-wrap items-center justify-between gap-2 px-3 py-1.5">
               <span className="text-xs font-medium">{selectedIds.size} selected</span>
-              <div className="flex items-center gap-1">
+              <div className="flex flex-wrap items-center justify-end gap-1">
                 <Button
                   size="sm"
                   variant="ghost"
-                  className="h-7 px-2 text-xs"
+                  className="hoomail-touch-target h-7 px-2 text-xs"
                   onClick={() => onAction('read', [...selectedIds])}
                 >
                   <MailOpen className="size-3.5" aria-hidden="true" />
@@ -170,7 +195,7 @@ export function MessageList({
                 <Button
                   size="sm"
                   variant="ghost"
-                  className="h-7 px-2 text-xs"
+                  className="hoomail-touch-target h-7 px-2 text-xs"
                   onClick={() => onAction('unread', [...selectedIds])}
                 >
                   <Mail className="size-3.5" aria-hidden="true" />
@@ -179,7 +204,7 @@ export function MessageList({
                 <Button
                   size="sm"
                   variant="ghost"
-                  className="h-7 px-2 text-xs text-destructive hover:text-destructive"
+                  className="hoomail-touch-target h-7 px-2 text-xs text-destructive hover:text-destructive"
                   onClick={() => onAction('delete', [...selectedIds])}
                 >
                   <Trash2 className="size-3.5" aria-hidden="true" />
@@ -213,108 +238,132 @@ export function MessageList({
             const relativeTime = formatRelativeTime(message.received_at)
             const isTabStop = selectedId === message.id || (!hasSelectedMessage && index === 0)
             return (
-              <li key={message.id}>
-                  <ContextMenu>
-                    <ContextMenuTrigger>
-                      <button
-                        type="button"
-                        data-message-id={message.id}
-                        tabIndex={isTabStop ? 0 : -1}
-                        onClick={(event) => onRowClick(message.id, event)}
-                        className={cn(
-                          'reactive-message flex w-full flex-col gap-0.5 border-b border-border/60 px-4 py-3 text-left transition-[background-color,color] duration-200',
-                          message.is_read ? 'is-read' : 'is-unread',
-                          isChecked
-                            ? 'bg-primary/15'
-                            : selectedId === message.id
-                              ? 'bg-accent'
-                              : 'hover:bg-accent/50'
+              <li key={message.id} className="min-w-0">
+                <ContextMenu>
+                  <ContextMenuTrigger className="flex min-w-0 items-stretch">
+                    <label
+                      className="hoomail-message-select hoomail-touch-target flex shrink-0 cursor-pointer items-center justify-center px-1 lg:hidden"
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={() => onToggleSelection(message.id)}
+                        aria-label={`Select message from ${message.from_name || message.from_address || 'Unknown sender'}, ${message.subject || 'no subject'}`}
+                        className="size-4 cursor-pointer rounded border-input accent-primary"
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      data-message-id={message.id}
+                      tabIndex={isTabStop ? 0 : -1}
+                      onClick={(event) => onRowClick(message.id, event)}
+                      className={cn(
+                        'reactive-message flex min-h-11 min-w-0 flex-1 flex-col gap-0.5 border-b border-border/60 px-3 py-3 text-left transition-[background-color,color] duration-200',
+                        message.is_read ? 'is-read' : 'is-unread',
+                        isChecked
+                          ? 'bg-primary/15'
+                          : selectedId === message.id
+                            ? 'bg-accent'
+                            : 'hover:bg-accent/50'
+                      )}
+                      aria-pressed={isChecked}
+                      aria-current={selectedId === message.id ? "true" : undefined}
+                      aria-label={`${message.from_name || message.from_address || 'Unknown sender'}, ${message.subject || 'no subject'}, ${message.is_read ? 'read' : 'unread'}, ${relativeTime}`}
+                    >
+                      <div className="flex min-w-0 items-center">
+                        <InlinePresence
+                          visible={!message.is_read}
+                          className="reactive-unread-dot mr-2 size-2 shrink-0 rounded-full bg-primary"
+                        >
+                          <span className="sr-only">Unread</span>
+                        </InlinePresence>
+                        <span
+                          className={cn(
+                            'min-w-0 flex-1 truncate text-sm',
+                            message.is_read ? 'text-muted-foreground' : 'font-semibold'
+                          )}
+                        >
+                          {message.from_name || message.from_address || 'Unknown sender'}
+                        </span>
+                        <span className="shrink-0 text-xs text-muted-foreground">
+                          {relativeTime}
+                        </span>
+                      </div>
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        <span
+                          data-message-subject
+                          className={cn(
+                            'min-w-0 flex-1 truncate text-sm',
+                            message.is_read ? 'text-muted-foreground' : 'text-foreground'
+                          )}
+                        >
+                          {message.subject || '(no subject)'}
+                        </span>
+                        {message.has_ical === 1 && (
+                          <CalendarDays
+                            className="size-3 shrink-0 text-primary"
+                            aria-label="Calendar invitation"
+                          />
                         )}
-                        aria-pressed={isChecked}
-                        aria-current={selectedId === message.id ? "true" : undefined}
-                        aria-label={`${message.from_name || message.from_address || 'Unknown sender'}, ${message.subject || 'no subject'}, ${message.is_read ? 'read' : 'unread'}, ${relativeTime}`}
-                      >
-                        <div className="flex items-center">
-                          <InlinePresence
-                            visible={!message.is_read}
-                            className="reactive-unread-dot mr-2 size-2 shrink-0 rounded-full bg-primary"
-                          >
-                            <span className="sr-only">Unread</span>
-                          </InlinePresence>
-                          <span
-                            className={cn(
-                              'min-w-0 flex-1 truncate text-sm',
-                              message.is_read ? 'text-muted-foreground' : 'font-semibold'
-                            )}
-                          >
-                            {message.from_name || message.from_address || 'Unknown sender'}
-                          </span>
-                          <span className="shrink-0 text-xs text-muted-foreground">
-                            {relativeTime}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-1.5">
-                          <span
-                            data-message-subject
-                            className={cn(
-                              'min-w-0 flex-1 truncate text-sm',
-                              message.is_read ? 'text-muted-foreground' : 'text-foreground'
-                            )}
-                          >
-                            {message.subject || '(no subject)'}
-                          </span>
-                          {message.has_ical === 1 && (
-                            <CalendarDays
-                              className="size-3 shrink-0 text-primary"
-                              aria-label="Calendar invitation"
-                            />
-                          )}
-                          {message.attachment_count > 0 && (
-                            <Paperclip
-                              className="size-3 shrink-0 text-muted-foreground"
-                              aria-label={`${message.attachment_count} attachments`}
-                            />
-                          )}
-                        </div>
-                        <p className="truncate text-xs text-muted-foreground">
-                          {message.snippet}
-                        </p>
-                      </button>
-                    </ContextMenuTrigger>
-                    <ContextMenuContent className="w-52">
-                      <ContextMenuItem
-                        onClick={() => onAction('read', actionTargets(message.id))}
-                      >
-                        <MailOpen className="size-4" aria-hidden="true" />
-                        Mark as read
-                      </ContextMenuItem>
-                      <ContextMenuItem
-                        onClick={() => onAction('unread', actionTargets(message.id))}
-                      >
-                        <Mail className="size-4" aria-hidden="true" />
-                        Mark as unread
-                      </ContextMenuItem>
-                      <ContextMenuSeparator />
-                      <ContextMenuItem
-                        variant="destructive"
-                        onClick={() => onAction('delete', actionTargets(message.id))}
-                      >
-                        <Trash2 className="size-4" aria-hidden="true" />
-                        {selectedIds.has(message.id) && multiSelected
-                          ? `Delete ${selectedIds.size} messages`
-                          : 'Delete'}
-                      </ContextMenuItem>
-                    </ContextMenuContent>
-                  </ContextMenu>
+                        {message.attachment_count > 0 && (
+                          <Paperclip
+                            className="size-3 shrink-0 text-muted-foreground"
+                            aria-label={`${message.attachment_count} attachments`}
+                          />
+                        )}
+                      </div>
+                      <p className="truncate text-xs text-muted-foreground">
+                        {message.snippet}
+                      </p>
+                    </button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      data-message-actions
+                      aria-haspopup="menu"
+                      aria-label={`Message actions for ${message.from_name || message.from_address || 'Unknown sender'}, ${message.subject || 'no subject'}`}
+                      className="hoomail-touch-target min-w-11 shrink-0 self-stretch rounded-none border-b border-border/60 px-2 text-xs lg:hidden"
+                      onClick={openRowContextMenu}
+                    >
+                      Actions
+                    </Button>
+                  </ContextMenuTrigger>
+                  <ContextMenuContent className="w-52">
+                    <ContextMenuItem
+                      onClick={() => onAction('read', actionTargets(message.id))}
+                    >
+                      <MailOpen className="size-4" aria-hidden="true" />
+                      Mark as read
+                    </ContextMenuItem>
+                    <ContextMenuItem
+                      onClick={() => onAction('unread', actionTargets(message.id))}
+                    >
+                      <Mail className="size-4" aria-hidden="true" />
+                      Mark as unread
+                    </ContextMenuItem>
+                    <ContextMenuSeparator />
+                    <ContextMenuItem
+                      variant="destructive"
+                      onClick={() => onAction('delete', actionTargets(message.id))}
+                    >
+                      <Trash2 className="size-4" aria-hidden="true" />
+                      {selectedIds.has(message.id) && multiSelected
+                        ? `Delete ${selectedIds.size} messages`
+                        : 'Delete'}
+                    </ContextMenuItem>
+                  </ContextMenuContent>
+                </ContextMenu>
               </li>
             )
           })}
         </ul>
       </ScrollArea>
 
-      <footer className="shrink-0 border-t border-border px-4 py-1.5">
+      <footer className="shrink-0 border-t border-border px-3 py-1.5">
         <p className="text-[12px] leading-relaxed text-muted-foreground">
-          Click to open · Shift+Click to select a range · Ctrl/Cmd+Click to toggle · Right-click for actions
+          Click to open · Select messages for bulk actions · Use Actions or right-click for message actions
         </p>
       </footer>
     </section>
