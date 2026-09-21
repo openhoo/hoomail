@@ -31,7 +31,7 @@ jobs:
           fetch-depth: 0
 
       - name: Lint commits
-        uses: openhoo/hooversion/actions/lint@ac503b23b9b36ebbf39ee6103713c81f1f18b64d # v1.1.1
+        uses: openhoo/hooversion/actions/lint@f0a37cca22997993ca6416010b81ca197a3ac580 # v1.1.2
         with:
           version: ${{ env.HOOVERSION_VERSION }}
 
@@ -274,7 +274,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
 
       - name: Build image
@@ -331,12 +331,12 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Enforce Hoolicy policy
-        uses: openhoo/hoolicy/actions/check@46529a99335938e7284f11099bf15f7e1800e6f5 # v0.3.1
+        uses: openhoo/hoolicy/actions/check@17cac347ab3561eea664b0bee3c670de86ec3ffa # v0.3.2
         with:
           version: 0.3.1
 
       - name: Scan with Hooray
-        uses: openhoo/hooray/actions/scan@f2b28d71398749142f4d9366b0427369f3af6e02 # v0.6.5
+        uses: openhoo/hooray/actions/scan@e7374b11eeab1ed97b2c8f1a814e92d400014140 # v0.8.0
         with:
           version: 0.6.5
           policy: hooray-policy.yaml
@@ -344,7 +344,7 @@ jobs:
           output: ""
 
       - name: Analyze with Hoonarqube
-        uses: openhoo/hoonarqube/actions/analyze@03b34bc8957995959d43531e82130a2c95bf01fa # v0.3.1
+        uses: openhoo/hoonarqube/actions/analyze@5ea3135acff5e2338e0391f880dc1ac5b39b9157 # v0.8.2
         with:
           version: 0.3.1
           paths: |
