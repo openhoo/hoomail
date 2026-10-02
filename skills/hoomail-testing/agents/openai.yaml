@@ -1,0 +1,4 @@
+interface:
+  display_name: "Hoomail Email Testing"
+  short_description: "Capture and assert application mail with Hoomail"
+  default_prompt: "Use $hoomail-testing to capture and verify this application email flow with Hoomail."

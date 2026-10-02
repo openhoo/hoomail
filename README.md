@@ -41,6 +41,33 @@ Reports are deterministic and versioned. They include analysis completeness, sev
 
 The HTML preview can export a bounded PNG locally in the browser. Export never loads sender-controlled remote resources; it may read only Hoomail's validated same-origin CID attachments so the image matches the safe preview.
 
+## Agent skills
+
+Two installable skills serve different tasks:
+
+- [`hoomail-testing`](skills/hoomail-testing/SKILL.md) helps agents connect your
+  application's SMTP sender and assert captured mail, attachments, calendar
+  invitations, and offline inspection results.
+- [`hoomail-development`](skills/hoomail-development/SKILL.md) helps agents
+  change and verify Hoomail itself. Repository agents find it through `AGENTS.md`
+  and `.agents/skills`.
+
+Install the email-testing skill from your application's directory:
+
+```bash
+npx skills add openhoo/hoomail --skill hoomail-testing
+```
+
+To install the contributor skill elsewhere, select `--skill hoomail-development`.
+Add `--global` for installation across projects; otherwise installation is
+project-scoped. The installer lets you select your supported coding agent.
+Skills contain instructions and bundled references; install/run Hoomail
+separately using the quick start below.
+
+From a local checkout, you can also install unpublished changes by passing its
+path instead of `openhoo/hoomail`, for example:
+`npx skills add ./hoomail --skill hoomail-testing` from the parent directory.
+
 ## Quick start
 
 The release image runs as UID/GID `65532`. Initialize a named volume once so the non-root process can write the database:
