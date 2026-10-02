@@ -1,0 +1,4 @@
+interface:
+  display_name: "Hoomail Development"
+  short_description: "Develop and verify Hoomail server and UI"
+  default_prompt: "Use $hoomail-development to implement and verify this change in the Hoomail source repository."
