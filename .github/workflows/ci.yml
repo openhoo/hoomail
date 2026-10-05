@@ -31,7 +31,7 @@ jobs:
           fetch-depth: 0
 
       - name: Lint commits
-        uses: openhoo/hooversion/actions/lint@ac503b23b9b36ebbf39ee6103713c81f1f18b64d # v1.1.1
+        uses: openhoo/hooversion/actions/lint@f0a37cca22997993ca6416010b81ca197a3ac580 # v1.1.2
         with:
           version: ${{ env.HOOVERSION_VERSION }}
 
@@ -143,7 +143,7 @@ jobs:
 
       - name: Upload coverage report
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-        uses: actions/upload-code-coverage@d8e329117199404bba6fc81efe8093dc7c015e34 # v1.4.2
+        uses: actions/upload-code-coverage@2b21a77928be8d5168c2b9581a67f2adbebacc52 # v1.4.4
         with:
           file: coverage.xml
           language: Go
@@ -274,7 +274,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
 
       - name: Build image
@@ -331,12 +331,12 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Enforce Hoolicy policy
-        uses: openhoo/hoolicy/actions/check@46529a99335938e7284f11099bf15f7e1800e6f5 # v0.3.1
+        uses: openhoo/hoolicy/actions/check@2175cd50a816e90b37a0395d6bb93e6ce729c256 # v0.4.0
         with:
           version: 0.3.1
 
       - name: Scan with Hooray
-        uses: openhoo/hooray/actions/scan@f2b28d71398749142f4d9366b0427369f3af6e02 # v0.6.5
+        uses: openhoo/hooray/actions/scan@7f706fe4ae06f9a2408dc9d0abb78048d2366db7 # v0.9.0
         with:
           version: 0.6.5
           policy: hooray-policy.yaml
@@ -344,7 +344,7 @@ jobs:
           output: ""
 
       - name: Analyze with Hoonarqube
-        uses: openhoo/hoonarqube/actions/analyze@03b34bc8957995959d43531e82130a2c95bf01fa # v0.3.1
+        uses: openhoo/hoonarqube/actions/analyze@1b08eba7832f32c6ed5233e51d725092c6e8de77 # v0.10.4
         with:
           version: 0.3.1
           paths: |
