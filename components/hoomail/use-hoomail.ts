@@ -287,10 +287,15 @@ export function useCachedResource<T>(key: string | null, fetcher: (key: string) 
     }
   }, [key, fetcher])
 
+  const retry = useCallback(() => {
+    if (key) retryCachedResource(key, fetcher)
+  }, [key, fetcher])
+
   return {
     data: data ?? (keepPreviousData ? previous.current : undefined),
     error,
     isLoading: Boolean(key && data === undefined && (current?.promise || !current?.error)),
+    retry,
   }
 }
 
@@ -300,9 +305,15 @@ const jsonFetcher = async <T,>(url: string): Promise<T> => {
   return response.json()
 }
 
-export function useMailboxes() { const { data, error, isLoading } = useCachedResource<{ mailboxes: Mailbox[] }>('/api/mailboxes'); return { mailboxes: data?.mailboxes ?? [], isLoading, error: error ?? null } }
-export function useMessages(mailboxId: number | null, query?: string) { const q = query?.trim(); const key = mailboxId == null ? null : `/api/mailboxes/${mailboxId}/messages${q ? `?q=${encodeURIComponent(q)}` : ''}`; const { data, error, isLoading } = useCachedResource<{ messages: MessageListItem[] }>(key, jsonFetcher); return { messages: mailboxId == null ? [] : data?.messages ?? [], isLoading, error: error ?? null } }
-export function useCalendarEvents(mailboxId: number | null, enabled: boolean) { const { data, error, isLoading } = useCachedResource<{ events: CalendarEvent[] }>(enabled && mailboxId != null ? `/api/mailboxes/${mailboxId}/events` : null); return { events: data?.events ?? [], isLoading, error: error ?? null } }
+export function useMailboxes() {
+  const { data, error, isLoading } = useCachedResource<{ mailboxes: Mailbox[] }>('/api/mailboxes')
+  // Preserve the last confirmed inbox list during an explicit retry. Clearing
+  // it would hide the selected inbox and reader before the server responds.
+  const retry = useCallback(() => mutateCache('/api/mailboxes'), [])
+  return { mailboxes: data?.mailboxes ?? [], isLoading, error: error ?? null, retry }
+}
+export function useMessages(mailboxId: number | null, query?: string) { const q = query?.trim(); const key = mailboxId == null ? null : `/api/mailboxes/${mailboxId}/messages${q ? `?q=${encodeURIComponent(q)}` : ''}`; const { data, error, isLoading, retry } = useCachedResource<{ messages: MessageListItem[] }>(key, jsonFetcher); return { messages: mailboxId == null ? [] : data?.messages ?? [], isLoading, error: error ?? null, retry } }
+export function useCalendarEvents(mailboxId: number | null, enabled: boolean) { const { data, error, isLoading, retry } = useCachedResource<{ events: CalendarEvent[] }>(enabled && mailboxId != null ? `/api/mailboxes/${mailboxId}/events` : null); return { events: data?.events ?? [], isLoading, error: error ?? null, retry } }
 export function useInspection(messageId: number | null, enabled: boolean) {
   const key = enabled && messageId != null ? `/api/messages/${messageId}/inspect` : null
   const { data, error, isLoading } = useCachedResource<InspectionReport>(key)

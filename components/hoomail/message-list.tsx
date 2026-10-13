@@ -16,6 +16,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { AnimatedValue, InlinePresence } from '@/components/ui/reactive'
 import { cn } from '@/lib/utils'
 import { formatRelativeTime, type Mailbox, type MessageListItem } from './use-hoomail'
+import { ResourceStatus } from './resource-status'
 
 /**
  * Open the row's existing context menu from a real, visible touch button.
@@ -95,6 +96,10 @@ function createMotionPlugin(duration: number): AutoAnimationPlugin {
 export function MessageList({
   mailbox,
   messages,
+  isLoading,
+  loadError,
+  actionError,
+  onRetry,
   selectedId,
   selectedIds,
   searchQuery,
@@ -105,6 +110,10 @@ export function MessageList({
 }: {
   mailbox: Mailbox | null
   messages: MessageListItem[]
+  isLoading: boolean
+  loadError?: unknown
+  actionError?: string | null
+  onRetry: () => void
   selectedId: number | null
   selectedIds: Set<number>
   searchQuery: string
@@ -217,10 +226,12 @@ export function MessageList({
       </div>
 
       <ScrollArea className="min-h-0 flex-1" aria-label="Messages">
+        {mailbox && <ResourceStatus label="messages" isLoading={isLoading} error={loadError} onRetry={onRetry} />}
+        {actionError && <p role="alert" className="px-3 py-3 text-center text-xs text-destructive">{actionError}</p>}
         {!mailbox && (
           <EmptyHint text="Select an inbox on the left, or send an email to any address to create one." />
         )}
-        {mailbox && messages.length === 0 && (
+        {mailbox && !isLoading && !loadError && messages.length === 0 && (
           <EmptyHint
             text={
               searchQuery
@@ -230,7 +241,7 @@ export function MessageList({
           />
         )}
         <span role="status" aria-live="polite" aria-atomic="true" className="sr-only">
-          {messages.length === 0 ? 'No messages' : `${messages.length} messages`}
+          {isLoading || loadError ? '' : messages.length === 0 ? 'No messages' : `${messages.length} messages`}
         </span>
         <ul ref={messageListRef} data-message-list aria-label="Messages" className="flex flex-col select-none">
           {messages.map((message, index) => {

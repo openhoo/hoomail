@@ -44,7 +44,8 @@ type Conn struct {
 	bdatPipe        *io.PipeWriter
 	bdatStatus      *statusCollector // used for BDAT on LMTP
 	dataResult      chan error
-	bytesReceived   int64 // counts total size of chunks when BDAT is used
+	dataDone        chan struct{} // tracks the asynchronous BDAT callback lifetime
+	bytesReceived   int64         // counts total size of chunks when BDAT is used
 
 	fromReceived bool
 	recipients   []string
@@ -173,13 +174,10 @@ func (c *Conn) setSession(session Session) {
 }
 
 func (c *Conn) Close() error {
+	c.abortBDAT()
+	c.waitBDAT()
 	c.locker.Lock()
 	defer c.locker.Unlock()
-
-	if c.bdatPipe != nil {
-		c.bdatPipe.CloseWithError(ErrDataReset)
-		c.bdatPipe = nil
-	}
 
 	if c.session != nil {
 		c.session.Logout()
@@ -195,17 +193,18 @@ func (c *Conn) hasBDATPipe() bool {
 	return c.bdatPipe != nil
 }
 
-func (c *Conn) startBDAT() (*io.PipeReader, *io.PipeWriter, chan error, bool) {
+func (c *Conn) startBDAT() (*io.PipeReader, *io.PipeWriter, chan error, chan struct{}, bool) {
 	c.locker.Lock()
 	defer c.locker.Unlock()
 	if c.bdatPipe != nil {
-		return nil, c.bdatPipe, c.dataResult, false
+		return nil, c.bdatPipe, c.dataResult, c.dataDone, false
 	}
 	reader, writer := io.Pipe()
 	result := make(chan error, 1)
 	c.bdatPipe = writer
 	c.dataResult = result
-	return reader, writer, result, true
+	c.dataDone = make(chan struct{})
+	return reader, writer, result, c.dataDone, true
 }
 
 func (c *Conn) abortBDAT() {
@@ -216,6 +215,24 @@ func (c *Conn) abortBDAT() {
 	if pipe != nil {
 		pipe.CloseWithError(ErrDataReset)
 	}
+}
+
+// waitBDAT is called by the owning handler before session Reset or Logout.
+// Transport shutdown only aborts the pipe; the handler waits here so callbacks
+// cannot outlive the server's connection goroutine or overlap session cleanup.
+func (c *Conn) waitBDAT() {
+	c.locker.Lock()
+	done := c.dataDone
+	c.locker.Unlock()
+	if done == nil {
+		return
+	}
+	<-done
+	c.locker.Lock()
+	if c.dataDone == done {
+		c.dataDone = nil
+	}
+	c.locker.Unlock()
 }
 
 // closeTransport interrupts the connection without invoking Session.Logout.
@@ -1085,12 +1102,16 @@ func (c *Conn) handleBdat(arg string) {
 		c.bdatStatus = c.createStatusCollector()
 	}
 
-	reader, bdatPipe, dataResult, started := c.startBDAT()
+	reader, bdatPipe, dataResult, dataDone, started := c.startBDAT()
 	if started {
+		session := c.Session()
+		status := c.bdatStatus
+		recipients := append([]string(nil), c.recipients...)
 		go func() {
+			defer close(dataDone)
 			defer func() {
 				if err := recover(); err != nil {
-					c.handlePanic(err, c.bdatStatus)
+					c.handlePanic(err, status)
 
 					dataResult <- errPanic
 					reader.CloseWithError(errPanic)
@@ -1099,16 +1120,16 @@ func (c *Conn) handleBdat(arg string) {
 
 			var err error
 			if !c.server.LMTP {
-				err = c.Session().Data(reader)
+				err = session.Data(reader)
 			} else {
-				lmtpSession, ok := c.Session().(LMTPSession)
+				lmtpSession, ok := session.(LMTPSession)
 				if !ok {
-					err = c.Session().Data(reader)
-					for _, rcpt := range c.recipients {
-						c.bdatStatus.SetStatus(rcpt, err)
+					err = session.Data(reader)
+					for _, rcpt := range recipients {
+						status.SetStatus(rcpt, err)
 					}
 				} else {
-					err = lmtpSession.LMTPData(reader, c.bdatStatus)
+					err = lmtpSession.LMTPData(reader, status)
 				}
 			}
 
@@ -1120,7 +1141,14 @@ func (c *Conn) handleBdat(arg string) {
 	c.lineLimitReader.LineLimit = 0
 
 	chunk := io.LimitReader(c.text.R, int64(size))
-	_, err = io.Copy(bdatPipe, chunk)
+	consumed, err := io.Copy(bdatPipe, chunk)
+	if err == nil && consumed != int64(size) {
+		// EOF from the transport is not the declared end of this chunk.
+		// Propagate an error to the backend before closing the pipe so a
+		// syntactically valid but truncated MIME message cannot be queued.
+		err = io.ErrUnexpectedEOF
+		bdatPipe.CloseWithError(err)
+	}
 	if err != nil {
 		// Backend might return an error early using CloseWithError without consuming
 		// the whole chunk.
@@ -1380,13 +1408,10 @@ func (c *Conn) readLine() (string, error) {
 }
 
 func (c *Conn) reset() {
+	c.abortBDAT()
+	c.waitBDAT()
 	c.locker.Lock()
 	defer c.locker.Unlock()
-
-	if c.bdatPipe != nil {
-		c.bdatPipe.CloseWithError(ErrDataReset)
-		c.bdatPipe = nil
-	}
 	c.bdatStatus = nil
 	c.bytesReceived = 0
 

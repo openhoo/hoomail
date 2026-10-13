@@ -7,7 +7,7 @@ description: Develop, debug, and test Hoomail itself, including its Go mail prot
 
 Run commands from the Hoomail source root. Read `CONTRIBUTING.md`; for a
 workflow's detail, read `docs/development.md`. Toolchain pins currently are Bun
-1.3.14 and Go 1.26.6. Source, lockfiles, and CI override this guide if they change.
+1.3.14 and Go 1.26.9. Source, lockfiles, and CI override this guide if they change.
 
 ## Find the implementation
 

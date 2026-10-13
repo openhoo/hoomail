@@ -412,7 +412,7 @@ Successful analysis returns `200 OK`, including sender-caused syntax defects, ab
 }
 ```
 
-The schema version is currently `analysis.version: 1`. Arrays are always present and encode as arrays, including when empty. `mimeTree` is `null` when raw source is absent or no root header was safely completed. `parsedThroughPath` is non-null only for the last complete MIME node before a fatal or bounded stop. `unavailableRuleFamilies` lists unavailable categories in catalog order without duplicates.
+The schema version is currently `analysis.version: 1`. Arrays are always present and encode as arrays, including when empty. `mimeTree` is `null` when raw source is absent, no root header was safely completed, or the report-byte cap requires omitting the tree. `parsedThroughPath` is non-null only for the last complete MIME node before a fatal or bounded stop. `unavailableRuleFamilies` lists unavailable categories in catalog order without duplicates.
 
 Top-level and nested fields:
 
@@ -453,7 +453,9 @@ Findings use category order shown above. Within a category they order failed err
 
 Every finding always includes `evidence`, `evidenceTruncated`, and `reference`; `reference` is `null` when unavailable. Evidence coordinates `path`, `field`, `occurrence`, `line`, and `value` are omitted when inapplicable. Every resource always includes `path`, which is `null` for fallback data. MIME `charset`, `encoding`, `disposition`, `filename`, `contentId`, `rawSize`, and `decodedSize` are present and nullable. A size of zero is distinct from `null`: raw size is known only for a complete indexed body range, and decoded size only after successful transfer decoding and text charset conversion; multipart decoded size is `null`. Report `headers` entries retain raw wire order and original field-name case; each value is unfolded to single spaces and carries the 1-based occurrence ordinal among same-named lowercase fields plus the field's first raw-source line, and values above 8 KiB end with a ` … [truncated]` mark. The optional MIME `checksums` object appears only on leaf nodes whose body was completely decoded without error and holds hex-encoded MD5, SHA-1, and SHA-256 of the decoded bytes. `htmlCompatibility` is `null` when no HTML representation was selected for analysis; each warning's `score` is the percentage split of client support, while the report-level `score` aggregates occurrences across detected HTML nodes.
 
-Reports may be partial because raw source is unavailable, semantic parsing stopped at a sender defect, or a deterministic parser/analyzer cap was reached. Unsupported encodings or charsets instead produce findings and nullable decoded sizes where applicable. Partial reports retain completed-prefix evidence. `analysis.truncated` is always retained when a cap is reached, and `truncated` becomes `true`. Authentication-Results, DKIM, ARC, unsubscribe, links, images, and MIME bytes are inspected statically; Hoomail performs no DNS or network access and does not verify SPF, DKIM signatures/body hashes, DMARC, ARC custody, alignment, endpoints, reputation, SMTP transport, delivery, or provider rendering. The 102 KiB compatibility heuristic measures selected decoded HTML only, never the total message or attachments.
+Inspection depth, part, header-field, header-byte, and physical-line budgets are shared across the original source and decoded encapsulated messages. Descendants of transfer-encoded `message/rfc822` or `message/global` parts are indexed against their decoded source; their header evidence uses `source: "mime-part"` and omits original-source line coordinates, and their `rawSize` is `null`. This prevents decoded-local offsets from being mistaken for ranges in the original wire source.
+
+Reports may be partial because raw source is unavailable, semantic parsing stopped at a sender defect, or a deterministic parser/analyzer cap was reached. Unsupported encodings or charsets instead produce findings and nullable decoded sizes where applicable. Partial reports retain completed-prefix evidence. `analysis.truncated` is always retained when a cap is reached, and `truncated` becomes `true`. When JSON escaping makes MIME metadata exceed the report-byte cap, sender-supplied MIME text may be clipped to 256 bytes with an explicit ` … [truncated]` mark while paths and structure are retained; the tree may be omitted if further reduction is necessary. Authentication-Results, DKIM, ARC, unsubscribe, links, images, and MIME bytes are inspected statically; Hoomail performs no DNS or network access and does not verify SPF, DKIM signatures/body hashes, DMARC, ARC custody, alignment, endpoints, reputation, SMTP transport, delivery, or provider rendering. The 102 KiB compatibility heuristic measures selected decoded HTML only, never the total message or attachments.
 
 Responses:
 
@@ -588,7 +590,7 @@ Behavior:
 
 - The stored content type is parsed, lowercased, and stripped of parameters. Missing, empty, or malformed values become `application/octet-stream`.
 - PNG, JPEG, GIF, WebP, plain-text, and CSV attachments are inline-capable by default. PDF, HTML/XHTML, SVG/XML, MHTML, JavaScript, unknown, and other active formats use `attachment`.
-- The HTML sanitizer marks a resolved CID resource with `?inline=cid`. For `image/svg+xml` only, that marker returns a separately parsed, fail-closed static SVG allowlist with `Content-Disposition: inline` and a restrictive CSP. A conventional UTF-8 XML declaration is accepted and stripped. Scripts, event/style attributes, active or animation elements, other XML processing instructions, directives/entities, and external/data/blob references are removed or rejected. Without the marker, the original SVG remains download-only.
+- The HTML sanitizer marks a resolved CID resource with `?inline=cid`. For `image/svg+xml` only, that marker returns a separately parsed, fail-closed static SVG allowlist with `Content-Disposition: inline` and a restrictive CSP. A conventional UTF-8 XML declaration is accepted and stripped. Scripts, event/style attributes, active or animation elements, other XML processing instructions, directives/entities, and external/data/blob references are removed or rejected. CSS escapes and comments in presentation attributes are rejected so they cannot disguise an external URL. Without the marker, the original SVG remains download-only.
 - `?download=1` forces `attachment`; other download values do not.
 - Every attachment response, including validation, missing-record, and storage-error responses from this route, includes `X-Content-Type-Options: nosniff`.
 - The filename is reduced to its basename and control/path-separator characters are removed; a missing or unusable value becomes `attachment-{id}`. `Content-Disposition` includes a safe ASCII quoted fallback and, for non-ASCII names, a UTF-8 `filename*` parameter.
@@ -716,7 +718,11 @@ For each recipient processed by a committed message delivery, notifications are 
 
 A new delivery does not additionally emit `messages:changed`.
 
-These events are invalidation hints. Except for the small summaries in `mailbox:new` and `message:new`, they do not contain authoritative resource state. Clients should refetch:
+These events are invalidation hints. Except for the small summaries in `mailbox:new` and `message:new`, they do not contain authoritative resource state.
+
+Mutation callbacks publish after releasing storage serialization. Concurrent operations can therefore overlap their notifications: an earlier delivery or read-state invalidation may arrive after a later reset. The stream is not a serialized database mutation history, and its numeric IDs do not guarantee that the referenced resource still exists. Refetch authoritative state when processing these hints.
+
+Clients should refetch:
 
 - `/api/mailboxes` after mailbox, message, or reset notifications;
 - `/api/mailboxes/{mailboxId}/messages` and any active searches after `message:new` or `messages:changed`;

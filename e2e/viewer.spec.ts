@@ -334,6 +334,42 @@ test('partial inspection displays unavailable rule families and parsed scope', a
   await expect(summary).toContainText('Unavailable checks: mime, authentication.')
 })
 
+test('bounded MIME metadata wraps within a phone inspector and exposes incomplete analysis', async ({ page, request }) => {
+  const subject = 'Bounded MIME metadata'
+  await sendTestMessage(request, { to: 'metadata-ui@hoomail.test', subject, kind: 'plain' })
+  await messageRow(page, subject).click()
+  await expect(page.getByRole('heading', { name: subject, exact: true })).toBeVisible()
+  await page.route('**/api/messages/*/inspect', async (route) => {
+    const response = await route.fetch()
+    const report = await response.json()
+    report.analysis = { ...report.analysis, state: 'partial', truncated: true, parsedThroughPath: '1.2', unavailableRuleFamilies: ['mime'] }
+    report.mimeTree = {
+      path: '1', contentType: `application/${'x'.repeat(244)}`, charset: 'y'.repeat(256),
+      encoding: 'z'.repeat(256), disposition: 'd'.repeat(256), filename: 'f'.repeat(256),
+      contentId: 'c'.repeat(256), rawSize: null, decodedSize: null, children: [],
+    }
+    await route.fulfill({ response, json: report })
+  })
+  await page.setViewportSize({ width: 320, height: 568 })
+  await page.getByRole('tab', { name: 'Inspect', exact: true }).click()
+  const summary = page.getByRole('region', { name: 'Inspection summary' })
+  await expect(summary.getByText('Partial analysis', { exact: true })).toBeVisible()
+  await expect(summary.getByText('Truncated', { exact: true })).toBeVisible()
+  await expect(summary).toContainText('Unavailable checks: mime.')
+  await expect(summary).toContainText('Parsed through MIME path 1.2.')
+  const structure = page.getByRole('region', { name: 'MIME structure' })
+  await expect(structure).toContainText('Raw unknown')
+  await expect(structure).toContainText('Decoded unknown')
+  const overflowing = await structure.evaluate((section) => {
+    const bounds = section.getBoundingClientRect()
+    return [...section.querySelectorAll('code, span')].filter((element) => {
+      const child = element.getBoundingClientRect()
+      return child.right > bounds.right + 1 || child.left < bounds.left - 1
+    }).map((element) => element.textContent)
+  })
+  expect(overflowing).toEqual([])
+})
+
 test('switching plain to invite and back restores HTML without stale invite content', async ({ page, request }) => {
   const recipient = 'viewer-switching@hoomail.test'
   const plainSubject = 'Viewer switching plain'
@@ -558,12 +594,19 @@ test('HTML preview applies its canvas while preserving sender content styling an
       cellPadding: cell ? getComputedStyle(cell).padding : '',
     }
   })
+  const browserDefaultFont = await page.evaluate(() => {
+    const neutralFrame = document.createElement('iframe')
+    document.body.append(neutralFrame)
+    const family = neutralFrame.contentWindow!.getComputedStyle(neutralFrame.contentDocument!.body).fontFamily
+    neutralFrame.remove()
+    return family
+  })
   expect(senderStyles).toEqual({
     color: 'rgb(12, 34, 56)',
     margin: '8px',
     padding: '0px',
     background: 'rgba(0, 0, 0, 0)',
-    fontFamily: '"Times New Roman"',
+    fontFamily: browserDefaultFont,
     tableBorderCollapse: 'collapse',
     cellPadding: '7px',
   })

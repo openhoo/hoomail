@@ -38,11 +38,15 @@ type PhysicalLine struct {
 }
 
 type Node struct {
-	Path                 string
-	Header               message.Header
-	HeaderFields         []HeaderField
-	RawHeader            ByteRange
-	RawBody              ByteRange
+	Path         string
+	Header       message.Header
+	HeaderFields []HeaderField
+	RawHeader    ByteRange
+	RawBody      ByteRange
+	// DecodedRaw is the decoded encapsulated message that owns the indexed
+	// ranges below a transfer-encoded message/rfc822 or message/global part.
+	// Such ranges do not refer to Document.Raw or its physical line numbers.
+	DecodedRaw           []byte
 	BoundaryDelimiters   []ByteRange
 	MediaType            string
 	MediaParams          map[string]string

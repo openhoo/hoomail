@@ -19,9 +19,11 @@ type rawIndex struct {
 	headerFields int
 	headerBytes  int
 	parts        int
+	decodedLines int
 	causes       map[string]bool
 	meta         map[*Node]rawNodeMeta
 	root         *Node
+	budget       *rawIndex
 }
 
 type rawNodeMeta struct {
@@ -30,6 +32,7 @@ type rawNodeMeta struct {
 
 func buildRawIndex(raw []byte, limits Limits) *rawIndex {
 	index := &rawIndex{raw: raw, limits: limits, causes: make(map[string]bool), meta: make(map[*Node]rawNodeMeta)}
+	index.budget = index
 	end := len(raw)
 	prefixComplete := true
 	if limits.MaxRawBytes > 0 && end > limits.MaxRawBytes {
@@ -50,6 +53,45 @@ func buildRawIndex(raw []byte, limits Limits) *rawIndex {
 		index.meta[index.root] = rawNodeMeta{complete: index.complete && index.meta[index.root].complete}
 	}
 	return index
+}
+
+// indexDecodedMessage shares every structural budget with the original raw
+// index. Encoding an encapsulated message must not hide its descendants from
+// inspection limits. Its ranges remain local to the decoded source.
+func (index *rawIndex) indexDecodedMessage(raw []byte, path string, depth int) *rawIndex {
+	budget := index.budget
+	decoded := &rawIndex{
+		raw: raw, limits: budget.limits, causes: budget.causes, meta: make(map[*Node]rawNodeMeta),
+		headerFields: budget.headerFields, headerBytes: budget.headerBytes, parts: budget.parts,
+		budget: budget,
+	}
+	if budget.limits.MaxPhysicalLines > 0 {
+		remaining := budget.limits.MaxPhysicalLines - len(budget.lines) - budget.decodedLines
+		if remaining <= 0 {
+			decoded.causes["physical lines"] = true
+			return decoded
+		}
+		decoded.limits.MaxPhysicalLines = remaining
+	}
+	decoded.scanLines(len(raw), true)
+	decoded.complete = decoded.indexedEnd == len(raw)
+	if decoded.indexedEnd != 0 {
+		decoded.root, _ = decoded.parseEntity(0, decoded.indexedEnd, path, depth, false)
+	}
+	budget.headerFields, budget.headerBytes, budget.parts = decoded.headerFields, decoded.headerBytes, decoded.parts
+	// Only the count is shared; Document.Lines continues to expose the original
+	// physical source, never the decoded encapsulated message's local lines.
+	budget.decodedLines += len(decoded.lines)
+	if decoded.root != nil {
+		stack := []*Node{decoded.root}
+		for len(stack) > 0 {
+			node := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			node.DecodedRaw = raw
+			stack = append(stack, node.Children...)
+		}
+	}
+	return decoded
 }
 
 // scanLines splits raw into physical lines at LF only, mirroring go-message

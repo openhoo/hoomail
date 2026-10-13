@@ -165,7 +165,11 @@ func sanitizeSVGAttributes(attributes []xml.Attr) []xml.Attr {
 			attribute.Name.Space = ""
 		}
 		value := strings.TrimSpace(attribute.Value)
-		if value == "" || strings.ContainsAny(value, "\x00\r\n") {
+		// Presentation attributes use CSS token syntax. Backslash escapes and
+		// comments can disguise external url() functions from a literal search.
+		// Static SVG needs neither mechanism, so reject them before allowlisting
+		// the sole supported URL form: a plain local fragment.
+		if value == "" || strings.ContainsAny(value, "\x00\r\n\\") || strings.Contains(value, "/*") || strings.Contains(value, "*/") {
 			continue
 		}
 		if name == "href" && !svgFragmentPattern.MatchString(value) {

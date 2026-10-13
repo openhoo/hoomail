@@ -28,29 +28,86 @@ func (log *generationEventLog) snapshot() []events.Event {
 	return append([]events.Event(nil), log.events...)
 }
 
-func validateGenerationEvents(t *testing.T, stream []events.Event) {
+// Mutation callbacks run after the serialization lock is released. Concurrent
+// commits may therefore publish overlapping invalidations; the stream is not
+// an ordered database history. Validate its payloads and check authoritative
+// post-race state separately rather than inferring generations from event order.
+func validateConcurrentEventPayloads(t *testing.T, stream []events.Event) {
 	t.Helper()
-	live := map[int64]string{}
 	for _, event := range stream {
 		switch event.Type {
 		case events.TypeMailboxNew:
-			if event.Mailbox != nil {
-				live[event.Mailbox.ID] = event.Mailbox.Address
+			if event.Mailbox == nil || event.Mailbox.ID <= 0 || event.Mailbox.Address == "" || event.MailboxID != nil || event.Message != nil {
+				t.Fatalf("invalid mailbox:new payload: %+v", event)
 			}
 		case events.TypeReset:
-			live = map[int64]string{}
-		case events.TypeMessagesChanged, events.TypeCalendarChanged, events.TypeMessageNew:
-			if event.MailboxID == nil {
-				continue
+			if event.Mailbox != nil || event.MailboxID != nil || event.Message != nil {
+				t.Fatalf("invalid reset payload: %+v", event)
 			}
-			if _, ok := live[*event.MailboxID]; !ok {
-				t.Fatalf("event %s references wiped mailbox %d", event.Type, *event.MailboxID)
+		case events.TypeMessageNew:
+			if event.MailboxID == nil || *event.MailboxID <= 0 || event.Message == nil || event.Message.ID <= 0 || event.Mailbox != nil {
+				t.Fatalf("invalid message:new payload: %+v", event)
 			}
-		case events.TypeMailboxDeleted:
-			if event.MailboxID != nil {
-				delete(live, *event.MailboxID)
+		case events.TypeMessagesChanged, events.TypeCalendarChanged, events.TypeMailboxDeleted:
+			if event.MailboxID == nil || *event.MailboxID <= 0 || event.Mailbox != nil || event.Message != nil {
+				t.Fatalf("invalid mailbox invalidation payload: %+v", event)
+			}
+		default:
+			t.Fatalf("unknown event type: %q", event.Type)
+		}
+	}
+}
+
+func validateAuthoritativeGenerationState(t *testing.T, store *Store, address, marker string, requireMailbox, requireMessage bool) {
+	t.Helper()
+	ctx := context.Background()
+	mailboxes, err := store.ListMailboxes(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mailboxes) > 1 || requireMailbox && len(mailboxes) != 1 {
+		t.Fatalf("post-race mailboxes = %+v", mailboxes)
+	}
+	messageCount := 0
+	for _, mailbox := range mailboxes {
+		if mailbox.Address != address {
+			t.Fatalf("post-race mailbox belongs to old generation: %+v", mailbox)
+		}
+		messages, err := store.ListMessages(ctx, mailbox.ID, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(messages) > 1 || requireMessage && len(messages) != 1 || mailbox.TotalCount != int64(len(messages)) {
+			t.Fatalf("post-race mailbox count mismatch: mailbox=%+v messages=%+v", mailbox, messages)
+		}
+		var unread int64
+		for _, message := range messages {
+			if message.IsRead == 0 {
+				unread++
+			}
+			detail, err := store.GetMessage(ctx, message.ID)
+			if err != nil || detail == nil {
+				t.Fatalf("post-race detail missing: detail=%+v error=%v", detail, err)
+			}
+			if detail.Message.MailboxID != mailbox.ID || detail.Message.Subject == nil || *detail.Message.Subject != marker+"-subject" || len(detail.Attachments) != 1 || detail.Attachments[0].Filename == nil || *detail.Attachments[0].Filename != marker+".att" {
+				t.Fatalf("post-race detail contains old generation: %+v", detail)
+			}
+			raw, found, err := store.GetMessageSource(ctx, message.ID)
+			if err != nil || !found || string(raw) != "raw-"+marker {
+				t.Fatalf("post-race source = %q, found=%t error=%v", raw, found, err)
 			}
 		}
+		if mailbox.UnreadCount != unread {
+			t.Fatalf("post-race unread count = %d, want %d", mailbox.UnreadCount, unread)
+		}
+		messageCount += len(messages)
+	}
+	var persistedMessages, persistedAttachments int
+	if err := store.DB().QueryRow(`SELECT (SELECT COUNT(*) FROM messages),(SELECT COUNT(*) FROM attachments)`).Scan(&persistedMessages, &persistedAttachments); err != nil {
+		t.Fatal(err)
+	}
+	if persistedMessages != messageCount || persistedAttachments != messageCount {
+		t.Fatalf("post-race orphaned or mixed rows: messages=%d attachments=%d, want %d each", persistedMessages, persistedAttachments, messageCount)
 	}
 }
 
@@ -140,7 +197,8 @@ func TestGetMessageDetailStaysWithinSingleGeneration(t *testing.T) {
 		t.Fatal(violation)
 	default:
 	}
-	validateGenerationEvents(t, log.snapshot())
+	validateConcurrentEventPayloads(t, log.snapshot())
+	validateAuthoritativeGenerationState(t, store, "churn@example.com", "beta", false, false)
 }
 
 func TestBulkMutationsSerializeAgainstWipeAll(t *testing.T) {
@@ -228,7 +286,8 @@ func TestBulkMutationsSerializeAgainstWipeAll(t *testing.T) {
 					}
 				}
 			}
-			validateGenerationEvents(t, log.snapshot())
+			validateConcurrentEventPayloads(t, log.snapshot())
+			validateAuthoritativeGenerationState(t, store, "replacement@example.com", "replacement", true, false)
 		})
 	}
 }
@@ -475,5 +534,6 @@ func TestReadMessageCannotMarkAcrossGenerations(t *testing.T) {
 			t.Fatalf("replacement was marked read without being the observed generation in round %d", round)
 		}
 	}
-	validateGenerationEvents(t, log.snapshot())
+	validateConcurrentEventPayloads(t, log.snapshot())
+	validateAuthoritativeGenerationState(t, store, "after@example.com", "replacement", true, true)
 }

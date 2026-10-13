@@ -188,7 +188,7 @@ End-time precedence is:
 3. otherwise default an all-day event to one day after its start; or
 4. leave a timed event's end as `null` when neither `DTEND` nor `DURATION` exists.
 
-The parser supports signed duration components for weeks, days, hours, minutes, and seconds. It does not infer a default duration for timed events.
+The parser supports signed duration components for weeks, days, hours, minutes, and seconds. Durations whose day or clock arithmetic overflows, or whose result cannot be stored as Unix milliseconds, fail closed and produce no events for that calendar part. It does not infer a default duration for timed events.
 
 ## Mailbox-scoped calendar reconciliation
 

@@ -24,7 +24,7 @@ concurrency:
 
 env:
   BUN_VERSION: 1.3.14
-  GO_VERSION: 1.26.6
+  GO_VERSION: 1.26.9
   HOOVERSION_VERSION: 1.1.1
   GHCR_IMAGE: ghcr.io/${{ github.repository }}
   DOCKERHUB_IMAGE: openhoo/hoomail

@@ -111,7 +111,7 @@ func collectAllLeaves(root *mimeparse.Node) []mimeparse.AttachmentCandidate {
 	for len(stack) > 0 {
 		node := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
-		if len(node.Children) == 0 {
+		if len(node.Children) == 0 || node.MediaType == "message/rfc822" || node.MediaType == "message/global" {
 			leaves = append(leaves, mimeparse.AttachmentCandidate{Node: node})
 			continue
 		}

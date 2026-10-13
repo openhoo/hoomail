@@ -393,10 +393,10 @@ function MimeTree({ tree }: { tree: MimeNode }) {
         <li key={`${node.path}-${index}`} className="px-3 py-2.5">
           <div className="flex flex-wrap items-center gap-1.5">
             <code className="rounded bg-secondary px-1.5 py-0.5 font-mono text-[12px] text-secondary-foreground">{node.path}</code>
-            <code className="font-mono text-xs">{node.contentType}</code>
-            {node.charset && <span className="font-mono text-[12px] text-muted-foreground">{node.charset}</span>}
-            {node.encoding && <span className="font-mono text-[12px] text-muted-foreground">{node.encoding}</span>}
-            {node.disposition && <Badge variant="secondary" className="text-[12px]">{node.disposition}</Badge>}
+            <code className="max-w-full min-w-0 break-all font-mono text-xs">{node.contentType}</code>
+            {node.charset && <span className="max-w-full min-w-0 break-all font-mono text-[12px] text-muted-foreground">{node.charset}</span>}
+            {node.encoding && <span className="max-w-full min-w-0 break-all font-mono text-[12px] text-muted-foreground">{node.encoding}</span>}
+            {node.disposition && <Badge variant="secondary" className="max-w-full min-w-0 break-all whitespace-normal text-[12px]">{node.disposition}</Badge>}
           </div>
           <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[12px] text-muted-foreground">
             <span>Raw {node.rawSize === null ? 'unknown' : formatBytes(node.rawSize)}</span>

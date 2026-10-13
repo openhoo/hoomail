@@ -7,7 +7,7 @@ This guide covers the repository-supported contributor workflow. It separates th
 Use the versions pinned by CI and the container build:
 
 - Bun `1.3.14`
-- Go `1.26.6`
+- Go `1.26.9`
 - Playwright-managed Chromium for browser tests and the frontend benchmark
 
 `package.json` does not declare `packageManager` or `engines`, so it does **not** enforce the Bun version. Verify the executable in your environment when reproducibility matters:
@@ -162,6 +162,30 @@ bun run test:e2e -- e2e/reset.spec.ts
 | `e2e/reset.spec.ts` | Reset dialog containment, cancellation, Escape behavior, complete isolated-state wipe, cache revalidation, and the resulting API/UI empty state |
 
 Use `bun run test:e2e:ui` when interactive Playwright inspection is useful. It retains the same automatic build, isolated database, ports, and real-server setup.
+
+## Container workflow smoke
+
+The Docker CI job also runs `scripts/smoke.py` against its freshly built,
+disposable container. This uses Python 3's standard library and the Docker CLI.
+It checks real SMTP delivery and BCC routing, SSE invalidation, MIME source and
+inspection, safe HTML/CID and attachment responses, read state, POP3 retrieval
+and deletion, calendar reconciliation, concurrent delivery, BDAT framing and
+size rejection, cascades, and an actual container restart with SQLite data
+retained. The container runs with a read-only root filesystem, dropped
+capabilities, UID/GID 65532, and the chart's default 64 MiB memory limit.
+
+To check an already running **disposable** container with persistent test
+storage, use its loopback mappings:
+
+```bash
+python3 scripts/smoke.py --container hoomail-smoke --disposable \
+  --http-port 35100 --smtp-port 35125 --pop3-port 35126 \
+  --output /tmp/hoomail-smoke.json
+```
+
+The script resets all data at the beginning and end and restarts the named
+container. A tmpfs database cannot pass the restart-persistence check. Keep
+this separate from an existing development inbox.
 
 ## Frontend benchmark
 

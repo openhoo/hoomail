@@ -386,3 +386,36 @@ func TestIsCalendarPart(t *testing.T) {
 func stringPointer(value string) *string {
 	return &value
 }
+
+func TestParseICSRejectsOverflowingDuration(t *testing.T) {
+	for _, duration := range []string{
+		"P9223372036854775807W",
+		"P9223372036854775807D",
+		"PT2562048H",
+		"PT9223372036854775807M",
+		"PT9223372036854775807S",
+	} {
+		t.Run(duration, func(t *testing.T) {
+			ics := "BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:overflow@example.com\nDTSTART:20260723T100000Z\nDURATION:" + duration + "\nEND:VEVENT\nEND:VCALENDAR\n"
+			if events := ParseICS(ics); len(events) != 0 {
+				t.Fatalf("overflowing duration %s produced event end %v", duration, events[0].DTEnd)
+			}
+		})
+	}
+}
+
+func TestParseICSSignedDurationPreservesCalendarDayAndClock(t *testing.T) {
+	for _, test := range []struct {
+		duration string
+		want     time.Time
+	}{
+		{"P1W2DT3H4M5S", time.Date(2026, 8, 1, 13, 4, 5, 0, time.UTC)},
+		{"-P1W2DT3H4M5S", time.Date(2026, 7, 14, 6, 55, 55, 0, time.UTC)},
+	} {
+		ics := "BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:signed@example.com\nDTSTART:20260723T100000Z\nDURATION:" + test.duration + "\nEND:VEVENT\nEND:VCALENDAR\n"
+		events := ParseICS(ics)
+		if len(events) != 1 || events[0].DTEnd == nil || *events[0].DTEnd != test.want.UnixMilli() {
+			t.Fatalf("duration %s produced %#v, want end %d", test.duration, events, test.want.UnixMilli())
+		}
+	}
+}
