@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.10.1 (2026-10-13)
+
+### Bug Fixes
+
+- **hoomail:** harden mail protocols, inspection, and UI recovery (#42) (956116c)
+
+### Other Changes
+
+- **hoomail:** add contributor and consumer agent skills (#38) (9fa0137)
+
 ## 0.10.0 (2026-09-11)
 
 ### Features
