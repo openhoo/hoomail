@@ -633,3 +633,46 @@ func TestPOP3RefreshesWriteDeadlineBeforeDelayedCommand(t *testing.T) {
 		t.Fatalf("delayed command used an expired write deadline: %d errors", conn.writeErrors)
 	}
 }
+
+func TestServeAfterShutdownClosesPassedListener(t *testing.T) {
+	service := New(&recordingStore{})
+	if err := service.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	if err := service.Serve(listener); !errors.Is(err, ErrServerClosed) {
+		t.Fatalf("Serve = %v, want ErrServerClosed", err)
+	}
+	conn, err := net.DialTimeout("tcp", listener.Addr().String(), time.Second)
+	if err == nil {
+		conn.Close()
+		t.Fatal("rejected listener remained open after terminal shutdown")
+	}
+}
+
+func TestCommandEmbeddedCRFailsClosed(t *testing.T) {
+	for _, command := range []string{"USER malformed\raddress@example.test", "CAPA\r", "QUIT\rUSER hidden@example.test"} {
+		t.Run(command, func(t *testing.T) {
+			recording := &recordingStore{}
+			server := startTestServer(t, recording)
+			client := dialPOP3(t, server.address)
+			defer client.close()
+			if err := client.conn.SetDeadline(time.Now().Add(time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			if response := client.command(command); response != "-ERR malformed command" {
+				t.Fatalf("response = %q, want malformed command", response)
+			}
+			if _, err := client.reader.ReadByte(); err == nil {
+				t.Fatal("connection remained open after malformed command framing")
+			}
+			if calls, _ := recording.snapshot(); len(calls) != 0 {
+				t.Fatalf("malformed command reached mailbox store: %v", calls)
+			}
+		})
+	}
+}

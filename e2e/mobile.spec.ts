@@ -54,3 +54,36 @@ test('short landscape keeps calendar days separate and dialog actions reachable'
   await expect(dialog).toBeHidden()
   await expect(page.getByRole('button', { name: 'Send test', exact: true })).toBeFocused()
 })
+
+test('long message headers keep the reader controls reachable across phone, tablet and desktop widths', async ({ page, request }, testInfo) => {
+  const subject = `Long header smoke ${'with extensive mail metadata '.repeat(45)}`.trim()
+  await sendTestMessage(request, { to: 'long-header@hoomail.test', subject, kind: 'plain' })
+  await messageRow(page, subject).click()
+  await expect(page.getByRole('heading', { name: subject, exact: true })).toBeVisible()
+  for (const viewport of [
+    { width: 320, height: 568 },
+    { width: 390, height: 844 },
+    { width: 768, height: 1024 },
+    { width: 1440, height: 900 },
+  ]) {
+    await page.setViewportSize(viewport)
+    const tabs = page.getByRole('tablist')
+    const bounds = await tabs.boundingBox()
+    expect(bounds).not.toBeNull()
+    expect(bounds!.y).toBeGreaterThanOrEqual(0)
+    expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(viewport.height)
+    const dimensions = await page.locator('[data-hoomail-shell]').evaluate((shell) => ({
+      viewport: window.innerWidth,
+      bodyWidth: document.body.scrollWidth,
+      shellWidth: shell.getBoundingClientRect().width,
+    }))
+    expect(dimensions.bodyWidth).toBeLessThanOrEqual(dimensions.viewport)
+    expect(dimensions.shellWidth).toBeLessThanOrEqual(dimensions.viewport)
+    await page.getByRole('tab', { name: 'Source', exact: true }).click()
+    await expect(page.getByLabel('Raw message source')).toContainText('Long header smoke')
+    const screenshotPath = testInfo.outputPath(`reader-${viewport.width}px.png`)
+    await page.screenshot({ path: screenshotPath })
+    await testInfo.attach(`reader-${viewport.width}px`, { path: screenshotPath, contentType: 'image/png' })
+    await page.getByRole('tab', { name: 'HTML', exact: true }).click()
+  }
+})

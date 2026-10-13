@@ -80,6 +80,7 @@ func (service *Service) Serve(listener net.Listener) error {
 	service.mu.Lock()
 	if service.closing {
 		service.mu.Unlock()
+		_ = listener.Close()
 		return ErrServerClosed
 	}
 	if service.listener != nil {
@@ -214,6 +215,9 @@ func readCommand(reader *bufio.Reader) (string, error) {
 	}
 	command := strings.TrimSuffix(string(line), "\n")
 	command = strings.TrimSuffix(command, "\r")
+	if strings.ContainsRune(command, '\r') {
+		return "", errors.New("command contains embedded CR")
+	}
 	if strings.IndexByte(command, 0) >= 0 {
 		return "", errors.New("command contains NUL")
 	}

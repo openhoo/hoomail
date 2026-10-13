@@ -665,3 +665,50 @@ func TestBdatOverLimitDiscardKeepsStreamSynced(t *testing.T) {
 	client.command(250, "NOOP")
 	client.command(221, "QUIT")
 }
+
+func TestBdatCoalescedCommandAndLongChunk(t *testing.T) {
+	messageStore := &recordingStore{}
+	address, stop := startTestServer(t, messageStore)
+	defer stop()
+	client := dialSMTP(t, address)
+	defer client.close()
+	client.command(250, "EHLO test")
+	client.command(250, "MAIL FROM:<sender@example.test>")
+	client.command(250, "RCPT TO:<recipient@example.test>")
+	raw := "From: sender@example.test\r\nTo: recipient@example.test\r\n\r\n" + strings.Repeat("x", 6000)
+	// A single write is a normal CHUNKING client behavior. Chunk data has no
+	// SMTP line-length restriction even when it arrives with its command.
+	if _, err := fmt.Fprintf(client.conn, "BDAT %d LAST\r\n%sNOOP\r\n", len(raw), raw); err != nil {
+		t.Fatal(err)
+	}
+	client.read(250)
+	client.read(250)
+	if input := messageStore.last(t); string(input.Raw) != raw {
+		t.Fatalf("stored BDAT message has %d bytes, want %d", len(input.Raw), len(raw))
+	}
+	client.command(221, "QUIT")
+}
+
+func TestBdatFinalChunkRejectsEarlyEOF(t *testing.T) {
+	messageStore := &recordingStore{}
+	address, stop := startTestServer(t, messageStore)
+	defer stop()
+	client := dialSMTP(t, address)
+	defer client.close()
+	client.command(250, "EHLO test")
+	client.command(250, "MAIL FROM:<sender@example.test>")
+	client.command(250, "RCPT TO:<recipient@example.test>")
+	raw := "From: sender@example.test\r\nTo: recipient@example.test\r\n\r\ntruncated body"
+	if _, err := fmt.Fprintf(client.conn, "BDAT %d LAST\r\n%s", len(raw)+10, raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.conn.(*net.TCPConn).CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+	client.read(554)
+	messageStore.mu.Lock()
+	defer messageStore.mu.Unlock()
+	if len(messageStore.inputs) != 0 {
+		t.Fatalf("persisted %d messages after incomplete final BDAT chunk", len(messageStore.inputs))
+	}
+}

@@ -190,6 +190,54 @@ func TestShutdownDefersLogoutUntilHandlerExit(t *testing.T) {
 	}
 }
 
+func TestShutdownDefersLogoutUntilBDATCallbackExit(t *testing.T) {
+	session := &shutdownBarrierSession{
+		mailEntered: make(chan struct{}), rcptEntered: make(chan struct{}), dataEntered: make(chan struct{}),
+		mailRelease: make(chan struct{}), rcptRelease: make(chan struct{}), dataRelease: make(chan struct{}),
+		logoutCalled: make(chan struct{}),
+	}
+	server := NewServer(BackendFunc(func(*Conn) (Session, error) { return session, nil }))
+	server.ErrorLog = log.New(io.Discard, "", 0)
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	conn := newConn(serverConn, server)
+	server.wg.Add(1)
+	go func() {
+		defer server.wg.Done()
+		_ = server.handleConn(conn)
+	}()
+	reader := bufio.NewReader(client)
+	smtpTestResponse(t, reader, "greeting")
+	smtpTestCommand(t, client, reader, "EHLO shutdown.test")
+	smtpTestReleasedCommand(t, client, reader, "MAIL FROM:<sender@example.test>", session.mailEntered, session.mailRelease)
+	smtpTestReleasedCommand(t, client, reader, "RCPT TO:<recipient@example.test>", session.rcptEntered, session.rcptRelease)
+	smtpTestCommand(t, client, reader, "BDAT 0")
+	waitShutdownCallback(t, session.dataEntered, "BDAT Data")
+
+	shutdownDone := make(chan error, 1)
+	go func() { shutdownDone <- server.Shutdown(context.Background()) }()
+	var failure string
+	select {
+	case <-session.logoutCalled:
+		failure = "Logout ran while BDAT Data callback was active"
+	case <-shutdownDone:
+		failure = "Shutdown returned while BDAT Data callback was active"
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(session.dataRelease)
+	if failure != "" {
+		t.Fatal(failure)
+	}
+	select {
+	case err := <-shutdownDone:
+		if err != nil {
+			t.Fatalf("Shutdown: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Shutdown did not finish after BDAT callback release")
+	}
+}
+
 type bdatShutdownSession struct {
 	dataEntered  chan struct{}
 	logoutCalled chan struct{}

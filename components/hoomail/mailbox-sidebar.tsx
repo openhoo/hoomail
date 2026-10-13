@@ -12,6 +12,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { AnimatedValue, InlinePresence } from '@/components/ui/reactive'
 import { cn } from '@/lib/utils'
 import { formatRelativeTime, type Mailbox } from './use-hoomail'
+import { ResourceStatus } from './resource-status'
 
 /**
  * AutoAnimate plugin emitting exact-duration ease-out effects for every action.
@@ -71,6 +72,10 @@ function createMotionPlugin(duration: number): AutoAnimationPlugin {
 
 export function MailboxSidebar({
   mailboxes,
+  isLoading,
+  loadError,
+  actionError,
+  onRetry,
   selectedId,
   onSelect,
   onDelete,
@@ -79,6 +84,10 @@ export function MailboxSidebar({
   onBack,
 }: {
   mailboxes: Mailbox[]
+  isLoading: boolean
+  loadError?: unknown
+  actionError?: string | null
+  onRetry: () => void
   selectedId: number | null
   onSelect: (id: number) => void
   onDelete: (id: number) => void
@@ -139,7 +148,9 @@ export function MailboxSidebar({
 
       <ScrollArea className="min-h-0 flex-1" aria-label="Inboxes">
         <nav ref={mailboxListRef} aria-label="Inboxes" className="flex flex-col gap-0.5 px-2 pb-2">
-          {mailboxes.length === 0 && (
+          <ResourceStatus label="inboxes" isLoading={isLoading} error={loadError} onRetry={onRetry} />
+          {actionError && <p role="alert" className="px-3 py-3 text-center text-xs text-destructive">{actionError}</p>}
+          {!isLoading && !loadError && mailboxes.length === 0 && (
             <div className="flex flex-col items-center gap-2 px-4 py-10 text-center">
               <Inbox className="size-6 text-muted-foreground/50" aria-hidden="true" />
               <p className="text-xs leading-relaxed text-muted-foreground">

@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '@/lib/utils'
 import type { CalendarEvent, Mailbox } from './use-hoomail'
+import { ResourceStatus } from './resource-status'
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
@@ -49,10 +50,16 @@ function eventTime(event: CalendarEvent): string {
 export function CalendarView({
   mailbox,
   events,
+  isLoading,
+  loadError,
+  onRetry,
   onOpenMessage,
 }: {
   mailbox: Mailbox | null
   events: CalendarEvent[]
+  isLoading: boolean
+  loadError?: unknown
+  onRetry: () => void
   onOpenMessage: (messageId: number) => void
 }) {
   const today = new Date()
@@ -174,6 +181,8 @@ export function CalendarView({
         </div>
       </header>
 
+      <ResourceStatus label="calendar" isLoading={isLoading} error={loadError} onRetry={onRetry} />
+
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
         <div role="grid" aria-label={monthLabel} className="flex min-h-[19rem] flex-[3] flex-col">
           <div role="row" className="grid shrink-0 grid-cols-7 border-b border-border">
@@ -273,7 +282,7 @@ export function CalendarView({
             </h2>
           </div>
           <ScrollArea className="min-h-0 flex-1" aria-label="Events for selected day">
-            {selectedDayEvents.length === 0 && (
+            {!isLoading && !loadError && selectedDayEvents.length === 0 && (
               <p className="px-4 pb-4 text-xs text-muted-foreground">No events on this day.</p>
             )}
             <ul className="flex flex-col gap-2 px-3 pb-4 sm:px-4">

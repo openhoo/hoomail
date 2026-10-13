@@ -16,7 +16,7 @@ concurrency:
 
 env:
   BUN_VERSION: 1.3.14
-  GO_VERSION: 1.26.6
+  GO_VERSION: 1.26.9
   HOOVERSION_VERSION: 1.1.1
 
 jobs:
@@ -290,20 +290,18 @@ jobs:
       - name: Verify embedded version
         run: test "$(docker run --rm hoomail:ci version)" = "0.0.0-ci"
 
-      - name: Smoke HTTP and SMTP
+      - name: Smoke mail workflows and restart persistence
         run: |
           set -euo pipefail
-          docker run --rm -d --name hoomail-ci \
-            --tmpfs /app/data:rw,noexec,nosuid,uid=65532,gid=65532,size=64m \
-            -p 3000:3000 -p 2525:2525 -p 3110:3110 hoomail:ci
-          for _ in $(seq 1 30); do
-            if docker exec hoomail-ci /hoomail healthcheck; then
-              exit 0
-            fi
-            sleep 1
-          done
-          docker logs hoomail-ci
-          exit 1
+          mkdir -p "$RUNNER_TEMP/hoomail-smoke-data"
+          chmod 777 "$RUNNER_TEMP/hoomail-smoke-data"
+          docker run -d --name hoomail-ci \
+            --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --memory 64m \
+            --mount "type=bind,source=$RUNNER_TEMP/hoomail-smoke-data,target=/app/data" \
+            -p 127.0.0.1:3000:3000 -p 127.0.0.1:2525:2525 -p 127.0.0.1:3110:3110 hoomail:ci
+          python3 scripts/smoke.py --container hoomail-ci --disposable \
+            --output "$RUNNER_TEMP/hoomail-container-smoke.json"
 
       - name: Verify bundled third-party notices
         run: |

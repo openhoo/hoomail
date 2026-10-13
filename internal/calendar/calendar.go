@@ -1,6 +1,7 @@
 package calendar
 
 import (
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -209,7 +210,11 @@ func (builder *eventBuilder) build(method string) (ParsedCalendarEvent, bool, bo
 		if !valid {
 			return ParsedCalendarEvent{}, false, false
 		}
-		value := duration.addTo(start).UnixMilli()
+		end, valid := duration.addTo(start)
+		if !valid {
+			return ParsedCalendarEvent{}, false, false
+		}
+		value := end.UnixMilli()
 		endMillis = &value
 	} else if allDay {
 		value := start.AddDate(0, 0, 1).UnixMilli()
@@ -514,9 +519,31 @@ func parseDuration(value string) (calendarDuration, bool) {
 	return duration, hasValue
 }
 
-func (duration calendarDuration) addTo(value time.Time) time.Time {
-	days := duration.sign * (duration.weeks*7 + duration.days)
-	value = value.AddDate(0, 0, days)
-	clock := time.Duration(duration.sign) * (time.Duration(duration.hours)*time.Hour + time.Duration(duration.minutes)*time.Minute + time.Duration(duration.seconds)*time.Second)
-	return value.Add(clock)
+func (duration calendarDuration) addTo(value time.Time) (time.Time, bool) {
+	// Bound calendar-day arithmetic before multiplication or conversion to
+	// int. Dates outside the stored Unix-millisecond range cannot be retained.
+	maxDays := min(int64(math.MaxInt), int64(math.MaxInt64/(24*60*60*1000)))
+	if int64(duration.weeks) > maxDays/7 || int64(duration.days) > maxDays-int64(duration.weeks)*7 {
+		return time.Time{}, false
+	}
+	days := duration.sign * int(int64(duration.weeks)*7+int64(duration.days))
+	var clock time.Duration
+	for _, component := range []struct {
+		amount int
+		unit   time.Duration
+	}{
+		{duration.hours, time.Hour},
+		{duration.minutes, time.Minute},
+		{duration.seconds, time.Second},
+	} {
+		if int64(component.amount) > int64(math.MaxInt64-clock)/int64(component.unit) {
+			return time.Time{}, false
+		}
+		clock += time.Duration(component.amount) * component.unit
+	}
+	end := value.AddDate(0, 0, days).Add(time.Duration(duration.sign) * clock)
+	if !time.UnixMilli(end.UnixMilli()).Equal(end) {
+		return time.Time{}, false
+	}
+	return end, true
 }

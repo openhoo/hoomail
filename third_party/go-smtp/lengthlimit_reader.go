@@ -1,6 +1,7 @@
 package smtp
 
 import (
+	"bufio"
 	"errors"
 	"io"
 )
@@ -16,25 +17,40 @@ type lineLimitReader struct {
 	LineLimit int
 
 	curLineLength int
+	reader        *bufio.Reader
 }
 
 func (r *lineLimitReader) Read(b []byte) (int, error) {
+	if len(b) == 0 {
+		return 0, nil
+	}
 	if r.curLineLength > r.LineLimit && r.LineLimit > 0 {
 		return 0, ErrTooLongLine
 	}
 
-	n, err := r.R.Read(b)
-	if err != nil {
-		return n, err
+	if r.reader == nil {
+		r.reader = bufio.NewReader(r.R)
 	}
-
 	if r.LineLimit == 0 {
-		return n, nil
+		// A BDAT chunk is arbitrary bytes, not a partial command line. Keep
+		// prefetched bytes available and start a fresh line once limiting is
+		// restored by the connection handler.
+		r.curLineLength = 0
+		return r.reader.Read(b)
 	}
 
-	for _, chr := range b[:n] {
+	// Stop at the first newline so textproto cannot prefetch and validate
+	// bytes belonging to a following BDAT chunk before its command handler
+	// disables line limiting. The buffered source retains those bytes.
+	for n := 0; n < len(b); n++ {
+		chr, err := r.reader.ReadByte()
+		if err != nil {
+			return n, err
+		}
+		b[n] = chr
 		if chr == '\n' {
 			r.curLineLength = 0
+			return n + 1, nil
 		}
 		r.curLineLength++
 
@@ -43,5 +59,5 @@ func (r *lineLimitReader) Read(b []byte) (int, error) {
 		}
 	}
 
-	return n, nil
+	return len(b), nil
 }

@@ -104,6 +104,7 @@ export function MessageViewer({
     data: rawSource,
     error: rawSourceError,
     isLoading: rawSourceLoading,
+    retry: retryRawSource,
   } = useCachedResource<RawSourcePreview>(
     activeTab === 'source' && message ? `/api/messages/${message.id}/source` : null,
     textFetcher,
@@ -254,7 +255,12 @@ export function MessageViewer({
             : 'Loading message'}
       </span>
       <div className={`flex min-h-0 min-w-0 flex-1 flex-col ${contentReady ? 'visible' : 'invisible'}`}>
-        <header className="min-w-0 shrink-0 border-b border-border px-3 py-3 sm:px-5 sm:py-4">
+        <header
+          role="region"
+          aria-label="Message details"
+          tabIndex={0}
+          className="min-h-0 max-h-[45%] min-w-0 shrink-0 overflow-y-auto border-b border-border px-3 py-3 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:px-5 sm:py-4"
+        >
         <h2 className="min-w-0 break-words text-lg font-semibold leading-snug text-balance">
           {message.subject || '(no subject)'}
         </h2>
@@ -361,8 +367,9 @@ export function MessageViewer({
               Loading raw message…
             </div>
           ) : rawSourceError ? (
-            <div role="alert" className="flex h-full items-center justify-center text-sm text-destructive">
-              Could not load raw message.
+            <div role="alert" className="flex h-full flex-col items-center justify-center gap-3 text-sm text-destructive">
+              <span>Could not load raw message.</span>
+              <Button type="button" size="sm" variant="outline" onClick={retryRawSource} aria-label="Retry raw message">Retry</Button>
             </div>
           ) : (
             <ScrollArea className="h-full" aria-label="Raw message source">
@@ -977,11 +984,18 @@ const previewTextFetcher = async (url: string): Promise<TextPreviewPayload> => {
 }
 
 function TextPreview({ url, active }: { url: string; active: boolean }) {
-  const { data, error } = useCachedResource<TextPreviewPayload>(active ? url : null, previewTextFetcher)
+  const { data, error, isLoading, retry } = useCachedResource<TextPreviewPayload>(active ? url : null, previewTextFetcher)
   return (
     <>
+      {error && (
+        <div role="alert" className="flex flex-wrap items-center justify-center gap-2 p-4 text-xs text-destructive">
+          <span>Could not load preview.</span>
+          <Button type="button" size="sm" variant="outline" onClick={retry} aria-label="Retry attachment preview">Retry</Button>
+        </div>
+      )}
+      {isLoading && <p role="status" className="p-4 text-xs text-muted-foreground">Loading preview…</p>}
       <pre className="whitespace-pre-wrap p-4 font-mono text-xs leading-relaxed">
-        {error ? 'Could not load preview.' : (data?.text ?? 'Loading…')}
+        {data?.text ?? ''}
       </pre>
       {data?.truncated && (
         <p className="px-4 pb-3 text-xs text-muted-foreground">

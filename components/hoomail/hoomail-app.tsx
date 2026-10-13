@@ -47,6 +47,8 @@ export function HoomailApp() {
   const [mobilePane, setMobilePane] = useState<MobilePane>('list')
   const [sendTestOpen, setSendTestOpen] = useState(false)
   const [resetOpen, setResetOpen] = useState(false)
+  const [messageActionError, setMessageActionError] = useState<string | null>(null)
+  const [mailboxActionError, setMailboxActionError] = useState<string | null>(null)
   const anchorIdRef = useRef<number | null>(null)
   const pendingMessageFocusRef = useRef<number | null>(null)
   const pendingListFocusRef = useRef(false)
@@ -54,10 +56,23 @@ export function HoomailApp() {
   const selectedMessageIdRef = useRef<number | null>(selectedMessageId)
   selectedMessageIdRef.current = selectedMessageId
 
-  const { mailboxes } = useMailboxes()
-  const { messages } = useMessages(selectedMailboxId, searchQuery)
+  const { mailboxes, isLoading: mailboxesLoading, error: mailboxesError, retry: retryMailboxes } = useMailboxes()
+  const { messages, isLoading: messagesLoading, error: messagesError, retry: retryMessages } = useMessages(selectedMailboxId, searchQuery)
+  // A filtered list cannot establish that an opened message was deleted. Keep
+  // the full inbox subscribed while searching so external deletion events can
+  // reconcile the reader and bulk selection against authoritative IDs.
+  const { messages: unfilteredMessages, isLoading: unfilteredLoading, error: unfilteredError, retry: retryUnfilteredMessages } = useMessages(searchQuery.trim() ? selectedMailboxId : null)
+  const displayedMessagesError = messagesError ?? (searchQuery.trim() ? unfilteredError : null)
+  const displayedMessagesLoading = messagesLoading || Boolean(searchQuery.trim() && unfilteredLoading)
+  const retryDisplayedMessages = useCallback(() => {
+    retryMessages()
+    if (searchQuery.trim()) retryUnfilteredMessages()
+  }, [retryMessages, retryUnfilteredMessages, searchQuery])
+  const inboxMessages = searchQuery.trim() ? unfilteredMessages : messages
+  const inboxMessagesLoading = searchQuery.trim() ? unfilteredLoading : messagesLoading
+  const inboxMessagesError = searchQuery.trim() ? unfilteredError : messagesError
   const { detail, isLoading: messageLoading, error: messageError } = useMessage(selectedMessageId)
-  const { events } = useCalendarEvents(selectedMailboxId, view === 'calendar')
+  const { events, isLoading: eventsLoading, error: eventsError, retry: retryEvents } = useCalendarEvents(selectedMailboxId, view === 'calendar')
   const openMessageStateRef = useRef({ messages, selectedMailboxId })
   openMessageStateRef.current = { messages, selectedMailboxId }
   const actionStateRef = useRef({ messages, selectedMailboxId, selectedMessageId, searchQuery, mobilePane })
@@ -71,8 +86,23 @@ export function HoomailApp() {
     }
   }, [mailboxes, selectedMailboxId])
 
+  useEffect(() => {
+    if (selectedMailboxId == null || inboxMessagesLoading || inboxMessagesError) return
+    const liveIds = new Set(inboxMessages.map((message) => message.id))
+    setSelectedIds((previous) => {
+      if ([...previous].every((id) => liveIds.has(id))) return previous
+      return new Set([...previous].filter((id) => liveIds.has(id)))
+    })
+    if (selectedMessageId != null && !liveIds.has(selectedMessageId)) {
+      setSelectedMessageId(null)
+      anchorIdRef.current = null
+      if (mobilePane === 'reader') setMobilePane('list')
+    }
+  }, [inboxMessages, inboxMessagesLoading, inboxMessagesError, selectedMailboxId, selectedMessageId, mobilePane])
+
   // If the selected mailbox disappeared (e.g. after reset), clear selection
   useEffect(() => {
+    if (mailboxesLoading || mailboxesError) return
     if (selectedMailboxId != null) {
       if (!mailboxes.some((m) => m.id === selectedMailboxId)) {
         setSelectedMailboxId(null)
@@ -80,7 +110,7 @@ export function HoomailApp() {
         setSelectedIds(new Set())
       }
     }
-  }, [mailboxes, selectedMailboxId])
+  }, [mailboxes, mailboxesLoading, mailboxesError, selectedMailboxId])
 
   const handleReset = useCallback(() => {
     setSelectedMailboxId(null)
@@ -88,6 +118,8 @@ export function HoomailApp() {
     setSelectedIds(new Set())
     setSearchQuery('')
     setMobilePane('inboxes')
+    setMessageActionError(null)
+    setMailboxActionError(null)
     pendingMessageFocusRef.current = null
     pendingListFocusRef.current = false
   }, [])
@@ -112,8 +144,12 @@ export function HoomailApp() {
   selectedMailboxIdRef.current = selectedMailboxId
 
   const handleDeleteMailbox = async (id: number) => {
-    const ok = await deleteMailboxRequest(id)
-    if (!ok) return
+    setMailboxActionError(null)
+    const ok = await deleteMailboxRequest(id).catch(() => false)
+    if (!ok) {
+      setMailboxActionError('Could not delete inbox. Please try again.')
+      return
+    }
     if (selectedMailboxIdRef.current === id) {
       setSelectedMailboxId(null)
       setSelectedMessageId(null)
@@ -132,6 +168,7 @@ export function HoomailApp() {
     setSelectedMessageId(null)
     setSelectedIds(new Set())
     setSearchQuery('')
+    setMessageActionError(null)
     anchorIdRef.current = null
     if (view === 'calendar') {
       setMobilePane('calendar')
@@ -296,6 +333,7 @@ export function HoomailApp() {
   }
 
   const handleAction = useCallback(async (action: 'delete' | 'read' | 'unread', ids: number[]) => {
+    setMessageActionError(null)
     const { messages, selectedMailboxId, selectedMessageId, searchQuery, mobilePane } = actionStateRef.current
     const actionContext = { mailboxId: selectedMailboxId, searchQuery: searchQuery.trim(), ids: new Set(ids) }
     // Optimistic delete: drop the rows from the cache immediately so the
@@ -328,6 +366,9 @@ export function HoomailApp() {
     if (!ok) {
       // Revert the optimistic update by revalidating from the server
       if (selectedMailboxId != null) refreshAfterRead(selectedMailboxId)
+      if (actionStateRef.current.selectedMailboxId === actionContext.mailboxId) {
+        setMessageActionError(action === 'delete' ? 'Could not delete messages. Please try again.' : 'Could not update messages. Please try again.')
+      }
       return
     }
     const currentContext = actionStateRef.current
@@ -490,6 +531,10 @@ export function HoomailApp() {
       >
         <MailboxSidebar
           mailboxes={mailboxes}
+          isLoading={mailboxesLoading}
+          loadError={mailboxesError}
+          actionError={mailboxActionError}
+          onRetry={retryMailboxes}
           selectedId={selectedMailboxId}
           onSelect={selectMailbox}
           onDelete={handleDeleteMailbox}
@@ -564,6 +609,10 @@ export function HoomailApp() {
               <MessageList
                 mailbox={selectedMailbox}
                 messages={messages}
+                isLoading={displayedMessagesLoading}
+                loadError={displayedMessagesError}
+                actionError={messageActionError}
+                onRetry={retryDisplayedMessages}
                 selectedId={selectedMessageId}
                 selectedIds={selectedIds}
                 searchQuery={searchQuery}
@@ -629,6 +678,9 @@ export function HoomailApp() {
               <CalendarView
                 mailbox={selectedMailbox}
                 events={events}
+                isLoading={eventsLoading}
+                loadError={eventsError}
+                onRetry={retryEvents}
                 onOpenMessage={openMessageFromCalendar}
               />
             </div>

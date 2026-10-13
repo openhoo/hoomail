@@ -80,13 +80,21 @@ func Parse(raw []byte, limits Limits) (Document, error) {
 	}
 	document.Root = root
 	document.SemanticError = semanticErr
-	if semanticErr != nil && parsedPath != "" {
+	if indexed != nil {
+		for _, cause := range truncationCauseOrder {
+			if indexed.causes[cause] {
+				document.Truncated = true
+				document.TruncationCauses = append(document.TruncationCauses, cause)
+			}
+		}
+	}
+	if (semanticErr != nil || document.Truncated) && parsedPath != "" {
 		document.ParsedThroughPath = stringPointer(parsedPath)
 	}
 	if semanticErr == nil && !document.Truncated {
 		document.ParsedThroughPath = nil
 	}
-	if root != nil {
+	if root != nil && !document.Truncated {
 		document.Presentation = selectPresentation(root)
 	}
 	return document, nil
@@ -161,6 +169,7 @@ func readSemanticNode(entity *message.Entity, entityErr error, path string, rawN
 		node.HeaderFields = rawNode.HeaderFields
 		node.RawHeader = rawNode.RawHeader
 		node.RawBody = rawNode.RawBody
+		node.DecodedRaw = rawNode.DecodedRaw
 		node.BoundaryDelimiters = rawNode.BoundaryDelimiters
 		node.BoundaryClosed = rawNode.BoundaryClosed
 		node.TransferEncoding = rawNode.TransferEncoding
@@ -189,9 +198,36 @@ func readSemanticNode(entity *message.Entity, entityErr error, path string, rawN
 			return node, err, "", nil
 		}
 		node.DecodedBody = body
+		var rawChild *Node
+		if rawNode != nil && len(rawNode.Children) > 0 {
+			rawChild = rawNode.Children[0]
+		}
+		childIndex := index
+		if rawChild == nil && index != nil && !isIdentityTransferEncoding(node.TransferEncoding) {
+			childIndex = index.indexDecodedMessage(body, path+".1", depth+1)
+			rawChild = childIndex.root
+			if len(childIndex.causes) > 0 {
+				if rawChild != nil {
+					node.Children = append(node.Children, rawChild)
+				}
+				if complete := lastCompleteIndexedPath(rawChild, childIndex); complete != nil {
+					return node, nil, *complete, nil
+				}
+				return node, nil, "", nil
+			}
+		}
+		if rawChild == nil && index != nil && index.limits.MaxDepth > 0 && depth >= index.limits.MaxDepth {
+			// Uncorrelated nesting beyond the indexed depth cap: deeper
+			// analysis is unavailable rather than failed.
+			return node, nil, path, nil
+		}
 		childEntity, childEntityErr := message.ReadWithOptions(bytes.NewReader(body), &message.ReadOptions{MaxHeaderBytes: -1})
 		if childEntityErr != nil && !message.IsUnknownCharset(childEntityErr) && !message.IsUnknownEncoding(childEntityErr) {
 			child := &Node{Path: path + ".1", Header: entity.Header, MediaType: "text/plain", DecodedBody: body}
+			if index != nil {
+				child.DecodedRaw = body
+				child.RawHeader, child.RawBody = ByteRange{Start: -1, End: -1}, ByteRange{Start: -1, End: -1}
+			}
 			node.Children = append(node.Children, child)
 			return node, nil, child.Path, nil
 		}
@@ -201,16 +237,7 @@ func readSemanticNode(entity *message.Entity, entityErr error, path string, rawN
 			}
 			return node, childEntityErr, "", nil
 		}
-		var rawChild *Node
-		if rawNode != nil && len(rawNode.Children) > 0 {
-			rawChild = rawNode.Children[0]
-		}
-		if rawChild == nil && index != nil && index.limits.MaxDepth > 0 && depth >= index.limits.MaxDepth {
-			// Uncorrelated nesting beyond the indexed depth cap: deeper
-			// analysis is unavailable rather than failed.
-			return node, nil, path, nil
-		}
-		child, childErr, childComplete, invariantErr := readSemanticNode(childEntity, childEntityErr, path+".1", rawChild, index, false, depth+1)
+		child, childErr, childComplete, invariantErr := readSemanticNode(childEntity, childEntityErr, path+".1", rawChild, childIndex, false, depth+1)
 		if invariantErr != nil {
 			return nil, nil, "", invariantErr
 		}
@@ -236,6 +263,9 @@ func readSemanticNode(entity *message.Entity, entityErr error, path string, rawN
 		part, partErr := multipartReader.NextPart()
 		if errors.Is(partErr, io.EOF) {
 			if rawNode != nil && childIndex != len(rawNode.Children) {
+				if index != nil && !index.meta[rawNode].complete {
+					return node, fmt.Errorf("mimeparse: incomplete multipart structure at %s", path), lastComplete, nil
+				}
 				return nil, nil, "", fmt.Errorf("mimeparse: raw child count %d does not match semantic child count %d at %s", len(rawNode.Children), childIndex, path)
 			}
 			return node, nil, lastComplete, nil
@@ -250,6 +280,9 @@ func readSemanticNode(entity *message.Entity, entityErr error, path string, rawN
 		var rawChild *Node
 		if rawNode != nil {
 			if childIndex > len(rawNode.Children) {
+				if index != nil && !index.meta[rawNode].complete {
+					return node, fmt.Errorf("mimeparse: incomplete MIME part header at %s.%d", path, childIndex), lastComplete, nil
+				}
 				return nil, nil, "", fmt.Errorf("mimeparse: semantic child %d has no raw node at %s", childIndex, path)
 			}
 			rawChild = rawNode.Children[childIndex-1]
@@ -267,6 +300,9 @@ func readSemanticNode(entity *message.Entity, entityErr error, path string, rawN
 		}
 		if childErr != nil {
 			return node, childErr, lastComplete, nil
+		}
+		if index != nil && len(index.causes) > 0 {
+			return node, nil, lastComplete, nil
 		}
 	}
 }

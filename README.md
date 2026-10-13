@@ -222,7 +222,7 @@ This health test does not send mail or verify persistence, Ingress, or external 
 Use the project/CI toolchains:
 
 - Bun 1.3.14
-- Go 1.26.6
+- Go 1.26.9
 - Playwright-managed Chromium for end-to-end tests
 
 `web/dist` is generated and gitignored, but Go embeds it at compile time. After a fresh checkout and after frontend changes, build the client before running any Go command that compiles the server:

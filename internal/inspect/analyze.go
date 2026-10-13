@@ -79,6 +79,7 @@ type headerOccurrence struct {
 	line       int
 	occurrence int
 	field      mimeparse.HeaderField
+	decoded    bool
 }
 
 func Analyze(ctx context.Context, input Input) (Report, error) {
@@ -201,6 +202,11 @@ func (a *analyzer) runAnalysisRules() {
 		a.addFinding(finding("analysis.parse", "analysis", "not-evaluated", "none", "evidence", "all", "MIME parsing", "Semantic MIME parsing was skipped because bounded inspection limits stopped raw indexing before the semantic parser could run; raw evidence remains available.", nil, nil))
 		return
 	}
+	if a.doc.Truncated && a.doc.SemanticError == nil {
+		a.addUnavailable("mime")
+		a.addFinding(finding("analysis.parse", "analysis", "not-evaluated", "none", "evidence", "all", "MIME parsing", "Semantic MIME parsing stopped because bounded inspection limits were reached while indexing a decoded encapsulated message; completed evidence remains available.", nil, nil))
+		return
+	}
 	if a.doc.SemanticError != nil {
 		a.addUnavailable("mime")
 		value := evidenceValue(a.doc.SemanticError.Error())
@@ -254,10 +260,13 @@ func (a *analyzer) ruleHeaderSyntax(node *mimeparse.Node, id, label string, comp
 	path := (*string)(nil)
 	if nested {
 		category, path = "mime", stringPointer(node.Path)
+		if node.DecodedRaw != nil {
+			source = "mime-part"
+		}
 	}
 	if defect != "" {
 		evidence := Evidence{Source: source, Path: path}
-		if line > 0 {
+		if line > 0 && node.DecodedRaw == nil {
 			evidence.Line = &line
 		}
 		if value != "" {
@@ -271,20 +280,32 @@ func (a *analyzer) ruleHeaderSyntax(node *mimeparse.Node, id, label string, comp
 }
 
 func inspectHeaderBlock(raw []byte, node *mimeparse.Node) (string, int, string) {
+	if node != nil && node.DecodedRaw != nil {
+		raw = node.DecodedRaw
+	}
 	if node == nil || !validRange(node.RawHeader, len(raw)) {
 		return "", 0, ""
 	}
 	block := raw[node.RawHeader.Start:node.RawHeader.End]
 	lineNo := 0
+	if len(node.HeaderFields) > 0 {
+		first := node.HeaderFields[0]
+		if first.RawField.Start >= node.RawHeader.Start && first.RawField.Start <= node.RawHeader.End {
+			lineNo = first.FirstLine - 1 - bytes.Count(raw[node.RawHeader.Start:first.RawField.Start], []byte("\n"))
+		}
+	}
 	start := 0
 	seenField := false
 	for start < len(block) {
 		lineNo++
 		end := start
-		for end < len(block) && block[end] != '\r' && block[end] != '\n' {
+		for end < len(block) && block[end] != '\n' {
 			end++
 		}
 		line := block[start:end]
+		if end < len(block) && len(line) > 0 && line[len(line)-1] == '\r' {
+			line = line[:len(line)-1]
+		}
 		if len(line) == 0 {
 			return "", 0, ""
 		}
@@ -311,11 +332,7 @@ func inspectHeaderBlock(raw []byte, node *mimeparse.Node) (string, int, string) 
 		if end >= len(block) {
 			break
 		}
-		if block[end] == '\r' && end+1 < len(block) && block[end+1] == '\n' {
-			start = end + 2
-		} else {
-			start = end + 1
-		}
+		start = end + 1
 	}
 	return "", 0, ""
 }
@@ -477,16 +494,23 @@ func (a *analyzer) ruleInternationalizedHeaders() {
 			stack = append(stack, node.Children[index])
 		}
 		occurrences := map[string]int{}
+		raw := a.doc.Raw
+		if node.DecodedRaw != nil {
+			raw = node.DecodedRaw
+		}
 		for _, field := range node.HeaderFields {
-			if !validRange(field.RawValue, len(a.doc.Raw)) {
+			if !validRange(field.RawValue, len(raw)) {
 				continue
 			}
-			value := a.doc.Raw[field.RawValue.Start:field.RawValue.End]
+			value := raw[field.RawValue.Start:field.RawValue.End]
 			path := node.Path
 			fieldName := field.Name
 			occurrences[strings.ToLower(fieldName)]++
 			occurrence := occurrences[strings.ToLower(fieldName)]
 			ev := Evidence{Source: "raw-header", Path: &path, Field: &fieldName, Occurrence: &occurrence}
+			if node.DecodedRaw != nil {
+				ev.Source = "mime-part"
+			}
 			if !utf8.Valid(value) {
 				invalid = append(invalid, ev)
 			} else if !isASCIIBytes(value) {
@@ -1092,7 +1116,7 @@ func collectLeafAttachments(root *mimeparse.Node, out []mimeparse.AttachmentCand
 	for len(stack) > 0 {
 		node := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
-		if len(node.Children) == 0 {
+		if len(node.Children) == 0 || node.MediaType == "message/rfc822" || node.MediaType == "message/global" {
 			out = append(out, mimeparse.AttachmentCandidate{Node: node})
 			continue
 		}
@@ -1291,14 +1315,18 @@ func (a *analyzer) headerOccurrences(node *mimeparse.Node) []headerOccurrence {
 	}
 	out := make([]headerOccurrence, 0, len(node.HeaderFields))
 	counts := map[string]int{}
+	raw := a.doc.Raw
+	if node.DecodedRaw != nil {
+		raw = node.DecodedRaw
+	}
 	for _, field := range node.HeaderFields {
 		name := field.Name
 		counts[strings.ToLower(name)]++
 		value := ""
-		if validRange(field.RawValue, len(a.doc.Raw)) {
-			value = unfoldHeaderValue(string(a.doc.Raw[field.RawValue.Start:field.RawValue.End]))
+		if validRange(field.RawValue, len(raw)) {
+			value = unfoldHeaderValue(string(raw[field.RawValue.Start:field.RawValue.End]))
 		}
-		out = append(out, headerOccurrence{name: name, value: value, line: field.FirstLine, occurrence: counts[strings.ToLower(name)], field: field})
+		out = append(out, headerOccurrence{name: name, value: value, line: field.FirstLine, occurrence: counts[strings.ToLower(name)], field: field, decoded: node.DecodedRaw != nil})
 	}
 	return out
 }
@@ -1338,6 +1366,9 @@ func validRange(r mimeparse.ByteRange, length int) bool {
 	return r.Start >= 0 && r.End >= r.Start && r.End <= length
 }
 func rawBody(raw []byte, node *mimeparse.Node) ([]byte, bool) {
+	if node != nil && node.DecodedRaw != nil {
+		raw = node.DecodedRaw
+	}
 	if node == nil || !validRange(node.RawBody, len(raw)) {
 		return nil, false
 	}
@@ -1415,7 +1446,11 @@ func occurrencesEvidence(fields []headerOccurrence, name string, path *string) [
 		value := evidenceValue(item.value)
 		occurrence := item.occurrence
 		line := item.line
-		out = append(out, Evidence{Source: "raw-header", Path: path, Field: &fieldName, Occurrence: &occurrence, Line: &line, Value: &value})
+		ev := Evidence{Source: "raw-header", Path: path, Field: &fieldName, Occurrence: &occurrence, Line: &line, Value: &value}
+		if item.decoded {
+			ev.Source, ev.Line = "mime-part", nil
+		}
+		out = append(out, ev)
 	}
 	return out
 }
@@ -2021,7 +2056,7 @@ func buildMIMETree(root *mimeparse.Node, raw []byte, semanticDecoded bool) *Mime
 		if value := normalizeContentID(node.Header.Get("Content-ID")); value != "" {
 			item.ContentID = &value
 		}
-		if body, ok := rawBody(raw, node); ok {
+		if body, ok := rawBody(raw, node); ok && node.DecodedRaw == nil {
 			size := len(body)
 			item.RawSize = &size
 		}
@@ -2123,6 +2158,15 @@ func trimReport(report *Report) {
 		report.Summary = summarize(report.Findings)
 		return
 	}
+	// Metadata can expand several times its raw MIME size during JSON escaping.
+	// Retain the tree's paths and structure while bounding sender-supplied text
+	// before removing findings and evidence. analysis.truncated already records
+	// that the report-byte budget, rather than a MIME syntax defect, fired.
+	trimMIMETreeMetadata(report.MIMETree)
+	if measure() <= MaxReportBytes {
+		report.Summary = summarize(report.Findings)
+		return
+	}
 	for index := range report.Findings {
 		if len(report.Findings[index].Evidence) > 0 {
 			report.Findings[index].Evidence = []Evidence{}
@@ -2139,5 +2183,35 @@ func trimReport(report *Report) {
 		}
 		report.Findings = append(report.Findings[:remove], report.Findings[remove+1:]...)
 	}
+	if measure() > MaxReportBytes {
+		report.MIMETree = nil
+	}
 	report.Summary = summarize(report.Findings)
+}
+
+func trimMIMETreeMetadata(root *MimeNode) {
+	if root == nil {
+		return
+	}
+	const maxValueBytes = 256
+	bounded := func(value string) string {
+		if len(value) <= maxValueBytes {
+			return value
+		}
+		return truncateUTF8(value, maxValueBytes-len(searchableHeaderTruncationMark)) + searchableHeaderTruncationMark
+	}
+	stack := []*MimeNode{root}
+	for len(stack) > 0 {
+		node := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		node.ContentType = bounded(node.ContentType)
+		for _, value := range []*string{node.Charset, node.Encoding, node.Disposition, node.Filename, node.ContentID} {
+			if value != nil {
+				*value = bounded(*value)
+			}
+		}
+		for child := range node.Children {
+			stack = append(stack, &node.Children[child])
+		}
+	}
 }
