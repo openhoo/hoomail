@@ -556,7 +556,7 @@ gh workflow run Release \
   --field dry_run=true
 ```
 
-Hooversion is pinned to commit `ac503b23b9b36ebbf39ee6103713c81f1f18b64d` (`v1.1.1`). Conventional Commits drive the version. The configured release scopes are `hoomail`, `client`, `server`, `smtp`, `docker`, `ghcr`, `image`, `helm`, `chart`, and `release`.
+Hooversion is pinned to commit `f0a37cca22997993ca6416010b81ca197a3ac580` (`v1.1.2`). Conventional Commits drive the version. The configured release scopes are `hoomail`, `client`, `server`, `smtp`, `docker`, `ghcr`, `image`, `helm`, `chart`, and `release`.
 
 When a release is published, automation:
 
