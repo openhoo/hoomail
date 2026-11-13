@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.2 (2026-11-13)
+
+### Bug Fixes
+
+- **hoomail:** update dependencies and patched build toolchains (ad0a9be)
+
 ## 0.10.1 (2026-10-13)
 
 ### Bug Fixes
