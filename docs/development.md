@@ -6,8 +6,8 @@ This guide covers the repository-supported contributor workflow. It separates th
 
 Use the versions pinned by CI and the container build:
 
-- Bun `1.3.14`
-- Go `1.26.9`
+- Bun `1.4.3`
+- Go `1.27.4`
 - Playwright-managed Chromium for browser tests and the frontend benchmark
 
 `package.json` does not declare `packageManager` or `engines`, so it does **not** enforce the Bun version. Verify the executable in your environment when reproducibility matters:
