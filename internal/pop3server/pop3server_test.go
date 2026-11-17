@@ -441,6 +441,9 @@ func TestTopBytesUsesEarliestBoundaryAndPhysicalLineTerminators(t *testing.T) {
 	}{
 		{name: "earliest mixed boundary headers only", raw: "Subject: x\n\nfirst\r\n\r\nsecond", bodyLines: 0, want: "Subject: x\n\n"},
 		{name: "earliest mixed boundary first body line", raw: "Subject: x\n\nfirst\r\n\r\nsecond", bodyLines: 1, want: "Subject: x\n\nfirst\r\n"},
+		{name: "empty header block", raw: "\r\none\r\ntwo\r\n", bodyLines: 0, want: "\r\n"},
+		{name: "mixed header terminators", raw: "Subject: x\n\r\none\r\ntwo", bodyLines: 1, want: "Subject: x\n\r\none\r\n"},
+		{name: "CR-only header and body", raw: "Subject: x\r\rone\rtwo", bodyLines: 1, want: "Subject: x\r\rone\r"},
 		{name: "lone CR body terminators", raw: "Subject: x\r\n\r\none\rtwo\rthree", bodyLines: 2, want: "Subject: x\r\n\r\none\rtwo\r"},
 		{name: "unterminated final line", raw: "Subject: x\r\n\r\none\rtwo\rthree", bodyLines: 3, want: "Subject: x\r\n\r\none\rtwo\rthree"},
 		{name: "no header boundary", raw: "Subject: x", bodyLines: 1, want: "Subject: x"},

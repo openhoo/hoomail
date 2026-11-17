@@ -20,7 +20,7 @@ func TestEventJSONMatchesLegacyPayloads(t *testing.T) {
 		{"messages changed", MessagesChanged(7), `{"type":"messages:changed","mailboxId":7}`},
 		{"calendar changed", CalendarChanged(7), `{"type":"calendar:changed","mailboxId":7}`},
 		{"message new", MessageNew(7, 11, &subject, &fromAddress, nil), `{"type":"message:new","mailboxId":7,"message":{"id":11,"subject":"Welcome","fromAddress":"sender@example.com","fromName":null}}`},
-		{"reset", Reset(), `{"type":"reset"}`},
+		{"reset", Reset("next"), `{"type":"reset","generation":"next"}`},
 	}
 
 	for _, test := range tests {
@@ -43,7 +43,7 @@ func TestHubBroadcastFansOutInOrder(t *testing.T) {
 	defer unsubscribeFirst()
 	defer unsubscribeSecond()
 
-	want := []Event{MailboxNew(1, "first@example.com"), MessagesChanged(1), Reset()}
+	want := []Event{MailboxNew(1, "first@example.com"), MessagesChanged(1), Reset("next")}
 	for _, event := range want {
 		hub.Broadcast(event)
 	}
@@ -84,7 +84,7 @@ func TestSlowSubscriberDoesNotBlockBroadcast(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		hub.Broadcast(Reset())
+		hub.Broadcast(Reset("next"))
 		close(done)
 	}()
 
@@ -94,7 +94,7 @@ func TestSlowSubscriberDoesNotBlockBroadcast(t *testing.T) {
 		t.Fatal("broadcast blocked on slow subscriber")
 	}
 
-	assertEvents(t, active, []Event{Reset()})
+	assertEvents(t, active, []Event{Reset("next")})
 	for range slow {
 	}
 }

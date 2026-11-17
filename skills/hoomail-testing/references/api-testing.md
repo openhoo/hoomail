@@ -40,8 +40,9 @@ unexpected storage failures and unknown routes can be plain-text 500/404.
 
 `GET /api/events` is a global best-effort, non-replayable invalidation stream.
 There is no resume cursor or delivery guarantee. Subscribe before triggering an
-action if an event assertion matters, and always refetch authoritative API state
-after reconnect. For ordinary mail-delivery tests bounded API polling is simpler.
+action if an event assertion matters. On reconnect, refetch the mailbox list.
+Reuse a selected message ID only if the `connected` generation matches the one
+in which you selected it. For ordinary delivery tests, bounded polling is simpler.
 
 ## Mutations and cleanup
 

@@ -3,6 +3,7 @@
 .hooversion
 node_modules
 web/dist
+web/.dev
 data
 .env*
 .gitignore
@@ -22,7 +23,8 @@ coverage.*
 docs
 e2e
 charts
-scripts
+scripts/*
+!scripts/build-client.ts
 README.md
 components.json
 gitleaks-report.json

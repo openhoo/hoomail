@@ -107,6 +107,8 @@ If no supported body exists, all leaves are retained as attachments. The resolve
 2. the `Content-Disposition` `filename` parameter;
 3. the `Content-Type` `name` parameter.
 
+Forwarded messages (`message/rfc822` and `message/global`) are separate emails. A calendar part inside one does not create an invitation in the enclosing message. This also applies when looking for calendar parts in unselected alternatives.
+
 ### Inline CID resources
 
 For a resource with `Content-ID`, Hoomail trims whitespace and surrounding angle brackets before storing the identifier. Within the selected `multipart/related` branch, or for a part explicitly marked `Content-Disposition: inline` elsewhere in the selected message structure, an HTML `cid:` URL is percent-decoded and matched to that identifier. A match is rewritten to Hoomail's attachment endpoint before the parsed HTML allowlist performs its final sanitization. Unresolved references and identifiers on ordinary out-of-branch attachments do not become network fallbacks.
@@ -245,7 +247,7 @@ Commands are case-insensitive. Brackets below indicate an optional argument; the
 | `NOOP` | After login | No state change; `+OK`. |
 | `QUIT` | Before or after login | Before login, closes with `+OK goodbye`. After login, commits marked deletions and closes with `+OK goodbye`; commit failure is described below. |
 
-`TOP` recognizes either CRLF-CRLF or LF-LF as the header/body boundary. If the stored raw message has no recognized separator, `TOP` returns the complete raw message. A body-line count of `0` returns the headers and separator only.
+`TOP` ends the headers at the first empty physical line, including when there are no headers. It recognizes CRLF, LF, and CR, including mixed line endings. If there is no empty line, it returns the raw headers through the end of the message. A body-line count of `0` returns only the headers and their separator.
 
 Messages marked by `DELE` immediately disappear from the session's `STAT`, `LIST`, `UIDL`, `RETR`, `TOP`, and further `DELE` operations. Their original message numbers remain reserved rather than being renumbered.
 

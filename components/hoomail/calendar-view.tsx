@@ -50,6 +50,7 @@ function eventTime(event: CalendarEvent): string {
 export function CalendarView({
   mailbox,
   events,
+  hasSourceMessage,
   isLoading,
   loadError,
   onRetry,
@@ -57,6 +58,7 @@ export function CalendarView({
 }: {
   mailbox: Mailbox | null
   events: CalendarEvent[]
+  hasSourceMessage: (id: number) => boolean
   isLoading: boolean
   loadError?: unknown
   onRetry: () => void
@@ -288,15 +290,14 @@ export function CalendarView({
             <ul className="flex flex-col gap-2 px-3 pb-4 sm:px-4">
               {selectedDayEvents.map((event) => {
                 const cancelled = event.status === 'CANCELLED'
+                const sourceId = event.lastMessageId != null && hasSourceMessage(event.lastMessageId) ? event.lastMessageId : null
                 return (
                   <li key={event.id}>
                     <button
                       type="button"
-                      onClick={() =>
-                        event.lastMessageId != null && onOpenMessage(event.lastMessageId)
-                      }
-                      disabled={event.lastMessageId == null}
-                      aria-label={`${event.summary || 'untitled event'}, ${eventTime(event)}${event.location ? `, ${event.location}` : ''}${event.lastMessageId == null ? ', no source message available' : ''}`}
+                      onClick={() => sourceId != null && onOpenMessage(sourceId)}
+                      disabled={sourceId == null}
+                      aria-label={`${event.summary || 'untitled event'}, ${eventTime(event)}${event.location ? `, ${event.location}` : ''}${sourceId == null ? ', no source message available' : ''}`}
                       className={cn(
                         'min-h-11 min-w-0 w-full rounded-lg border p-3 text-left touch-manipulation transition-colors',
                         cancelled

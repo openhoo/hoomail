@@ -332,25 +332,43 @@ function matchesIdKeyedResource(key: string) {
   return /^\/api\/mailboxes\/\d+\/(?:messages|events)(?:\?|$)/.test(key) || /^\/api\/messages\/\d+(?:\/(?:inspect|source))?$/.test(key) || /^\/api\/attachments\/[^/?]+(?:\?.*)?$/.test(key)
 }
 
-export function useRealtime(options: { selectedMailboxId: number | null; onReset: () => void; onNewMailbox?: (mailbox: { id: number; address: string }) => void; onMailboxDeleted?: (mailboxId: number) => void }) {
+export function useRealtime(options: { hasMessageSelection: boolean; onReset: () => void; onNewMailbox?: (mailbox: { id: number; address: string }) => void; onMailboxDeleted?: (mailboxId: number) => void }) {
   const optionsRef = useRef(options)
   optionsRef.current = options
   useEffect(() => {
     const source = new EventSource('/api/events')
+    let connected = false
+    let generation: string | undefined
+    const resetResources = () => {
+      mutateCache<{ mailboxes: Mailbox[] }>('/api/mailboxes', () => undefined)
+      mutateCache(matchesIdKeyedResource, () => undefined, false)
+      optionsRef.current.onReset()
+    }
     source.onmessage = (event) => {
       let payload: { type: string; [key: string]: unknown }
       try { payload = JSON.parse(event.data) } catch { return }
-      const { onReset, onNewMailbox, onMailboxDeleted } = optionsRef.current
+      const { onNewMailbox, onMailboxDeleted } = optionsRef.current
       const mailboxId = payload.mailboxId as number
+      const nextGeneration = typeof payload.generation === 'string' ? payload.generation : undefined
       switch (payload.type) {
-        case 'connected':
-          // The stream is best-effort and non-replayable: after every (re)connect,
-          // discard ID-keyed caches that may have missed events, refetch what is
-          // currently displayed, and revalidate the mailbox list in place.
+        case 'connected': {
+          // A detail GET marks mail read. Only refetch the old selection
+          // when the server can confirm its IDs still name the same records.
+          // The inbox can also be used before the first greeting arrives.
+          const idsMayBeReused = connected
+            ? !nextGeneration || nextGeneration !== generation
+            : optionsRef.current.hasMessageSelection
+          connected = true
+          generation = nextGeneration
+          if (idsMayBeReused) {
+            resetResources()
+            break
+          }
           mutateCache(matchesIdKeyedResource, () => undefined, false)
           mutateCache((key) => matchesIdKeyedResource(key) && (cache.get(key)?.listeners.size ?? 0) > 0)
           mutateCache('/api/mailboxes')
           break
+        }
         case 'mailbox:new': mutateCache('/api/mailboxes'); onNewMailbox?.(payload.mailbox as { id: number; address: string }); break
         case 'mailbox:deleted': mutateCache('/api/mailboxes'); onMailboxDeleted?.(mailboxId); break
         case 'message:new':
@@ -361,11 +379,8 @@ export function useRealtime(options: { selectedMailboxId: number | null; onReset
           break
         case 'calendar:changed': mutateCache(`/api/mailboxes/${mailboxId}/events`); break
         case 'reset':
-          // Clear mailbox data before revalidating so the app cannot observe or
-          // auto-select a just-deleted mailbox from stale state mid-refresh.
-          mutateCache<{ mailboxes: Mailbox[] }>('/api/mailboxes', () => undefined)
-          mutateCache(matchesIdKeyedResource, () => undefined, false)
-          onReset()
+          generation = nextGeneration
+          resetResources()
           break
       }
     }

@@ -142,6 +142,11 @@ func appendAttachments(attachments []AttachmentCandidate, node *Node, mode attac
 }
 
 func appendCalendarAttachments(attachments []AttachmentCandidate, node *Node) []AttachmentCandidate {
+	// An attached email has its own invitations. An unselected alternative
+	// may contribute calendar parts from the outer message only.
+	if isEncapsulatedMessage(node.MediaType) {
+		return attachments
+	}
 	if len(node.Children) > 0 {
 		for _, child := range node.Children {
 			attachments = appendCalendarAttachments(attachments, child)

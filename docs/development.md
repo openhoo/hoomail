@@ -1,6 +1,6 @@
 # Development and verification
 
-This guide covers the repository-supported contributor workflow. It separates the integrated application, frontend-only Vite servers, isolated browser tests, package tests, benchmarks, and CI gates so that local development does not accidentally use or reset data you intend to keep.
+This guide covers the repository-supported contributor workflow. It separates the integrated application, frontend-only previews, isolated browser tests, package tests, benchmarks, and CI gates so that local development does not accidentally use or reset data you intend to keep.
 
 ## Toolchains
 
@@ -33,7 +33,7 @@ CI uses `bun x playwright install --with-deps chromium` on its Linux runner to i
 
 ## Build and run the integrated application
 
-The Go server embeds the compiled Vite client. `bun run build` writes that client to `web/dist`, which is generated and gitignored. The `//go:embed dist` declaration in `web/embed.go` makes this directory a compile-time prerequisite whenever a Go command compiles the embedded web package, including the full server and `go test ./...` from a fresh checkout.
+The Go server embeds the compiled Preact client. `bun run build` writes that client to `web/dist`, which is generated and gitignored. The `//go:embed dist` declaration in `web/embed.go` makes this directory a compile-time prerequisite whenever a Go command compiles the embedded web package, including the full server and `go test ./...` from a fresh checkout.
 
 Build and run the complete application with:
 
@@ -76,14 +76,14 @@ The exact scripts currently defined in `package.json` are:
 
 | Command | Underlying command | Purpose |
 | --- | --- | --- |
-| `bun run dev` | `vite` | Start the Vite development server for frontend-only iteration |
-| `bun run build` | `vite build` | Generate the production client in `web/dist` |
-| `bun run preview` | `vite preview` | Serve the generated static Vite output for frontend-only preview |
+| `bun run dev` | `bun scripts/build-client.ts --dev` | Rebuild on source changes; serve `web/.dev` on `127.0.0.1:5173`. Refresh the browser after a rebuild. |
+| `bun run build` | `bun scripts/build-client.ts` | Compile Tailwind with PostCSS and bundle Preact with esbuild into `web/dist` |
+| `bun run preview` | Python 3 static server | Serve the existing production build on `127.0.0.1:4173` |
 | `bun run test:e2e` | `playwright test` | Run all Playwright E2E specifications |
 | `bun run test:e2e:ui` | `playwright test --ui` | Open Playwright UI mode using the same isolated server orchestration |
 | `bun run bench:frontend` | `playwright test e2e/performance.spec.ts --reporter=line` | Run the isolated Chromium frontend benchmark |
 
-`bun run dev` and `bun run preview` are **not** integrated Hoomail servers. The Vite configuration has no proxy for same-origin `/api/*` requests or the `/api/events` SSE stream. A Vite page therefore cannot forward those calls to a separately running Go server by itself. Use the embedded build/run workflow for a complete application, or provide your own same-origin reverse proxy when specifically working through Vite.
+`bun run dev` and `bun run preview` are **not** integrated Hoomail servers. Both serve the client files only. Use the embedded build/run workflow for the API and event stream.
 
 ## Type checking
 
@@ -93,7 +93,7 @@ Run the repository's TypeScript check directly:
 bun x tsc --noEmit
 ```
 
-There is no `bun run typecheck` script. The strict, no-emit TypeScript configuration checks the Preact entry point and components, `lib/utils.ts`, Vite and Playwright configuration, and all `e2e/**/*.ts` files. It does not compile or test Go code, render the application, or emit a frontend bundle.
+There is no `bun run typecheck` script. The strict, no-emit TypeScript configuration checks the Preact entry point and components, `lib/utils.ts`, the client build script, Playwright configuration, and all `e2e/**/*.ts` files. It does not compile or test Go code, render the application, or emit a frontend bundle.
 
 ## Isolated Chromium E2E tests
 
@@ -175,17 +175,20 @@ retained. The container runs with a read-only root filesystem, dropped
 capabilities, UID/GID 65532, and the chart's default 64 MiB memory limit.
 
 To check an already running **disposable** container with persistent test
-storage, use its loopback mappings:
+storage, publish its listeners on `127.0.0.1`. Fixed or automatically assigned
+host ports work:
 
 ```bash
 python3 scripts/smoke.py --container hoomail-smoke --disposable \
-  --http-port 35100 --smtp-port 35125 --pop3-port 35126 \
   --output /tmp/hoomail-smoke.json
 ```
 
-The script resets all data at the beginning and end and restarts the named
-container. A tmpfs database cannot pass the restart-persistence check. Keep
-this separate from an existing development inbox.
+The script reads the named container's loopback mappings before resetting any
+data and checks them again after restart. If a listener uses a nonstandard
+in-container port, pass its initial host port with `--http-port`, `--smtp-port`
+or `--pop3-port`. The script resets all mail at the beginning and end. Use a
+disposable volume or directory: a tmpfs database cannot retain the test mail
+across the restart.
 
 ## Frontend benchmark
 
@@ -289,13 +292,13 @@ The CI workflow runs these independent or dependent gates:
 | Gate | What it establishes |
 | --- | --- |
 | Conventional Commits | Hooversion validates commit messages for release-compatible history; automated release commits are exempted from this job |
-| Preact client | Lockfile installation, strict TypeScript no-emit checking, and a production Vite build |
+| Preact client | Lockfile installation, strict TypeScript no-emit checking, and a production client build |
 | Playwright E2E | The isolated real-server Chromium workflows described above |
 | Go race tests | Embedded-client build followed by `go test -race ./...` |
 | Go quality | `gofmt` cleanliness for `cmd`, `internal`, and `web`; `go vet ./...`; module checksum verification |
 | Go security | Reachable vulnerability scanning with `govulncheck v1.6.0` and static security-pattern scanning with `gosec v2.28.0` (reviewed exclusions: `G104`, `G202`, `G301`, `G705`) |
 | Helm chart | Strict linting, representative template renders, and chart/application version synchronization |
-| Docker build and smoke | Build the production image, verify its embedded version, start it as configured by the image, and pass the built-in HTTP/SMTP/POP3 health check |
+| Docker build and smoke | Build the production image, verify its version and health check, exercise mail workflows, and confirm that SQLite data survives a container restart |
 
 CI does not run either benchmark as a gate and does not enforce a line or branch coverage percentage.
 
@@ -306,8 +309,8 @@ No single command proves the entire product:
 - Playwright E2E proves the principal UI, accessibility, focus, realtime SSE, built-in SMTP delivery, viewer, calendar, and destructive-reset workflows against a real isolated server.
 - Go package tests provide deeper SMTP and POP3 protocol behavior, MIME and iCalendar parsing, HTTP schemas, inspection, event ordering, and SQLite semantics.
 - Frontend and Go benchmarks report performance characteristics but contain no regression thresholds.
-- The Docker smoke proves image startup and the built-in HTTP/SMTP/POP3 health check, not full protocol behavior or durable restart persistence.
-- The listed unit and E2E suites do not demonstrate preservation of SQLite data across a process or container replacement. They also do not prove multi-platform publication, registry availability, release attestations/SBOMs, or a live Kubernetes deployment.
+- The Docker smoke compares mailboxes, raw mail, attachments, and calendar state before and after restarting the same container with its data volume.
+- These local checks do not establish volume backup or recovery, registry publication, release attestations/SBOMs, or a live Kubernetes deployment.
 - CI has no coverage-percentage gate; successful checks establish the named contracts, not exhaustive path coverage.
 
 See the repository [README](../README.md) for user-facing configuration, protocol entry points, deployment options, and the architecture overview.

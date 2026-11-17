@@ -128,7 +128,7 @@ Named sample kinds are `plain`, `invite`, `update`, and `cancellation`; a missin
 - [Data and calendar](docs/data-and-calendar.md) — SQLite lifecycle, stored data, search, cascades, reset behavior, and iCalendar reconciliation
 - [User interface](docs/user-interface.md) — inbox navigation, message views, attachment previews, calendar behavior, keyboard controls, and limitations
 - [Deployment](docs/deployment.md) — container images, image verification, persistence, Helm values, networking, probes, and release operations
-- [Development](docs/development.md) — toolchains, build prerequisites, tests, benchmarks, Vite limitations, and CI
+- [Development](docs/development.md) — toolchains, build prerequisites, tests, benchmarks, frontend preview limitations, and CI
 
 ## Container images
 
@@ -248,7 +248,7 @@ helm lint --strict charts/hoomail
 
 `bun run test:e2e` rebuilds the client and Go binary, then uses an isolated disposable database and server. `bun run bench:frontend` uses the same harness for the large-list Chromium benchmark.
 
-`bun run dev` and `bun run preview` serve only Vite output. The repository configures no Vite proxy, so same-origin `/api/*` and `/api/events` requests are not forwarded to a separately running Hoomail server. Use the embedded build/run workflow for an integrated application, or provide an external same-origin reverse proxy. See [Development](docs/development.md) for the complete workflow.
+`bun run dev` rebuilds and serves the client on loopback; refresh the browser after a rebuild. `bun run preview` uses Python 3 to serve the existing production build. Use the embedded build/run workflow to exercise the inbox API and event stream. See [Development](docs/development.md) for the complete workflow.
 
 ## HTTP API overview
 
@@ -280,11 +280,11 @@ application under test
                     └────────────────────────► POP3 :3110
 ```
 
-The release container is a scratch image containing the compiled server. The Vite bundle in `web/dist` is embedded into the Go binary at compile time. Browser navigation uses a GET/HEAD SPA fallback, except that `GET` or `HEAD` `/openapi.json` returns the generated OpenAPI document instead of falling back to the SPA. The exact API routes listed above are supported; other API-shaped requests can return `404`, while malformed dynamic route shapes may reach endpoint validation and return validation errors.
+The release container is a scratch image containing the compiled server. The Preact bundle in `web/dist` is embedded into the Go binary at compile time. Browser navigation uses a GET/HEAD SPA fallback, except that `GET` or `HEAD` `/openapi.json` returns the generated OpenAPI document instead of falling back to the SPA. The exact API routes listed above are supported; other API-shaped requests can return `404`, while malformed dynamic route shapes may reach endpoint validation and return validation errors.
 
 ## Security
 
-Hoomail has no SMTP, POP3, or web authentication, no TLS, and no CSRF protection. Its HTTP server does not provide an application-wide browser-security-header policy, and destructive API endpoints are available to every caller that can reach the service. Message frames receive their own CSP/referrer restrictions, and attachment responses receive `nosniff`. Hoomail stores full message content and attachment bytes.
+Hoomail stores full message content and attachments. It has no SMTP, POP3, or web authentication and does not terminate TLS. The HTTP API rejects browser requests from other origins that would change mailbox state, including the message-detail GET that marks mail read. Direct API clients with network access can still read and delete mail. Message frames have their own CSP and referrer restrictions, and attachment responses use `nosniff`.
 
 HTML previews are processed by a parsed allowlist and displayed in a sandboxed frame. Safe sender formatting—including email tables, ordinary typography, colors, spacing, and conservative inline CSS—is retained; scripts, active embeds, network-capable CSS, and remote subresources are removed. CID images resolve only from captured resources in the selected multipart/related content or parts explicitly marked inline elsewhere in the selected message structure. The frame adds only security and containment rules: maximum-width containment, browser-default body margin with no Hoomail margin override, responsive image maximum width, CSP, and no-referrer—not Hoomail typography, colors, link styling, or padding. Attachment responses use `X-Content-Type-Options: nosniff`; only PNG, JPEG, GIF, WebP, plain text, and CSV are inline-capable, while PDF, HTML, SVG/XML, JavaScript, and other active or unknown formats are download-only. The app follows the browser/operating-system light or dark preference, while the isolated message canvas remains white unless safe sender styling changes it; Hoomail does not recolor message content to match the app. These security and containment choices are distinct from sender HTML standards validity and visual compatibility with particular mail clients. Run Hoomail only on a trusted development network or behind a reverse proxy that provides TLS, authentication, and an appropriate browser-header policy. Do not expose its ports directly to the public internet, share its origin with trusted applications, or use it as a production mail server.
 The mail iframe sandbox permits only `allow-popups` and `allow-popups-to-escape-sandbox`, so sanitized links may open a new tab while scripts, same-origin access, forms, top-level navigation, downloads, and other sandbox privileges remain disabled. Opened pages run outside the email sandbox without `window.opener` or a referrer.

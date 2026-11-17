@@ -1,11 +1,14 @@
 @import '@fontsource-variable/atkinson-hyperlegible-next/wght.css';
 @import '@fontsource-variable/jetbrains-mono/wght.css';
 
-@import 'tailwindcss';
+@import 'tailwindcss' source(none);
+@source '../components';
+@source '../index.html';
+@source '../main.tsx';
 
 @custom-variant dark (&:is(.dark *));
 
-@theme inline {
+@theme inline static {
   --font-sans: 'Atkinson Hyperlegible Next Variable', 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono Variable', 'Cascadia Code', monospace;
   --text-xs: 0.8125rem;

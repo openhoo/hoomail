@@ -476,49 +476,27 @@ func cloneMessages(messages []store.POP3Message) []store.POP3Message {
 }
 
 func topBytes(raw []byte, bodyLines int) []byte {
-	headerEnd, separatorLength := headerBoundary(raw)
-	if headerEnd < 0 {
-		return raw
-	}
-	result := append([]byte(nil), raw[:headerEnd+separatorLength]...)
-	body := raw[headerEnd+separatorLength:]
-	position := 0
-	for line := 0; line < bodyLines && position < len(body); line++ {
-		end := position
-		for end < len(body) {
-			switch body[end] {
-			case '\r':
-				end++
-				if end < len(body) && body[end] == '\n' {
-					end++
-				}
-				break
-			case '\n':
-				end++
-				break
-			default:
-				end++
-				continue
-			}
-			break
+	inHeaders := true
+	end := 0
+	for end < len(raw) && (inHeaders || bodyLines > 0) {
+		start := end
+		for end < len(raw) && raw[end] != '\r' && raw[end] != '\n' {
+			end++
 		}
-		result = append(result, body[position:end]...)
-		position = end
+		if inHeaders {
+			inHeaders = end != start // the first empty physical line ends the headers
+		} else {
+			bodyLines--
+		}
+		if end < len(raw) {
+			terminator := raw[end]
+			end++
+			if terminator == '\r' && end < len(raw) && raw[end] == '\n' {
+				end++
+			}
+		}
 	}
-	return result
-}
-
-func headerBoundary(raw []byte) (int, int) {
-	crlfIndex := bytes.Index(raw, []byte("\r\n\r\n"))
-	lfIndex := bytes.Index(raw, []byte("\n\n"))
-	switch {
-	case crlfIndex >= 0 && (lfIndex < 0 || crlfIndex < lfIndex):
-		return crlfIndex, 4
-	case lfIndex >= 0:
-		return lfIndex, 2
-	default:
-		return -1, 0
-	}
+	return raw[:end]
 }
 
 func writeLine(writer *bufio.Writer, line string) error {

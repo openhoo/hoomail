@@ -116,12 +116,22 @@ func TestGeneratedOpenAPIEndpoint(t *testing.T) {
 	if !foundConnected {
 		t.Fatalf("Event.type enum missing connected: %#v", enum)
 	}
+	if generation, ok := eventSchema.Properties["generation"].(map[string]any); !ok || generation["type"] != "string" {
+		t.Fatal("Event.generation must be an optional string")
+	}
 	if len(document.Paths) != len(expected) {
 		t.Fatalf("documented paths=%d want=%d", len(document.Paths), len(expected))
 	}
 	for path, method := range expected {
-		if document.Paths[path][method] == nil {
+		op, ok := document.Paths[path][method].(map[string]any)
+		if !ok {
 			t.Errorf("missing %s %s", method, path)
+			continue
+		}
+		if method != "get" || path == "/api/messages/{messageId}" {
+			if responses, ok := op["responses"].(map[string]any); !ok || responses["403"] == nil {
+				t.Errorf("missing browser-origin rejection for %s %s", method, path)
+			}
 		}
 	}
 	reportSchema := document.Components.Schemas["InspectionReport"]
@@ -706,7 +716,8 @@ func storeAttachment(t *testing.T, data *store.Store, filename, contentType, con
 }
 
 func TestSSEHello(t *testing.T) {
-	server := httptest.NewServer(New(testStore(t), StaticConfig{}, nil))
+	data := testStore(t)
+	server := httptest.NewServer(New(data, StaticConfig{}, nil))
 	defer server.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -716,14 +727,15 @@ func TestSSEHello(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer response.Body.Close()
-	buffer := make([]byte, len("data: {\"type\":\"connected\"}\n\n"))
+	want := fmt.Sprintf("data: {\"type\":\"connected\",\"generation\":%q}\n\n", data.IDGeneration())
+	buffer := make([]byte, len(want))
 	if _, err := io.ReadFull(response.Body, buffer); err != nil {
 		t.Fatal(err)
 	}
-	if string(buffer) != "data: {\"type\":\"connected\"}\n\n" {
+	if string(buffer) != want {
 		t.Fatalf("hello=%q", buffer)
 	}
-	if response.Header.Get("Content-Type") != "text/event-stream" || response.Header.Get("Cache-Control") != "no-cache, no-transform" {
+	if response.Header.Get("Content-Type") != "text/event-stream" || response.Header.Get("Cache-Control") != "private, no-store, no-transform" {
 		t.Fatalf("headers=%v", response.Header)
 	}
 }
@@ -749,7 +761,7 @@ func TestSSEClosedSubscriptionReturns(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("SSE handler did not return after subscription closed")
 	}
-	if !strings.HasPrefix(recorder.Body.String(), "data: {\"type\":\"connected\"}\n\n") {
+	if recorder.Body.String() != fmt.Sprintf("data: {\"type\":\"connected\",\"generation\":%q}\n\n", handler.store.IDGeneration()) {
 		t.Fatalf("body=%q", recorder.Body.String())
 	}
 }
@@ -802,7 +814,7 @@ func TestSSESubscribesBeforeConnectedGreeting(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("SSE handler did not drain after cancellation")
 	}
-	if got, want := recorder.Body.String(), "data: {\"type\":\"connected\"}\n\ndata: {\"type\":\"messages:changed\",\"mailboxId\":1}\n\n"; got != want {
+	if got, want := recorder.Body.String(), fmt.Sprintf("data: {\"type\":\"connected\",\"generation\":%q}\n\ndata: {\"type\":\"messages:changed\",\"mailboxId\":1}\n\n", handler.store.IDGeneration()); got != want {
 		t.Fatalf("SSE body=%q want %q", got, want)
 	}
 }
@@ -834,6 +846,44 @@ type recordingSender struct {
 func (sender *recordingSender) SendTest(_ context.Context, request SendTestRequest) error {
 	sender.request = request
 	return sender.err
+}
+
+func TestBrowserOriginPolicyForMailActions(t *testing.T) {
+	data := testStore(t)
+	for _, tc := range []struct {
+		name, method, path, site, origin string
+		want                             int
+	}{
+		{"application", "POST", "/api/send-test", "same-origin", "", 200},
+		{"API client", "POST", "/api/send-test", "", "", 200},
+		{"different browser origin", "POST", "/api/send-test", "cross-site", "", 403},
+		{"origin fallback", "POST", "/api/send-test", "", "https://other.example", 403},
+		{"same origin fallback", "POST", "/api/send-test", "", "http://example.com", 200},
+		{"detail has a read side effect", "GET", "/api/messages/17", "cross-site", "", 403},
+		{"read-only source", "GET", "/api/messages/17/source", "cross-site", "", 404},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sender := &recordingSender{}
+			req := httptest.NewRequest(tc.method, tc.path, strings.NewReader("{}"))
+			req.Header.Set("Sec-Fetch-Site", tc.site)
+			req.Header.Set("Origin", tc.origin)
+			response := httptest.NewRecorder()
+			New(data, StaticConfig{}, sender).ServeHTTP(response, req)
+			if response.Code != tc.want || (sender.request.To != "") != (tc.want == 200) {
+				t.Fatalf("status=%d sender called=%v", response.Code, sender.request.To != "")
+			}
+		})
+	}
+}
+
+func TestMailboxJSONAndMissingIDsAreNeverCached(t *testing.T) {
+	handler := New(testStore(t), StaticConfig{}, nil)
+	for _, path := range []string{"/api/mailboxes", "/api/mailboxes/1/messages", "/api/mailboxes/1/events", "/api/messages/1", "/api/messages/1/inspect"} {
+		response := request(t, handler, http.MethodGet, path, "")
+		if got := response.Header().Get("Cache-Control"); got != "private, no-store" {
+			t.Errorf("%s: Cache-Control=%q", path, got)
+		}
+	}
 }
 
 func TestSendTestValidationDefaultsAndError(t *testing.T) {

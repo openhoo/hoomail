@@ -299,7 +299,7 @@ jobs:
             --read-only --cap-drop ALL --security-opt no-new-privileges \
             --memory 64m \
             --mount "type=bind,source=$RUNNER_TEMP/hoomail-smoke-data,target=/app/data" \
-            -p 127.0.0.1:3000:3000 -p 127.0.0.1:2525:2525 -p 127.0.0.1:3110:3110 hoomail:ci
+            -p 127.0.0.1::3000 -p 127.0.0.1::2525 -p 127.0.0.1::3110 hoomail:ci
           python3 scripts/smoke.py --container hoomail-ci --disposable \
             --output "$RUNNER_TEMP/hoomail-container-smoke.json"
 

@@ -1,11 +1,12 @@
 import type { JSX } from 'preact'
-import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { CalendarDays, ChevronLeft, Inbox, Mail } from '@/components/ui/icons'
 import { Button } from '@/components/ui/button'
 import { asyncComponent } from '@/components/ui/async-component'
 import { MailboxSidebar } from './mailbox-sidebar'
 import { MessageList } from './message-list'
 import { MessageViewer } from './message-viewer'
+import { ResourceStatus } from './resource-status'
 import {
   deleteMailboxRequest,
   refreshAfterRead,
@@ -71,10 +72,11 @@ export function HoomailApp() {
   const inboxMessages = searchQuery.trim() ? unfilteredMessages : messages
   const inboxMessagesLoading = searchQuery.trim() ? unfilteredLoading : messagesLoading
   const inboxMessagesError = searchQuery.trim() ? unfilteredError : messagesError
+  const inboxById = useMemo(() => new Map(inboxMessages.map((message) => [message.id, message])), [inboxMessages])
   const { detail, isLoading: messageLoading, error: messageError } = useMessage(selectedMessageId)
   const { events, isLoading: eventsLoading, error: eventsError, retry: retryEvents } = useCalendarEvents(selectedMailboxId, view === 'calendar')
-  const openMessageStateRef = useRef({ messages, selectedMailboxId })
-  openMessageStateRef.current = { messages, selectedMailboxId }
+  const openMessageStateRef = useRef({ messages, inboxById, selectedMailboxId })
+  openMessageStateRef.current = { messages, inboxById, selectedMailboxId }
   const actionStateRef = useRef({ messages, selectedMailboxId, selectedMessageId, searchQuery, mobilePane })
   actionStateRef.current = { messages, selectedMailboxId, selectedMessageId, searchQuery, mobilePane }
 
@@ -88,17 +90,16 @@ export function HoomailApp() {
 
   useEffect(() => {
     if (selectedMailboxId == null || inboxMessagesLoading || inboxMessagesError) return
-    const liveIds = new Set(inboxMessages.map((message) => message.id))
     setSelectedIds((previous) => {
-      if ([...previous].every((id) => liveIds.has(id))) return previous
-      return new Set([...previous].filter((id) => liveIds.has(id)))
+      if ([...previous].every((id) => inboxById.has(id))) return previous
+      return new Set([...previous].filter((id) => inboxById.has(id)))
     })
-    if (selectedMessageId != null && !liveIds.has(selectedMessageId)) {
+    if (selectedMessageId != null && !inboxById.has(selectedMessageId)) {
       setSelectedMessageId(null)
       anchorIdRef.current = null
       if (mobilePane === 'reader') setMobilePane('list')
     }
-  }, [inboxMessages, inboxMessagesLoading, inboxMessagesError, selectedMailboxId, selectedMessageId, mobilePane])
+  }, [inboxById, inboxMessagesLoading, inboxMessagesError, selectedMailboxId, selectedMessageId, mobilePane])
 
   // If the selected mailbox disappeared (e.g. after reset), clear selection
   useEffect(() => {
@@ -120,12 +121,14 @@ export function HoomailApp() {
     setMobilePane('inboxes')
     setMessageActionError(null)
     setMailboxActionError(null)
+    anchorIdRef.current = null
+    mobileReturnPaneRef.current = 'list'
     pendingMessageFocusRef.current = null
     pendingListFocusRef.current = false
   }, [])
 
   useRealtime({
-    selectedMailboxId,
+    hasMessageSelection: selectedMessageId != null || selectedIds.size > 0,
     onReset: handleReset,
     onMailboxDeleted: (mailboxId) => {
       if (selectedMailboxId === mailboxId) {
@@ -218,7 +221,7 @@ export function HoomailApp() {
   }
 
   const openMessage = useCallback((id: number) => {
-    const { messages, selectedMailboxId } = openMessageStateRef.current
+    const { messages, inboxById, selectedMailboxId } = openMessageStateRef.current
     setView('mail')
     setMobilePane('reader')
     pendingListFocusRef.current = false
@@ -229,7 +232,7 @@ export function HoomailApp() {
       focusVisible('[data-mobile-reader-back], [data-reader-pane-focus]')
     }
 
-    const current = messages.find((message) => message.id === id)
+    const current = inboxById.get(id) ?? messages.find((message) => message.id === id)
     if (!current || current.is_read !== 0 || selectedMailboxId == null) return
 
     // Detail responses can be cached, so opening a message cannot rely on the
@@ -674,10 +677,15 @@ export function HoomailApp() {
                 Back to inbox
               </Button>
             </div>
-            <div data-calendar-pane-focus tabIndex={-1} className="hoomail-calendar-focus flex min-h-0 min-w-0 flex-1 outline-none">
+            <div data-calendar-pane-focus tabIndex={-1} className="hoomail-calendar-focus flex min-h-0 min-w-0 flex-1 flex-col outline-none">
+              {view === 'calendar' && inboxMessagesError && (
+                <ResourceStatus label="source messages" isLoading={false} error={inboxMessagesError}
+                  onRetry={searchQuery.trim() ? retryUnfilteredMessages : retryMessages} />
+              )}
               <CalendarView
                 mailbox={selectedMailbox}
                 events={events}
+                hasSourceMessage={(id) => !inboxMessagesError && inboxById.has(id)}
                 isLoading={eventsLoading}
                 loadError={eventsError}
                 onRetry={retryEvents}

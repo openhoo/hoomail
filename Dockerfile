@@ -3,7 +3,8 @@ FROM --platform=$BUILDPLATFORM oven/bun:1.4.3-alpine@sha256:629e17411f1f129dbec3
 WORKDIR /src
 COPY package.json bun.lock ./
 RUN --mount=type=cache,target=/root/.bun/install/cache bun install --frozen-lockfile
-COPY index.html main.tsx tsconfig.json vite.config.ts ./
+COPY index.html main.tsx tsconfig.json ./
+COPY scripts/build-client.ts scripts/build-client.ts
 COPY app/globals.css app/globals.css
 COPY components components
 COPY lib/utils.ts lib/utils.ts
@@ -14,7 +15,9 @@ FROM --platform=$BUILDPLATFORM golang:1.27.4-alpine@sha256:0a5f7fe796599ff487605
 WORKDIR /src
 COPY go.mod go.sum ./
 COPY third_party third_party/
-RUN --mount=type=cache,target=/go/pkg/mod go mod download
+# Keep the downloaded modules in the build layer so an exported layer cache
+# also works on a builder with empty cache mounts.
+RUN go mod download
 COPY cmd cmd
 COPY internal internal
 COPY web/embed.go web/embed.go
@@ -23,7 +26,7 @@ ARG VERSION
 ARG TARGETOS
 ARG TARGETARCH
 # Hoomail serves plain HTTP; TLS and HTTP/2 terminate at the reverse proxy.
-RUN --mount=type=cache,target=/root/.cache/go-build \
+RUN --network=none --mount=type=cache,target=/root/.cache/go-build \
     go generate ./internal/httpserver && \
     VERSION="${VERSION:-$(cat internal/version/version)}" && \
     CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" go build -trimpath -tags=nethttpomithttp2 \

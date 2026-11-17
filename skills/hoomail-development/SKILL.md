@@ -36,10 +36,12 @@ go run ./cmd/hoomail
 `web/embed.go` embeds `web/dist`, which is generated and gitignored. A fresh
 checkout needs the client build before full-server Go build, vet, or tests.
 Rebuild the client and Go server after frontend changes. Do not commit
-`web/dist`. `bun run dev`/`preview` serve Vite only; no API/SSE proxy is configured.
+`web/dist`. `bun run dev` watches sources and serves `web/.dev`; refresh the
+browser after a rebuild. `bun run preview` uses Python 3 to serve the built
+client. Both are frontend previews.
 
-The frontend uses Preact, not React; Vite disables React aliases. Preserve
-existing Preact primitives and shared UI patterns.
+esbuild uses the Preact JSX runtime from `tsconfig.json`. Tailwind compiles
+through PostCSS. Preserve existing Preact primitives and shared UI patterns.
 
 ## Choose verification by change
 
@@ -77,8 +79,9 @@ for fork, OpenAPI, chart, and performance checks.
   Distinguish complete, partial, and truncated results. No DNS/HTTP checks.
 - Preserve the sender-faithful HTML allowlist, scoped CID rewriting, iframe
   sandbox/CSP, and download-only treatment of active/unknown attachment formats.
-- SSE is a best-effort invalidation stream; reconnecting consumers refetch
-  authoritative data. Slow subscribers must not block producers.
+- SSE is a best-effort invalidation stream. Reconnecting consumers compare
+  the ID generation before refetching selected resources; a reset or restart
+  invalidates old selections. Slow subscribers must not block producers.
 - SQLite is a single logical store with WAL sidecars. Reset/delete cascades and
   generation/concurrency safeguards must remain coherent. Keep one chart replica
   and `Recreate` to avoid overlapping writers.
