@@ -36,10 +36,12 @@ go run ./cmd/hoomail
 `web/embed.go` embeds `web/dist`, which is generated and gitignored. A fresh
 checkout needs the client build before full-server Go build, vet, or tests.
 Rebuild the client and Go server after frontend changes. Do not commit
-`web/dist`. `bun run dev`/`preview` serve Vite only; no API/SSE proxy is configured.
+`web/dist`. `bun run dev` watches sources and serves `web/.dev`; refresh the
+browser after a rebuild. `bun run preview` uses Python 3 to serve the built
+client. Both are frontend previews.
 
-The frontend uses Preact, not React; Vite disables React aliases. Preserve
-existing Preact primitives and shared UI patterns.
+esbuild uses the Preact JSX runtime from `tsconfig.json`. Tailwind compiles
+through PostCSS. Preserve existing Preact primitives and shared UI patterns.
 
 ## Choose verification by change
 

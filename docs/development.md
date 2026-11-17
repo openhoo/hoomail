@@ -1,6 +1,6 @@
 # Development and verification
 
-This guide covers the repository-supported contributor workflow. It separates the integrated application, frontend-only Vite servers, isolated browser tests, package tests, benchmarks, and CI gates so that local development does not accidentally use or reset data you intend to keep.
+This guide covers the repository-supported contributor workflow. It separates the integrated application, frontend-only previews, isolated browser tests, package tests, benchmarks, and CI gates so that local development does not accidentally use or reset data you intend to keep.
 
 ## Toolchains
 
@@ -33,7 +33,7 @@ CI uses `bun x playwright install --with-deps chromium` on its Linux runner to i
 
 ## Build and run the integrated application
 
-The Go server embeds the compiled Vite client. `bun run build` writes that client to `web/dist`, which is generated and gitignored. The `//go:embed dist` declaration in `web/embed.go` makes this directory a compile-time prerequisite whenever a Go command compiles the embedded web package, including the full server and `go test ./...` from a fresh checkout.
+The Go server embeds the compiled Preact client. `bun run build` writes that client to `web/dist`, which is generated and gitignored. The `//go:embed dist` declaration in `web/embed.go` makes this directory a compile-time prerequisite whenever a Go command compiles the embedded web package, including the full server and `go test ./...` from a fresh checkout.
 
 Build and run the complete application with:
 
@@ -76,14 +76,14 @@ The exact scripts currently defined in `package.json` are:
 
 | Command | Underlying command | Purpose |
 | --- | --- | --- |
-| `bun run dev` | `vite` | Start the Vite development server for frontend-only iteration |
-| `bun run build` | `vite build` | Generate the production client in `web/dist` |
-| `bun run preview` | `vite preview` | Serve the generated static Vite output for frontend-only preview |
+| `bun run dev` | `bun scripts/build-client.ts --dev` | Rebuild on source changes; serve `web/.dev` on `127.0.0.1:5173`. Refresh the browser after a rebuild. |
+| `bun run build` | `bun scripts/build-client.ts` | Compile Tailwind with PostCSS and bundle Preact with esbuild into `web/dist` |
+| `bun run preview` | Python 3 static server | Serve the existing production build on `127.0.0.1:4173` |
 | `bun run test:e2e` | `playwright test` | Run all Playwright E2E specifications |
 | `bun run test:e2e:ui` | `playwright test --ui` | Open Playwright UI mode using the same isolated server orchestration |
 | `bun run bench:frontend` | `playwright test e2e/performance.spec.ts --reporter=line` | Run the isolated Chromium frontend benchmark |
 
-`bun run dev` and `bun run preview` are **not** integrated Hoomail servers. The Vite configuration has no proxy for same-origin `/api/*` requests or the `/api/events` SSE stream. A Vite page therefore cannot forward those calls to a separately running Go server by itself. Use the embedded build/run workflow for a complete application, or provide your own same-origin reverse proxy when specifically working through Vite.
+`bun run dev` and `bun run preview` are **not** integrated Hoomail servers. Both serve the client files only. Use the embedded build/run workflow for the API and event stream.
 
 ## Type checking
 
@@ -93,7 +93,7 @@ Run the repository's TypeScript check directly:
 bun x tsc --noEmit
 ```
 
-There is no `bun run typecheck` script. The strict, no-emit TypeScript configuration checks the Preact entry point and components, `lib/utils.ts`, Vite and Playwright configuration, and all `e2e/**/*.ts` files. It does not compile or test Go code, render the application, or emit a frontend bundle.
+There is no `bun run typecheck` script. The strict, no-emit TypeScript configuration checks the Preact entry point and components, `lib/utils.ts`, the client build script, Playwright configuration, and all `e2e/**/*.ts` files. It does not compile or test Go code, render the application, or emit a frontend bundle.
 
 ## Isolated Chromium E2E tests
 
@@ -292,7 +292,7 @@ The CI workflow runs these independent or dependent gates:
 | Gate | What it establishes |
 | --- | --- |
 | Conventional Commits | Hooversion validates commit messages for release-compatible history; automated release commits are exempted from this job |
-| Preact client | Lockfile installation, strict TypeScript no-emit checking, and a production Vite build |
+| Preact client | Lockfile installation, strict TypeScript no-emit checking, and a production client build |
 | Playwright E2E | The isolated real-server Chromium workflows described above |
 | Go race tests | Embedded-client build followed by `go test -race ./...` |
 | Go quality | `gofmt` cleanliness for `cmd`, `internal`, and `web`; `go vet ./...`; module checksum verification |

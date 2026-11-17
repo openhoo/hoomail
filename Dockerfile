@@ -3,7 +3,8 @@ FROM --platform=$BUILDPLATFORM oven/bun:1.4.3-alpine@sha256:629e17411f1f129dbec3
 WORKDIR /src
 COPY package.json bun.lock ./
 RUN --mount=type=cache,target=/root/.bun/install/cache bun install --frozen-lockfile
-COPY index.html main.tsx tsconfig.json vite.config.ts ./
+COPY index.html main.tsx tsconfig.json ./
+COPY scripts/build-client.ts scripts/build-client.ts
 COPY app/globals.css app/globals.css
 COPY components components
 COPY lib/utils.ts lib/utils.ts

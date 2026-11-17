@@ -6,7 +6,7 @@ require (
 	github.com/emersion/go-message v0.18.2
 	github.com/emersion/go-smtp v0.24.0
 	github.com/microcosm-cc/bluemonday v1.0.27
-	golang.org/x/net v0.61.0
+	golang.org/x/net v0.62.0
 	golang.org/x/text v0.43.0
 	modernc.org/sqlite v1.60.1
 )

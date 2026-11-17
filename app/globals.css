@@ -1,7 +1,10 @@
 @import '@fontsource-variable/atkinson-hyperlegible-next/wght.css';
 @import '@fontsource-variable/jetbrains-mono/wght.css';
 
-@import 'tailwindcss';
+@import 'tailwindcss' source(none);
+@source '../components';
+@source '../index.html';
+@source '../main.tsx';
 
 @custom-variant dark (&:is(.dark *));
 

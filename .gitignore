@@ -18,6 +18,7 @@ data/
 .hooversion/
 /hoomail
 /web/dist/
+/web/.dev/
 /gitleaks-report.json
 /playwright-report/
 /test-results/
