@@ -10,11 +10,13 @@ const stylesheet = postcss([tailwind({ optimize: false })])
 const options: BuildOptions = {
   entryPoints: ['main.tsx'],
   bundle: true,
+  splitting: true,
   format: 'esm',
   target: 'es2022',
   minify: !dev,
   outdir,
   entryNames: 'assets/[name]-[hash]',
+  chunkNames: 'assets/[name]-[hash]',
   assetNames: 'assets/[name]-[hash]',
   publicPath: '/',
   loader: { '.woff': 'file', '.woff2': 'file' },
