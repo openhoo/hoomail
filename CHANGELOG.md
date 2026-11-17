@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.3 (2026-11-17)
+
+### Bug Fixes
+
+- **hoomail:** repair mail handling and remove vulnerable build tooling (dcf2d69)
+
 ## 0.10.2 (2026-11-13)
 
 ### Bug Fixes
