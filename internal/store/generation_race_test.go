@@ -224,7 +224,9 @@ func TestBulkMutationsSerializeAgainstWipeAll(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			store.pop3Mu.Lock()
+			if err := store.acquirePop3(t.Context()); err != nil {
+				t.Fatal(err)
+			}
 			done := make(chan error, 1)
 			go func() {
 				_, err := test.apply(ctx, store, []int64{stored[0].MessageID})
@@ -236,7 +238,7 @@ func TestBulkMutationsSerializeAgainstWipeAll(t *testing.T) {
 			case <-time.After(75 * time.Millisecond):
 				blocked = true
 			}
-			store.pop3Mu.Unlock()
+			store.releasePop3()
 			if !blocked {
 				t.Fatal("bulk mutation bypassed POP3 serialization lock")
 			}

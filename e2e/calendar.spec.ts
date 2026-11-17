@@ -1,6 +1,6 @@
 import { createConnection } from 'node:net'
 import type { Locator } from '@playwright/test'
-import { expect, mailboxEventsResponse, messageRow, sendTestMessage, test } from './fixtures'
+import { expect, mailboxButton, mailboxEventsResponse, messageRow, sendTestMessage, test } from './fixtures'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 const monthFormatter = new Intl.DateTimeFormat('en-US', {
@@ -58,6 +58,51 @@ test('replaces an invitation with its update and cancellation', async ({ page, r
   await expect(page.getByRole('heading', { name: `Cancelled: ${title}` })).toBeVisible()
   await expect(page.getByText('Cancellation', { exact: true })).toBeVisible()
   await expect(page.getByText('seq 2', { exact: true })).toBeVisible()
+})
+
+test('keeps the calendar event but disables its source after that message is deleted', async ({ page, request }) => {
+  const to = 'deleted-source@hoomail.test'
+  const subject = 'Design review'
+  await sendTestMessage(request, { to, subject, kind: 'invite' })
+  const id = Number(await messageRow(page, `Invitation: ${subject}`).getAttribute('data-message-id'))
+  await page.getByRole('button', { name: 'Calendar', exact: true }).click()
+  await page.getByRole('gridcell', { name: /— 1 events$/ }).click()
+  const card = page.getByLabel('Events for selected day').getByRole('button', { name: /Design review/ })
+  await expect(card).toBeEnabled()
+
+  expect((await request.post('/api/messages/actions', { data: { action: 'delete', ids: [id] } })).ok()).toBe(true)
+  await expect(mailboxButton(page, to)).toHaveAccessibleName(/0 messages, 0 unread/)
+  await expect(card).toBeDisabled()
+  await expect(card).toHaveAccessibleName(/no source message available/)
+
+  await sendTestMessage(request, { to, subject, kind: 'update' })
+  await expect(card).toBeEnabled()
+  await card.click()
+  await expect(page.getByRole('heading', { name: `Updated invitation: ${subject}` })).toBeVisible()
+})
+
+test('opening a cached source outside the search results marks that message read', async ({ page, request }) => {
+  const to = 'filtered-source@hoomail.test'
+  const subject = 'Planning meeting'
+  await sendTestMessage(request, { to, subject, kind: 'invite' })
+  const invitation = messageRow(page, `Invitation: ${subject}`)
+  const id = Number(await invitation.getAttribute('data-message-id'))
+  await invitation.click()
+  await expect(page.getByRole('heading', { name: `Invitation: ${subject}` })).toBeVisible()
+  await sendTestMessage(request, { to, subject: 'Visible companion', kind: 'plain' })
+  await messageRow(page, 'Visible companion').click()
+  await expect(page.getByRole('heading', { name: 'Visible companion' })).toBeVisible()
+  await expect(mailboxButton(page, to)).toHaveAccessibleName(/2 messages, 0 unread/)
+  expect((await request.post('/api/messages/actions', { data: { action: 'unread', ids: [id] } })).ok()).toBe(true)
+  await expect(mailboxButton(page, to)).toHaveAccessibleName(/2 messages, 1 unread/)
+  await page.getByRole('searchbox', { name: 'Search messages' }).fill('companion')
+  await expect(invitation).toHaveCount(0)
+  await page.getByRole('button', { name: 'Calendar', exact: true }).click()
+  await page.getByRole('gridcell', { name: /— 1 events$/ }).click()
+  await page.getByLabel('Events for selected day').getByRole('button', { name: /Planning meeting/ }).click()
+  await expect(page.getByRole('heading', { name: `Invitation: ${subject}` })).toBeVisible()
+  await expect.poll(async () => (await (await request.get('/api/mailboxes')).json()).mailboxes[0].unread_count).toBe(0)
+  await expect(invitation).toHaveCount(0)
 })
 
 test('moves calendar focus across days and months and opens the source message', async ({ page, request }) => {

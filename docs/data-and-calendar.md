@@ -19,6 +19,8 @@ The configured path names one logical SQLite database. For a file-backed databas
 
 Parent-directory creation is skipped for `:memory:` and `file:` URI database paths. The application does not run a general migration framework: the current schema is created with `CREATE ... IF NOT EXISTS`, and the three legacy message columns above are the only explicit column migrations. Those legacy column additions and the snippet backfill run atomically in one transaction; a failure rolls back all of them so the next startup can retry without leaving a partially migrated table. On every startup, Hoomail scans rows whose `snippet` is still empty and backfills them from the stored text or HTML content; rows created after migration have their snippets computed at ingest time.
 
+Ordinary filesystem paths are literal, including `?` on systems that permit it. Use a `file:` URI for SQLite query options. Older builds could open the filename before the first `?` instead. If an existing installation used such a path, check which file contains its mail before upgrading. Hoomail does not move or merge those databases.
+
 ## Stored data model
 
 ### Mailboxes
@@ -82,7 +84,7 @@ Message search is scoped to one mailbox. After trimming surrounding whitespace, 
 
 Search does **not** examine HTML-only body content, recipients, `Cc`, arbitrary headers, raw MIME, attachment names or bytes, Content-IDs, or calendar fields. HTML may be used to build the displayed list snippet when plain text is absent, but that HTML-derived snippet is not part of the search query.
 
-The characters `\`, `%`, and `_` are escaped before the SQLite `LIKE` query. They are treated literally rather than as an escape or wildcard supplied by the user. Results are ordered by delivery time, newest first.
+The characters `\`, `%`, and `_` are escaped before the SQLite `LIKE` query. They are treated literally rather than as an escape or wildcard supplied by the user. Results are ordered by delivery time, newest first. Messages stored in the same millisecond are ordered by descending message ID.
 
 ## Read, delete, and reset semantics
 

@@ -175,17 +175,20 @@ retained. The container runs with a read-only root filesystem, dropped
 capabilities, UID/GID 65532, and the chart's default 64 MiB memory limit.
 
 To check an already running **disposable** container with persistent test
-storage, use its loopback mappings:
+storage, publish its listeners on `127.0.0.1`. Fixed or automatically assigned
+host ports work:
 
 ```bash
 python3 scripts/smoke.py --container hoomail-smoke --disposable \
-  --http-port 35100 --smtp-port 35125 --pop3-port 35126 \
   --output /tmp/hoomail-smoke.json
 ```
 
-The script resets all data at the beginning and end and restarts the named
-container. A tmpfs database cannot pass the restart-persistence check. Keep
-this separate from an existing development inbox.
+The script reads the named container's loopback mappings before resetting any
+data and checks them again after restart. If a listener uses a nonstandard
+in-container port, pass its initial host port with `--http-port`, `--smtp-port`
+or `--pop3-port`. The script resets all mail at the beginning and end. Use a
+disposable volume or directory: a tmpfs database cannot retain the test mail
+across the restart.
 
 ## Frontend benchmark
 
@@ -295,7 +298,7 @@ The CI workflow runs these independent or dependent gates:
 | Go quality | `gofmt` cleanliness for `cmd`, `internal`, and `web`; `go vet ./...`; module checksum verification |
 | Go security | Reachable vulnerability scanning with `govulncheck v1.6.0` and static security-pattern scanning with `gosec v2.28.0` (reviewed exclusions: `G104`, `G202`, `G301`, `G705`) |
 | Helm chart | Strict linting, representative template renders, and chart/application version synchronization |
-| Docker build and smoke | Build the production image, verify its embedded version, start it as configured by the image, and pass the built-in HTTP/SMTP/POP3 health check |
+| Docker build and smoke | Build the production image, verify its version and health check, exercise mail workflows, and confirm that SQLite data survives a container restart |
 
 CI does not run either benchmark as a gate and does not enforce a line or branch coverage percentage.
 
@@ -306,8 +309,8 @@ No single command proves the entire product:
 - Playwright E2E proves the principal UI, accessibility, focus, realtime SSE, built-in SMTP delivery, viewer, calendar, and destructive-reset workflows against a real isolated server.
 - Go package tests provide deeper SMTP and POP3 protocol behavior, MIME and iCalendar parsing, HTTP schemas, inspection, event ordering, and SQLite semantics.
 - Frontend and Go benchmarks report performance characteristics but contain no regression thresholds.
-- The Docker smoke proves image startup and the built-in HTTP/SMTP/POP3 health check, not full protocol behavior or durable restart persistence.
-- The listed unit and E2E suites do not demonstrate preservation of SQLite data across a process or container replacement. They also do not prove multi-platform publication, registry availability, release attestations/SBOMs, or a live Kubernetes deployment.
+- The Docker smoke compares mailboxes, raw mail, attachments, and calendar state before and after restarting the same container with its data volume.
+- These local checks do not establish volume backup or recovery, registry publication, release attestations/SBOMs, or a live Kubernetes deployment.
 - CI has no coverage-percentage gate; successful checks establish the named contracts, not exhaustive path coverage.
 
 See the repository [README](../README.md) for user-facing configuration, protocol entry points, deployment options, and the architecture overview.

@@ -47,7 +47,9 @@ func errorResponses(codes ...string) map[string]any {
 	responses := map[string]any{"500": map[string]any{"description": "Internal server error", "content": map[string]any{"text/plain": map[string]any{"schema": map[string]any{"type": "string"}}}}}
 	for _, code := range codes {
 		description := "Invalid request"
-		if code == "404" {
+		if code == "403" {
+			description = "Browser origin is not allowed for this action"
+		} else if code == "404" {
 			description = "Resource not found"
 		} else if code == "502" {
 			description = "SMTP server unavailable"
@@ -169,20 +171,21 @@ func main() {
 			"resources": array(ref("Resource")), "mimeTree": nullableRef("MimeNode"), "htmlCompatibility": nullableRef("HTMLCompatibility"),
 		}),
 		"Event": object([]string{"type"}, map[string]any{
-			"type":    map[string]any{"type": "string", "enum": []string{"connected", "mailbox:new", "mailbox:deleted", "messages:changed", "calendar:changed", "message:new", "reset"}},
-			"mailbox": object([]string{"id", "address"}, map[string]any{"id": integer, "address": stringSchema}), "mailboxId": integer,
+			"type":       map[string]any{"type": "string", "enum": []string{"connected", "mailbox:new", "mailbox:deleted", "messages:changed", "calendar:changed", "message:new", "reset"}},
+			"generation": map[string]any{"type": "string", "description": "Opaque identifier for the current lifetime of numeric IDs, present on connected and reset."},
+			"mailbox":    object([]string{"id", "address"}, map[string]any{"id": integer, "address": stringSchema}), "mailboxId": integer,
 			"message": object([]string{"id", "subject", "fromAddress", "fromName"}, map[string]any{"id": integer, "subject": nullable(stringSchema), "fromAddress": nullable(stringSchema), "fromName": nullable(stringSchema)}),
 		}),
 	}
 
 	mailboxes := operation("Mailboxes", "List mailboxes", withSuccess(errorResponses(), "200", "Mailboxes", object([]string{"mailboxes"}, map[string]any{"mailboxes": array(ref("Mailbox"))})))
-	deleteMailbox := operation("Mailboxes", "Delete a mailbox and its messages", withSuccess(errorResponses("400", "404"), "200", "Mailbox deleted", ref("Success")))
+	deleteMailbox := operation("Mailboxes", "Delete a mailbox and its messages", withSuccess(errorResponses("400", "403", "404"), "200", "Mailbox deleted", ref("Success")))
 	deleteMailbox["parameters"] = []any{pathParameter("mailboxId", "Mailbox ID")}
 	listMessages := operation("Messages", "List or search mailbox messages", withSuccess(errorResponses("400"), "200", "Messages", object([]string{"messages"}, map[string]any{"messages": array(ref("MessageListItem"))})))
 	listMessages["parameters"] = []any{pathParameter("mailboxId", "Mailbox ID"), map[string]any{"name": "q", "in": "query", "description": "Case-insensitive message search", "schema": map[string]any{"type": "string", "maxLength": searchQueryMaxLength}}}
 	listEvents := operation("Calendar", "List mailbox calendar events", withSuccess(errorResponses("400"), "200", "Calendar events", object([]string{"events"}, map[string]any{"events": array(ref("CalendarEvent"))})))
 	listEvents["parameters"] = []any{pathParameter("mailboxId", "Mailbox ID")}
-	getMessage := operation("Messages", "Get a message and mark it read", withSuccess(errorResponses("400", "404"), "200", "Message detail", object([]string{"message", "attachments"}, map[string]any{"message": ref("Message"), "attachments": array(ref("AttachmentInfo"))})))
+	getMessage := operation("Messages", "Get a message and mark it read", withSuccess(errorResponses("400", "403", "404"), "200", "Message detail", object([]string{"message", "attachments"}, map[string]any{"message": ref("Message"), "attachments": array(ref("AttachmentInfo"))})))
 	getMessage["parameters"] = []any{pathParameter("messageId", "Message ID")}
 	getSource := operation("Messages", "Get exact stored RFC 822 source without marking read", errorResponses("400", "404"))
 	getSource["responses"].(map[string]any)["200"] = map[string]any{
@@ -197,7 +200,7 @@ func main() {
 	getSource["parameters"] = []any{pathParameter("messageId", "Message ID")}
 	inspectMessage := operation("Messages", "Analyze a stored message offline", withSuccess(errorResponses("400", "404"), "200", "Inspection report", ref("InspectionReport")))
 	inspectMessage["parameters"] = []any{pathParameter("messageId", "Message ID")}
-	actions := operation("Messages", "Apply an action to messages", withSuccess(errorResponses("400"), "200", "Action applied", ref("Success")))
+	actions := operation("Messages", "Apply an action to messages", withSuccess(errorResponses("400", "403"), "200", "Action applied", ref("Success")))
 	actions["requestBody"] = map[string]any{"required": true, "content": map[string]any{"application/json": map[string]any{"schema": ref("MessageAction")}}}
 	attachment := operation("Attachments", "Download or display an attachment", errorResponses("400", "404", "422"))
 	attachment["responses"].(map[string]any)["422"] = jsonResponse("SVG attachment is not safe to render inline", ref("Error"))
@@ -207,14 +210,23 @@ func main() {
 		map[string]any{"name": "download", "in": "query", "description": "Set to 1 to force attachment disposition", "schema": map[string]any{"type": "string", "enum": []string{"1"}}},
 		map[string]any{"name": "inline", "in": "query", "description": "Set to cid for sanitized inline rendering of a resolved CID SVG resource", "schema": map[string]any{"type": "string", "enum": []string{"cid"}}},
 	}
-	stream := operation("Events", "Stream live mailbox events", map[string]any{"200": map[string]any{"description": "Server-sent events. Each data field contains an Event JSON object.", "content": map[string]any{"text/event-stream": map[string]any{"schema": map[string]any{"type": "string"}, "example": "data: {\"type\":\"connected\"}\n\n"}}}, "500": errorResponses()["500"]})
-	reset := operation("System", "Delete all stored mailboxes and messages", withSuccess(errorResponses(), "200", "Store reset", ref("Success")))
-	sendTest := operation("System", "Send a built-in test message through Hoomail SMTP", withSuccess(errorResponses("400", "502"), "200", "Test message sent", ref("Success")))
+	stream := operation("Events", "Stream live mailbox events", map[string]any{
+		"200": map[string]any{
+			"description": "Server-sent events. Each data field contains an Event JSON object.",
+			"headers": map[string]any{"Cache-Control": map[string]any{"schema": map[string]any{
+				"type": "string", "example": "private, no-store, no-transform",
+			}}},
+			"content": map[string]any{"text/event-stream": map[string]any{"schema": stringSchema, "example": "data: {\"type\":\"connected\",\"generation\":\"example:0\"}\n\n"}},
+		},
+		"500": errorResponses()["500"],
+	})
+	reset := operation("System", "Delete all stored mailboxes and messages", withSuccess(errorResponses("403"), "200", "Store reset", ref("Success")))
+	sendTest := operation("System", "Send a built-in test message through Hoomail SMTP", withSuccess(errorResponses("400", "403", "502"), "200", "Test message sent", ref("Success")))
 	sendTest["requestBody"] = map[string]any{"content": map[string]any{"application/json": map[string]any{"schema": ref("SendTestRequest")}}}
 
 	document := map[string]any{
 		"openapi": "3.0.3",
-		"info":    map[string]any{"title": "Hoomail API", "version": version, "description": "HTTP API for Hoomail mailboxes, messages, attachments, calendar data, and live events."},
+		"info":    map[string]any{"title": "Hoomail API", "version": version, "description": "HTTP API for Hoomail mailboxes, messages, attachments, calendar data, and live events. Mail data and API errors use Cache-Control: private, no-store. The live event stream also uses no-transform."},
 		"tags": []any{
 			map[string]any{"name": "Mailboxes"}, map[string]any{"name": "Messages"}, map[string]any{"name": "Attachments"}, map[string]any{"name": "Calendar"}, map[string]any{"name": "Events"}, map[string]any{"name": "System"},
 		},

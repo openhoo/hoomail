@@ -189,6 +189,31 @@ func TestParseMIMEAlternativeRetainsOnlyCalendarFromUnselectedBranch(t *testing.
 	}
 }
 
+func TestCalendarAlternativeDoesNotImportEventsFromForwardedMail(t *testing.T) {
+	for _, wrapper := range []string{"message/rfc822", "message/global"} {
+		t.Run(wrapper, func(t *testing.T) {
+			invite := func(uid string) string {
+				return strings.Join([]string{"BEGIN:VCALENDAR", "BEGIN:VEVENT", "UID:" + uid, "DTSTART:20261117T100000Z", "END:VEVENT", "END:VCALENDAR"}, "\r\n")
+			}
+			raw := mimeFixture("Content-Type: multipart/alternative; boundary=alt", strings.Join([]string{
+				"--alt", "Content-Type: text/plain", "", "Meeting notes",
+				"--alt", "Content-Type: multipart/mixed; boundary=invite", "",
+				"--invite", "Content-Type: text/calendar", "", invite("outer"),
+				"--invite", "Content-Type: " + wrapper, "Content-Disposition: attachment; filename=forwarded.eml", "",
+				"From: colleague@example.test", "Content-Type: text/calendar", "", invite("forwarded"),
+				"--invite--", "--alt--", "",
+			}, "\r\n"))
+			input, err := Parse(raw, "", []string{"team@example.test"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(input.ICalEvents) != 1 || input.ICalEvents[0].UID != "outer" || len(input.Attachments) != 1 {
+				t.Fatalf("want only the outer invitation; got %d events and %d attachments", len(input.ICalEvents), len(input.Attachments))
+			}
+		})
+	}
+}
+
 func TestParseMIMEPreservesMetadataAttachmentsAndCalendarDeduplication(t *testing.T) {
 	ics := strings.Join([]string{
 		"BEGIN:VCALENDAR", "METHOD:REQUEST", "BEGIN:VEVENT", "UID:meeting-1", "SEQUENCE:2",

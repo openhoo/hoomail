@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"io"
@@ -40,13 +41,13 @@ func TestShutdownDrainsActiveSSESubscriber(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer response.Body.Close()
-	hello := make([]byte, len("data: {\"type\":\"connected\"}\n\n"))
-	if _, err := io.ReadFull(response.Body, hello); err != nil {
+	reader := bufio.NewReader(response.Body)
+	if _, err := reader.ReadString('\n'); err != nil {
 		t.Fatal(err)
 	}
 	streamEnded := make(chan error, 1)
 	go func() {
-		_, copyErr := io.Copy(io.Discard, response.Body)
+		_, copyErr := io.Copy(io.Discard, reader)
 		streamEnded <- copyErr
 	}()
 

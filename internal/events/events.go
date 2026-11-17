@@ -26,10 +26,11 @@ type MessageSummary struct {
 }
 
 type Event struct {
-	Type      Type            `json:"type"`
-	Mailbox   *Mailbox        `json:"mailbox,omitempty"`
-	MailboxID *int64          `json:"mailboxId,omitempty"`
-	Message   *MessageSummary `json:"message,omitempty"`
+	Type       Type            `json:"type"`
+	Generation string          `json:"generation,omitempty"`
+	Mailbox    *Mailbox        `json:"mailbox,omitempty"`
+	MailboxID  *int64          `json:"mailboxId,omitempty"`
+	Message    *MessageSummary `json:"message,omitempty"`
 }
 
 func MailboxNew(id int64, address string) Event {
@@ -61,8 +62,8 @@ func MessageNew(mailboxID, messageID int64, subject, fromAddress, fromName *stri
 	}
 }
 
-func Reset() Event {
-	return Event{Type: TypeReset}
+func Reset(generation string) Event {
+	return Event{Type: TypeReset, Generation: generation}
 }
 
 func mailboxEvent(eventType Type, mailboxID int64) Event {

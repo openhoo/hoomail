@@ -2,14 +2,17 @@ package store
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/openhoo/hoomail/internal/calendar"
@@ -22,8 +25,9 @@ type Store struct {
 	broadcast func(events.Event)
 	now       func() time.Time
 
-	pop3Mu         sync.Mutex
-	pop3Generation uint64
+	pop3Gate     chan struct{}
+	instanceID   string
+	idGeneration atomic.Uint64
 }
 
 type Option func(*Store)
@@ -50,7 +54,7 @@ func Open(path string, options ...Option) (*Store, error) {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 	db.SetMaxOpenConns(1)
-	store := &Store{db: db, broadcast: events.Broadcast, now: time.Now}
+	store := &Store{db: db, broadcast: events.Broadcast, now: time.Now, instanceID: rand.Text(), pop3Gate: make(chan struct{}, 1)}
 	for _, option := range options {
 		option(store)
 	}
@@ -69,14 +73,28 @@ func Open(path string, options ...Option) (*Store, error) {
 // file: URIs, and :memory: alike.
 func dsn(path string) string {
 	separator := "?"
-	if strings.Contains(path, "?") {
-		separator = "&"
+	if strings.HasPrefix(path, "file:") {
+		// A fragment is not part of SQLite's filename or driver options.
+		path, _, _ = strings.Cut(path, "#")
+		if strings.Contains(path, "?") {
+			separator = "&"
+		}
+	} else if strings.Contains(path, "?") {
+		// Without a file URI the driver treats the first '?' as the end
+		// of the filename. Escape the whole literal path, including '%'.
+		path = "file:" + url.PathEscape(filepath.ToSlash(path))
 	}
 	return path + separator + "_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)"
 }
 
 func (store *Store) Close() error { return store.db.Close() }
 func (store *Store) DB() *sql.DB  { return store.db }
+
+// IDGeneration identifies the lifetime of numeric resource IDs. A restart or
+// a committed reset makes previously selected IDs unsafe to reuse.
+func (store *Store) IDGeneration() string {
+	return store.instanceID + ":" + strconv.FormatUint(store.idGeneration.Load(), 10)
+}
 
 func (store *Store) init(ctx context.Context) error {
 	if _, err := store.db.ExecContext(ctx, schema); err != nil {
@@ -307,7 +325,7 @@ func (store *Store) ListMessages(ctx context.Context, mailboxID int64, query str
 		statement += ` AND (subject LIKE ? ESCAPE '\' OR from_address LIKE ? ESCAPE '\' OR from_name LIKE ? ESCAPE '\' OR text LIKE ? ESCAPE '\')`
 		args = append(args, like, like, like, like)
 	}
-	statement += ` ORDER BY received_at DESC`
+	statement += ` ORDER BY received_at DESC,id DESC`
 	rows, err := store.db.QueryContext(ctx, statement, args...)
 	if err != nil {
 		return nil, err

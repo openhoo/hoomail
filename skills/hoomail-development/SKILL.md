@@ -77,8 +77,9 @@ for fork, OpenAPI, chart, and performance checks.
   Distinguish complete, partial, and truncated results. No DNS/HTTP checks.
 - Preserve the sender-faithful HTML allowlist, scoped CID rewriting, iframe
   sandbox/CSP, and download-only treatment of active/unknown attachment formats.
-- SSE is a best-effort invalidation stream; reconnecting consumers refetch
-  authoritative data. Slow subscribers must not block producers.
+- SSE is a best-effort invalidation stream. Reconnecting consumers compare
+  the ID generation before refetching selected resources; a reset or restart
+  invalidates old selections. Slow subscribers must not block producers.
 - SQLite is a single logical store with WAL sidecars. Reset/delete cascades and
   generation/concurrency safeguards must remain coherent. Keep one chart replica
   and `Recreate` to avoid overlapping writers.

@@ -223,7 +223,7 @@ A day cell shows up to two event titles, followed by **+N more** when additional
 
 Activate an event in the selected-day list to return to Mail view and open the event's latest source message. If that message row survives the active search filter, focus moves to it and it is scrolled into view. Otherwise the message still opens in the viewer, but the user may need to clear the search to reveal and focus its row.
 
-An event without an available source-message ID is disabled and cannot be opened from the calendar.
+The calendar checks the full inbox, even while a search is active. Deleting the source message leaves the event visible but disables its button. A later update can give the event a new source and enable it again. Opening an available source marks it read even if it is cached and hidden by the search.
 
 ### Calendar keyboard model
 
@@ -308,7 +308,7 @@ Hoomail uses server-sent events (SSE) for event-specific refreshes:
 - a calendar change refreshes that inbox's calendar events; and
 - a full reset refreshes the inbox list, clears cached message lists and calendar events, and invalidates cached message details, source responses, inspections, and attachments.
 
-New mail can therefore appear in the current list without a manual page reload. Message, source, inspection, and attachment caches are invalidated when SSE connects or reconnects and on a full reset; ordinary message and calendar events refresh their relevant mailbox/list caches without invalidating message details.
+New mail can appear without a page reload. On reconnect, the client refreshes the open reader and keeps the selection if the server's ID generation still matches. It clears the reader and bulk selection after a missed reset, a server restart, or a reconnect without a generation. It also clears selections made before the first stream greeting because their generation is unknown. Ordinary message and calendar events refresh their lists without invalidating message details.
 
 Observable loading and inspection status text includes:
 
@@ -324,13 +324,6 @@ The message viewer deliberately retains the previously displayed detail while th
 
 ## Current error and status limitations
 
-The UI has targeted feedback for Send-test failures, text-attachment preview failures, and inspection failures with an explicit retry action, but it does not currently provide a general network-error banner or notification system.
+Inbox, message-list, calendar, reader, source, inspection, and text-preview failures show a local alert with a retry action. Failed mailbox deletion and explicit bulk read, unread, or delete actions show an error near their controls. A failed automatic mark-read triggers a refresh of the inbox and its message list.
 
-Consequences include:
-
-- failed inbox, message-list, or calendar loads can appear empty;
-- a failed initial message-detail request renders **Could not load message.** with a **Retry** action;
-- mailbox deletion and message read/unread/delete failures have no visible error notification and are handled through silent refresh where implemented; and
-- realtime connection state, disconnection, reconnection, and last-event time are not displayed.
-
-The absence of a realtime-status indicator means the interface does not tell users or accessibility reviewers whether SSE is currently connected. A manual reload may be necessary when validating behavior after an unseen network interruption.
+The UI has no general network-status banner. It does not display whether SSE is connected or when the last event arrived.

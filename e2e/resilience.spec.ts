@@ -123,52 +123,78 @@ test('retries failed raw-source and text-attachment previews without reopening t
   await expect(preview.getByRole('alert')).toBeHidden()
 })
 
-test('native SSE reconnect refetches messages and mailboxes when reset reuses their IDs', async ({ page, request }) => {
-  const oldRecipient = 'before-reconnect@hoomail.test'
-  const oldSubject = 'Before missed reset'
-  const newRecipient = 'after-reconnect@hoomail.test'
-  const newSubject = 'After missed reset'
-  await sendTestMessage(request, { to: oldRecipient, subject: oldSubject, kind: 'plain' })
-  await expect(messageRow(page, oldSubject)).toBeVisible()
+for (const [scenario, missedReset, firstGreetingDelayed] of [
+  ['reconnect drops selections after a missed reset', true, false],
+  ['reconnect keeps the reader in the same database generation', false, false],
+  ['first greeting drops selections after a missed reset', true, true],
+] as const) {
+  test(`native SSE ${scenario}`, async ({ page, request }) => {
+    const oldRecipient = 'before-reconnect@hoomail.test'
+    const oldSubject = 'Before missed reset'
+    const newRecipient = 'after-reconnect@hoomail.test'
+    const newSubject = 'After missed reset'
+    await sendTestMessage(request, { to: oldRecipient, subject: oldSubject, kind: 'plain' })
+    await expect(messageRow(page, oldSubject)).toBeVisible()
+    const greeting = firstGreetingDelayed ? null : await page.evaluate(() => new Promise<string>((resolve) => {
+      const events = new EventSource('/api/events')
+      events.onmessage = (event) => { events.close(); resolve(event.data) }
+    }))
 
-  let permitReconnect!: () => void
-  const reconnectPermission = new Promise<void>((resolve) => { permitReconnect = resolve })
-  let sawReconnect!: () => void
-  const reconnectStarted = new Promise<void>((resolve) => { sawReconnect = resolve })
-  let eventRequests = 0
-  await page.route('**/api/events', async (route) => {
-    eventRequests += 1
-    if (eventRequests === 1) {
-      // End a valid stream to trigger EventSource's native reconnection. While
-      // disconnected, reset and delivery events are deliberately missed.
-      await route.fulfill({ contentType: 'text/event-stream', body: 'data: {"type":"connected"}\n\n' })
-      return
+    let permitReconnect!: () => void
+    const reconnectPermission = new Promise<void>((resolve) => { permitReconnect = resolve })
+    let sawReconnect!: () => void
+    const reconnectStarted = new Promise<void>((resolve) => { sawReconnect = resolve })
+    let eventRequests = 0
+    await page.route('**/api/events', async (route) => {
+      eventRequests += 1
+      if (eventRequests === 1 && !firstGreetingDelayed) {
+        // End a valid stream to trigger EventSource's native reconnection. While
+        // disconnected, reset and delivery events are deliberately missed.
+        await route.fulfill({ contentType: 'text/event-stream', body: `data: ${greeting}\n\n` })
+        return
+      }
+      sawReconnect()
+      await reconnectPermission
+      await route.continue()
+    })
+    try {
+      await page.reload()
+      await messageRow(page, oldSubject).click()
+      await expect(page.getByRole('heading', { name: oldSubject, exact: true })).toBeVisible()
+      await page.getByRole('tab', { name: 'Source', exact: true }).click()
+      await expect(page.getByLabel('Raw message source')).toContainText(`Subject: ${oldSubject}`)
+      await messageRow(page, oldSubject).press('ControlOrMeta+a')
+      await expect(page.getByText('1 selected')).toBeVisible()
+      if (missedReset) {
+        expect((await request.post('/api/reset')).status()).toBe(200)
+        await sendTestMessage(request, { to: newRecipient, subject: newSubject, kind: 'plain' })
+      }
+      await expect(page.getByRole('heading', { name: oldSubject, exact: true })).toBeVisible()
+      await reconnectStarted
+      const refreshed = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/mailboxes')
+      permitReconnect()
+      await refreshed
+      if (!missedReset) {
+        await expect(page.getByLabel('Raw message source')).toContainText(`Subject: ${oldSubject}`)
+        await expect(page.getByText('1 selected')).toBeVisible()
+        return
+      }
+      await expect(mailboxButton(page, newRecipient)).toBeVisible()
+      await expect(mailboxButton(page, oldRecipient)).toHaveCount(0)
+      await expect(messageRow(page, newSubject)).toBeVisible()
+      await expect(page.getByText('Select a message to read it here.')).toBeVisible()
+      await expect(page.getByText('1 selected')).toBeHidden()
+      await expect(mailboxButton(page, newRecipient)).toHaveAccessibleName(/1 messages, 1 unread/)
+      await messageRow(page, newSubject).click()
+      await expect(page.getByRole('heading', { name: newSubject, exact: true })).toBeVisible()
+      await page.getByRole('tab', { name: 'Source', exact: true }).click()
+      await expect(page.getByLabel('Raw message source')).toContainText(`Subject: ${newSubject}`)
+      await expect(page.getByLabel('Raw message source')).not.toContainText(`Subject: ${oldSubject}`)
+    } finally {
+      permitReconnect()
     }
-    sawReconnect()
-    await reconnectPermission
-    await route.continue()
   })
-  try {
-    await page.reload()
-    await messageRow(page, oldSubject).click()
-    await expect(page.getByRole('heading', { name: oldSubject, exact: true })).toBeVisible()
-    await page.getByRole('tab', { name: 'Source', exact: true }).click()
-    await expect(page.getByLabel('Raw message source')).toContainText(`Subject: ${oldSubject}`)
-    expect((await request.post('/api/reset')).status()).toBe(200)
-    await sendTestMessage(request, { to: newRecipient, subject: newSubject, kind: 'plain' })
-    await expect(page.getByRole('heading', { name: oldSubject, exact: true })).toBeVisible()
-    await reconnectStarted
-    permitReconnect()
-    await expect(mailboxButton(page, newRecipient)).toBeVisible()
-    await expect(mailboxButton(page, oldRecipient)).toHaveCount(0)
-    await expect(messageRow(page, newSubject)).toBeVisible()
-    await expect(page.getByRole('heading', { name: newSubject, exact: true })).toBeVisible()
-    await expect(page.getByLabel('Raw message source')).toContainText(`Subject: ${newSubject}`)
-    await expect(page.getByLabel('Raw message source')).not.toContainText(`Subject: ${oldSubject}`)
-  } finally {
-    permitReconnect()
-  }
-})
+}
 
 test('retrying an inbox refresh preserves the opened reader and bulk selection until the response arrives', async ({ page, request }) => {
   const recipient = 'retry-context@hoomail.test'

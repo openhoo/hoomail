@@ -14,7 +14,9 @@ FROM --platform=$BUILDPLATFORM golang:1.27.4-alpine@sha256:0a5f7fe796599ff487605
 WORKDIR /src
 COPY go.mod go.sum ./
 COPY third_party third_party/
-RUN --mount=type=cache,target=/go/pkg/mod go mod download
+# Keep the downloaded modules in the build layer so an exported layer cache
+# also works on a builder with empty cache mounts.
+RUN go mod download
 COPY cmd cmd
 COPY internal internal
 COPY web/embed.go web/embed.go
@@ -23,7 +25,7 @@ ARG VERSION
 ARG TARGETOS
 ARG TARGETARCH
 # Hoomail serves plain HTTP; TLS and HTTP/2 terminate at the reverse proxy.
-RUN --mount=type=cache,target=/root/.cache/go-build \
+RUN --network=none --mount=type=cache,target=/root/.cache/go-build \
     go generate ./internal/httpserver && \
     VERSION="${VERSION:-$(cat internal/version/version)}" && \
     CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" go build -trimpath -tags=nethttpomithttp2 \

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 
 	"github.com/openhoo/hoomail/internal/calendar"
@@ -18,7 +19,7 @@ func (store *Store) GetMessage(ctx context.Context, id int64) (*MessageDetail, e
 	if err := store.acquirePop3(ctx); err != nil {
 		return nil, err
 	}
-	defer store.pop3Mu.Unlock()
+	defer store.releasePop3()
 	tx, err := store.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -28,7 +29,7 @@ func (store *Store) GetMessage(ctx context.Context, id int64) (*MessageDetail, e
 	if err != nil || !found {
 		return nil, err
 	}
-	detail.generation = store.pop3Generation
+	detail.generation = store.idGeneration.Load()
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
@@ -47,7 +48,7 @@ func (store *Store) ReadMessage(ctx context.Context, id int64) (*MessageDetail, 
 	committed := false
 	var mailboxID int64
 	defer func() {
-		store.pop3Mu.Unlock()
+		store.releasePop3()
 		if committed && marked {
 			store.emit(events.MessagesChanged(mailboxID))
 		}
@@ -88,12 +89,12 @@ func (store *Store) MarkReadDetail(ctx context.Context, detail *MessageDetail) e
 	changed := false
 	committed := false
 	defer func() {
-		store.pop3Mu.Unlock()
+		store.releasePop3()
 		if committed && changed {
 			store.emit(events.MessagesChanged(detail.Message.MailboxID))
 		}
 	}()
-	if detail.generation != store.pop3Generation {
+	if detail.generation != store.idGeneration.Load() {
 		return nil
 	}
 	tx, err := store.db.BeginTx(ctx, nil)
@@ -179,25 +180,18 @@ func (store *Store) GetMessageSource(ctx context.Context, id int64) ([]byte, boo
 }
 
 func (store *Store) acquirePop3(ctx context.Context) error {
-	if store.pop3Mu.TryLock() {
-		return nil
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	acquired := make(chan struct{})
-	go func() {
-		store.pop3Mu.Lock()
-		close(acquired)
-	}()
 	select {
-	case <-acquired:
+	case store.pop3Gate <- struct{}{}:
 		return nil
 	case <-ctx.Done():
-		go func() {
-			<-acquired
-			store.pop3Mu.Unlock()
-		}()
 		return ctx.Err()
 	}
 }
+
+func (store *Store) releasePop3() { <-store.pop3Gate }
 
 func (store *Store) OpenPOP3Mailbox(ctx context.Context, rawAddress string) (POP3MailboxSnapshot, error) {
 	address := strings.TrimSpace(strings.ToLower(rawAddress))
@@ -212,7 +206,7 @@ func (store *Store) OpenPOP3Mailbox(ctx context.Context, rawAddress string) (POP
 	isNew := false
 	committed := false
 	defer func() {
-		store.pop3Mu.Unlock()
+		store.releasePop3()
 		if isNew && committed {
 			store.emit(events.MailboxNew(mailboxID, address))
 		}
@@ -262,36 +256,11 @@ func (store *Store) OpenPOP3Mailbox(ctx context.Context, rawAddress string) (POP
 		return POP3MailboxSnapshot{}, err
 	}
 	committed = true
-	return POP3MailboxSnapshot{Messages: messages, Generation: store.pop3Generation}, nil
+	return POP3MailboxSnapshot{Messages: messages, Generation: store.idGeneration.Load()}, nil
 }
 
 func (store *Store) DeletePOP3Messages(ctx context.Context, generation uint64, ids []int64) ([]int64, error) {
-	if err := store.acquirePop3(ctx); err != nil {
-		return nil, err
-	}
-	var affected []int64
-	deleted := false
-	defer func() {
-		store.pop3Mu.Unlock()
-		if deleted {
-			for _, mailboxID := range affected {
-				store.emit(events.MessagesChanged(mailboxID))
-			}
-		}
-	}()
-	if generation != store.pop3Generation || len(ids) == 0 {
-		return []int64{}, nil
-	}
-	var err error
-	affected, err = affectedMailboxes(ctx, store.db, ids)
-	if err != nil {
-		return nil, err
-	}
-	if _, err = store.db.ExecContext(ctx, `DELETE FROM messages WHERE id IN (`+placeholders(len(ids))+`)`, intArgs(ids)...); err != nil {
-		return nil, err
-	}
-	deleted = true
-	return affected, nil
+	return store.deleteMessages(ctx, ids, &generation)
 }
 
 func (store *Store) MarkRead(ctx context.Context, id, mailboxID int64, wasRead int) error {
@@ -303,7 +272,7 @@ func (store *Store) MarkRead(ctx context.Context, id, mailboxID int64, wasRead i
 	}
 	changed := false
 	defer func() {
-		store.pop3Mu.Unlock()
+		store.releasePop3()
 		if changed {
 			store.emit(events.MessagesChanged(mailboxID))
 		}
@@ -339,7 +308,7 @@ func (store *Store) SetReadState(ctx context.Context, ids []int64, isRead bool) 
 	var affected []int64
 	committed := false
 	defer func() {
-		store.pop3Mu.Unlock()
+		store.releasePop3()
 		if committed {
 			for _, mailboxID := range affected {
 				store.emit(events.MessagesChanged(mailboxID))
@@ -372,33 +341,51 @@ func (store *Store) SetReadState(ctx context.Context, ids []int64, isRead bool) 
 }
 
 func (store *Store) DeleteMessages(ctx context.Context, ids []int64) ([]int64, error) {
+	return store.deleteMessages(ctx, ids, nil)
+}
+
+func (store *Store) deleteMessages(ctx context.Context, ids []int64, generation *uint64) ([]int64, error) {
 	if len(ids) == 0 {
 		return []int64{}, nil
 	}
 	if err := store.acquirePop3(ctx); err != nil {
 		return nil, err
 	}
-	var affected []int64
+	affected := []int64{}
 	committed := false
 	defer func() {
-		store.pop3Mu.Unlock()
+		store.releasePop3()
 		if committed {
 			for _, mailboxID := range affected {
 				store.emit(events.MessagesChanged(mailboxID))
 			}
 		}
 	}()
+	if generation != nil && *generation != store.idGeneration.Load() {
+		return []int64{}, nil
+	}
 	tx, err := store.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
-	affected, err = affectedMailboxes(ctx, tx, ids)
-	if err != nil {
-		return nil, err
-	}
-	if _, err = tx.ExecContext(ctx, `DELETE FROM messages WHERE id IN (`+placeholders(len(ids))+`)`, intArgs(ids)...); err != nil {
-		return nil, err
+	// POP3 clients can mark an entire maildrop. Bound each statement's
+	// parameter count without splitting the QUIT into separate commits.
+	seen := make(map[int64]bool)
+	for batch := range slices.Chunk(ids, 500) {
+		boxes, err := affectedMailboxes(ctx, tx, batch)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM messages WHERE id IN (`+placeholders(len(batch))+`)`, intArgs(batch)...); err != nil {
+			return nil, err
+		}
+		for _, box := range boxes {
+			if !seen[box] {
+				affected = append(affected, box)
+				seen[box] = true
+			}
+		}
 	}
 	if err = tx.Commit(); err != nil {
 		return nil, err
@@ -452,7 +439,7 @@ func (store *Store) DeleteMailbox(ctx context.Context, id int64) (bool, error) {
 	}
 	deleted := false
 	defer func() {
-		store.pop3Mu.Unlock()
+		store.releasePop3()
 		if deleted {
 			store.emit(events.MailboxDeleted(id))
 		}
@@ -473,11 +460,11 @@ func (store *Store) WipeAll(ctx context.Context) error {
 	if err := store.acquirePop3(ctx); err != nil {
 		return err
 	}
-	reset := false
+	var generation string
 	defer func() {
-		store.pop3Mu.Unlock()
-		if reset {
-			store.emit(events.Reset())
+		store.releasePop3()
+		if generation != "" {
+			store.emit(events.Reset(generation))
 		}
 	}()
 
@@ -494,8 +481,8 @@ func (store *Store) WipeAll(ctx context.Context) error {
 	if err = tx.Commit(); err != nil {
 		return err
 	}
-	store.pop3Generation++
-	reset = true
+	store.idGeneration.Add(1)
+	generation = store.IDGeneration()
 	return nil
 }
 
@@ -529,7 +516,7 @@ func (store *Store) StoreMessage(ctx context.Context, input StoreMessageInput) (
 	stored := []StoredMessage{}
 	committed := false
 	defer func() {
-		store.pop3Mu.Unlock()
+		store.releasePop3()
 		if committed {
 			for _, event := range pending {
 				store.emit(event)

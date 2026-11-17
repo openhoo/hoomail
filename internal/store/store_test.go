@@ -5,14 +5,18 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/openhoo/hoomail/internal/calendar"
 	"github.com/openhoo/hoomail/internal/events"
-	_ "modernc.org/sqlite"
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 func openTestStore(t *testing.T, options ...Option) *Store {
@@ -23,6 +27,189 @@ func openTestStore(t *testing.T, options ...Option) *Store {
 	}
 	t.Cleanup(func() { store.Close() })
 	return store
+}
+
+func TestLiteralDatabasePathsStaySeparateAcrossRestart(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not allow question marks in filenames")
+	}
+	root := t.TempDir()
+	first := filepath.Join(root, "mail?one#100%25.db")
+	second := filepath.Join(root, "mail?two#100%25.db")
+	open := func(path string) *Store {
+		t.Helper()
+		s, err := Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { s.Close() })
+		return s
+	}
+	s := open(first)
+	if _, err := s.StoreMessage(t.Context(), StoreMessageInput{Recipients: []string{"first@example.test"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	boxes, err := open(second).ListMailboxes(t.Context())
+	if err != nil || len(boxes) != 0 {
+		t.Fatalf("second database contains first database's mail: %v, %v", boxes, err)
+	}
+	boxes, err = open(first).ListMailboxes(t.Context())
+	if err != nil || len(boxes) != 1 || boxes[0].Address != "first@example.test" {
+		t.Fatalf("reopened first database: %v, %v", boxes, err)
+	}
+	for _, path := range []string{first, second} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestMessageOrderBreaksTimestampTiesNewestFirst(t *testing.T) {
+	s := openTestStore(t, WithClock(func() time.Time { return time.UnixMilli(1000) }))
+	subject := "same millisecond"
+	var ids []int64
+	var box int64
+	for range 3 {
+		stored, err := s.StoreMessage(t.Context(), StoreMessageInput{Recipients: []string{"box@example.test"}, Subject: &subject})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, stored[0].MessageID)
+		box = stored[0].MailboxID
+	}
+	slices.Reverse(ids)
+	for _, q := range []string{"", "millisecond"} {
+		got, err := s.ListMessages(t.Context(), box, q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var order []int64
+		for _, m := range got {
+			order = append(order, m.ID)
+		}
+		if !slices.Equal(order, ids) {
+			t.Errorf("query %q: got %v; want %v", q, order, ids)
+		}
+	}
+}
+
+func TestFileURIOptionsSurviveDriverPragmas(t *testing.T) {
+	t.Chdir(t.TempDir())
+	s, err := Open("file:temporary?mode=memory&cache=shared#notes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var journal string
+	var foreignKeys int
+	if err := s.db.QueryRow("PRAGMA journal_mode").Scan(&journal); err != nil || journal != "memory" {
+		t.Fatalf("URI mode: journal=%q err=%v", journal, err)
+	}
+	if err := s.db.QueryRow("PRAGMA foreign_keys").Scan(&foreignKeys); err != nil || foreignKeys != 1 {
+		t.Fatalf("driver pragma: foreign_keys=%d err=%v", foreignKeys, err)
+	}
+}
+
+func TestIDGenerationChangesOnlyOnCommittedResetOrReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "generation.db")
+	var resetGeneration string
+	s, err := Open(path, WithBroadcaster(func(e events.Event) {
+		if e.Type == events.TypeReset {
+			resetGeneration = e.Generation
+		}
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	before := s.IDGeneration()
+	if _, err := s.OpenPOP3Mailbox(t.Context(), "test@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`CREATE TRIGGER keep_mail BEFORE DELETE ON mailboxes BEGIN SELECT RAISE(ABORT, 'busy'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WipeAll(t.Context()); err == nil || s.IDGeneration() != before || resetGeneration != "" {
+		t.Fatalf("failed reset changed generation or emitted a reset: %v", err)
+	}
+	if _, err := s.db.Exec("DROP TRIGGER keep_mail"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WipeAll(t.Context()); err != nil || resetGeneration == before || resetGeneration != s.IDGeneration() {
+		t.Fatalf("reset event and current generation must agree: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if reopened.IDGeneration() == resetGeneration || reopened.IDGeneration() == before {
+		t.Fatal("reopen reused an earlier ID generation")
+	}
+}
+
+func TestPOP3DeletionBeyondBindLimitIsAtomic(t *testing.T) {
+	var emitted []events.Event
+	s := openTestStore(t, WithBroadcaster(func(e events.Event) { emitted = append(emitted, e) }))
+	snapshot, err := s.OpenPOP3Mailbox(t.Context(), "batch@example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const count = 1200
+	if _, err := s.db.Exec(`WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<?)
+		INSERT INTO messages(mailbox_id, received_at) SELECT 1,i FROM n`, count); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := s.db.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = sqlite.Limit(conn, sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 999)
+	conn.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := make([]int64, count)
+	for i := range ids {
+		ids[i] = int64(i + 1)
+	}
+	emitted = nil
+	// A failure on the last message must roll back earlier statements and
+	// leave every deletion mark available to retry.
+	if _, err := s.db.Exec(`CREATE TRIGGER hold_last BEFORE DELETE ON messages WHEN OLD.id=1200 BEGIN SELECT RAISE(ABORT, 'hold last'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DeletePOP3Messages(t.Context(), snapshot.Generation, ids); err == nil || !strings.Contains(err.Error(), "hold last") {
+		t.Errorf("expected failure at last message, got %v", err)
+	}
+	checkRemaining := func(want int) {
+		t.Helper()
+		var n int
+		if err := s.db.QueryRow("SELECT COUNT(*) FROM messages").Scan(&n); err != nil || n != want {
+			t.Fatalf("remaining messages = %d, want %d, err = %v", n, want, err)
+		}
+	}
+	checkRemaining(count)
+	if len(emitted) != 0 {
+		t.Fatalf("broadcast after rollback: %v", emitted)
+	}
+	if _, err := s.db.Exec("DROP TRIGGER hold_last"); err != nil {
+		t.Fatal(err)
+	}
+	affected, err := s.DeletePOP3Messages(t.Context(), snapshot.Generation, ids)
+	if err != nil || !slices.Equal(affected, []int64{1}) {
+		t.Fatalf("retry: affected=%v err=%v", affected, err)
+	}
+	checkRemaining(0)
+	if len(emitted) != 1 || emitted[0].Type != events.TypeMessagesChanged || *emitted[0].MailboxID != 1 {
+		t.Fatalf("want one mailbox invalidation, got %v", emitted)
+	}
 }
 
 func TestOpenMigratesLegacyMessagesColumns(t *testing.T) {
@@ -560,7 +747,7 @@ func TestPOP3SerializationHonorsContextCancellation(t *testing.T) {
 			return err
 		}},
 		{name: "delete", call: func(ctx context.Context) error {
-			_, err := store.DeletePOP3Messages(ctx, store.pop3Generation, []int64{1})
+			_, err := store.DeletePOP3Messages(ctx, store.idGeneration.Load(), []int64{1})
 			return err
 		}},
 		{name: "delete-mailbox", call: func(ctx context.Context) error {
@@ -578,7 +765,9 @@ func TestPOP3SerializationHonorsContextCancellation(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			store.pop3Mu.Lock()
+			if err := store.acquirePop3(t.Context()); err != nil {
+				t.Fatal(err)
+			}
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
 			result := make(chan error, 1)
@@ -591,7 +780,7 @@ func TestPOP3SerializationHonorsContextCancellation(t *testing.T) {
 			case <-time.After(time.Second):
 				t.Fatal("canceled POP3 operation remained blocked")
 			}
-			store.pop3Mu.Unlock()
+			store.releasePop3()
 		})
 	}
 }

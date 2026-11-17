@@ -52,6 +52,7 @@ type StaticConfig struct {
 
 type server struct {
 	store     *store.Store
+	origins   http.CrossOriginProtection
 	static    StaticConfig
 	sender    TestSender
 	subscribe func() (<-chan events.Event, func())
@@ -67,6 +68,23 @@ func New(data *store.Store, static StaticConfig, sender TestSender) http.Handler
 
 func (s *server) ServeHTTP(response http.ResponseWriter, request *http.Request) {
 	route := request.URL.Path
+	messageID, messagePath := strings.CutPrefix(route, "/api/messages/")
+	detailRequest := request.Method == http.MethodGet && messagePath && !strings.Contains(messageID, "/")
+	if strings.HasPrefix(route, "/api/") {
+		response.Header().Set("Cache-Control", "private, no-store")
+		check := request
+		if detailRequest {
+			// This legacy GET marks mail read. Check its browser origin as a
+			// write while preserving the method seen by the actual handler.
+			copy := *request
+			copy.Method = http.MethodPost
+			check = &copy
+		}
+		if err := s.origins.Check(check); err != nil {
+			writeError(response, http.StatusForbidden, "Cross-origin request is not allowed")
+			return
+		}
+	}
 	switch {
 	case (request.Method == http.MethodGet || request.Method == http.MethodHead) && route == "/openapi.json":
 		serveOpenAPI(response, request)
@@ -87,8 +105,8 @@ func (s *server) ServeHTTP(response http.ResponseWriter, request *http.Request) 
 		s.getMessageSource(response, request, strings.TrimSuffix(strings.TrimPrefix(route, "/api/messages/"), "/source"))
 	case request.Method == http.MethodGet && strings.HasPrefix(route, "/api/messages/") && strings.HasSuffix(route, "/inspect"):
 		s.inspectMessage(response, request, strings.TrimSuffix(strings.TrimPrefix(route, "/api/messages/"), "/inspect"))
-	case request.Method == http.MethodGet && strings.HasPrefix(route, "/api/messages/") && !strings.Contains(strings.TrimPrefix(route, "/api/messages/"), "/"):
-		s.getMessage(response, request, strings.TrimPrefix(route, "/api/messages/"))
+	case detailRequest:
+		s.getMessage(response, request, messageID)
 	case request.Method == http.MethodGet && strings.HasPrefix(route, "/api/attachments/") && !strings.Contains(strings.TrimPrefix(route, "/api/attachments/"), "/"):
 		s.getAttachment(response, request, strings.TrimPrefix(route, "/api/attachments/"))
 	case request.Method == http.MethodGet && route == "/api/events":
@@ -345,7 +363,6 @@ func (s *server) getMessageSource(response http.ResponseWriter, request *http.Re
 		writeError(response, http.StatusNotFound, "Message not found")
 		return
 	}
-	response.Header().Set("Cache-Control", "private, no-store")
 	response.Header().Set("Content-Type", "message/rfc822")
 	response.Header().Set("X-Content-Type-Options", "nosniff")
 	response.WriteHeader(http.StatusOK)
@@ -585,7 +602,6 @@ func encodeRFC5987(value string) string {
 
 func (s *server) getAttachment(response http.ResponseWriter, request *http.Request, rawID string) {
 	response.Header().Set("X-Content-Type-Options", "nosniff")
-	response.Header().Set("Cache-Control", "private, no-store")
 	id, ok := parseID(rawID)
 	if !ok {
 		writeError(response, http.StatusBadRequest, "Invalid attachment id")
@@ -636,12 +652,14 @@ func (s *server) eventStream(response http.ResponseWriter, request *http.Request
 		return
 	}
 	response.Header().Set("Content-Type", "text/event-stream")
-	response.Header().Set("Cache-Control", "no-cache, no-transform")
+	response.Header().Set("Cache-Control", "private, no-store, no-transform")
 	response.Header().Set("Connection", "keep-alive")
 	stream, unsubscribe := s.subscribe()
 	defer unsubscribe()
 	response.WriteHeader(http.StatusOK)
-	_, _ = io.WriteString(response, "data: {\"type\":\"connected\"}\n\n")
+	if _, err := fmt.Fprintf(response, "data: {\"type\":\"connected\",\"generation\":%q}\n\n", s.store.IDGeneration()); err != nil {
+		return
+	}
 	flusher.Flush()
 	heartbeat := time.NewTicker(25 * time.Second)
 	defer heartbeat.Stop()
