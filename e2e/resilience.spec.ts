@@ -1,4 +1,4 @@
-import { expect, mailboxButton, messageRow, sendTestMessage, test } from './fixtures'
+import { expect, mailboxButton, mailboxMessagesResponse, messageRow, sendTestMessage, test } from './fixtures'
 
 test('reports an inbox load failure and retries instead of claiming the store is empty', async ({ page }) => {
   let unavailable = true
@@ -58,9 +58,10 @@ for (const searchActive of [false, true]) test(`does not retain a deleted reader
   await row.click()
   await expect(page.getByRole('heading', { name: subject, exact: true })).toBeVisible()
   if (searchActive) {
+    const searchLoaded = mailboxMessagesResponse(page, 'another client')
     await page.getByRole('searchbox', { name: 'Search messages' }).fill('another client')
+    await searchLoaded
     await expect(row).toBeVisible()
-    await row.focus()
   }
   await row.press('ControlOrMeta+a')
   await expect(page.getByText('1 selected')).toBeVisible()
