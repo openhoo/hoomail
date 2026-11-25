@@ -313,7 +313,7 @@ The CI workflow runs these independent or dependent gates:
 | Conventional Commits | Hooversion validates commit messages for release-compatible history; automated release commits are exempted from this job |
 | Preact client | Lockfile installation, strict TypeScript no-emit checking, and a production client build |
 | Playwright E2E | The isolated real-server Chromium workflows described above |
-| Go race tests | Embedded-client build followed by `go test -race ./...` |
+| Go race tests and coverage | Runs the race suite and saves its Cobertura XML as the `go-coverage` Actions artifact for seven days. On repositories with GitHub Code Quality configured, set the Actions variable `PUBLISH_CODE_QUALITY_COVERAGE` to `true` to publish there as well. |
 | Go quality | `gofmt` cleanliness for `cmd`, `internal`, and `web`; `go vet ./...`; module checksum verification |
 | Go security | Reachable vulnerability scanning with `govulncheck v1.6.0` and static security-pattern scanning with `gosec v2.28.0` (reviewed exclusions: `G104`, `G202`, `G301`, `G705`) |
 | Helm chart | Strict linting, representative template renders, and chart/application version synchronization |
