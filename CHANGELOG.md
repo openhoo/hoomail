@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.4 (2026-11-25)
+
+### Bug Fixes
+
+- **hoomail:** correct offline email inspection results (66f5938)
+
 ## 0.10.3 (2026-11-17)
 
 ### Bug Fixes
