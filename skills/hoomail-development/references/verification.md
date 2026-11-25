@@ -43,6 +43,10 @@ Inspection browser changes need a valid MIME fixture accepted by the SMTP
 parser, a no-external-network assertion, and the explicit 500/retry/loading/
 success lifecycle already described in `docs/development.md`.
 
+For Inspector rule changes, run the five-message SMTP check and, for HTML
+compatibility changes, the independent Can I Email corpus as described in
+[Inspect comparisons](../../../docs/development.md#inspect-comparisons).
+
 ## Chart
 
 ```bash

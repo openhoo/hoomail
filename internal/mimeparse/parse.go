@@ -53,7 +53,7 @@ func Parse(raw []byte, limits Limits) (Document, error) {
 	if !inspection {
 		maxHeaderBytes = 1 << 20
 	}
-	entity, entityErr := message.ReadWithOptions(bytes.NewReader(raw), &message.ReadOptions{MaxHeaderBytes: maxHeaderBytes})
+	entity, entityErr := readMessage(raw, maxHeaderBytes)
 	if entityErr != nil && !message.IsUnknownCharset(entityErr) && !message.IsUnknownEncoding(entityErr) {
 		document.SemanticError = entityErr
 		return document, nil
@@ -100,6 +100,23 @@ func Parse(raw []byte, limits Limits) (Document, error) {
 	return document, nil
 }
 
+// RFC 5322 §3.5 permits the CRLF and body after the header fields to be
+// omitted. go-message expects a separator even then. Its first pass checks
+// field syntax and the header budget; retry only for a CRLF-terminated EOF.
+// The synthetic separator is never stored or counted as raw message data.
+func readMessage(raw []byte, maxHeaderBytes int64) (*message.Entity, error) {
+	opts := &message.ReadOptions{MaxHeaderBytes: maxHeaderBytes}
+	entity, err := message.ReadWithOptions(bytes.NewReader(raw), opts)
+	if errors.Is(err, io.EOF) && bytes.HasSuffix(raw, []byte("\r\n")) {
+		// The generated separator does not count toward the sender's byte limit.
+		if maxHeaderBytes >= 0 {
+			opts.MaxHeaderBytes += 2
+		}
+		return message.ReadWithOptions(io.MultiReader(bytes.NewReader(raw), strings.NewReader("\r\n")), opts)
+	}
+	return entity, err
+}
+
 func readSemanticNode(entity *message.Entity, entityErr error, path string, rawNode *Node, index *rawIndex, digestChild bool, depth int) (*Node, error, string, error) {
 	if entity == nil {
 		return nil, entityErr, "", nil
@@ -124,7 +141,7 @@ func readSemanticNode(entity *message.Entity, entityErr error, path string, rawN
 			return node, bodyErr, "", nil
 		}
 		node.DecodedBody = body
-		childEntity, childEntityErr := message.ReadWithOptions(bytes.NewReader(body), &message.ReadOptions{MaxHeaderBytes: -1})
+		childEntity, childEntityErr := readMessage(body, -1)
 		if childEntityErr != nil && !message.IsUnknownCharset(childEntityErr) && !message.IsUnknownEncoding(childEntityErr) {
 			child := &Node{Path: path + ".1", Header: entity.Header, MediaType: "text/plain", DecodedBody: body}
 			node.Children = append(node.Children, child)
@@ -221,7 +238,7 @@ func readSemanticNode(entity *message.Entity, entityErr error, path string, rawN
 			// analysis is unavailable rather than failed.
 			return node, nil, path, nil
 		}
-		childEntity, childEntityErr := message.ReadWithOptions(bytes.NewReader(body), &message.ReadOptions{MaxHeaderBytes: -1})
+		childEntity, childEntityErr := readMessage(body, -1)
 		if childEntityErr != nil && !message.IsUnknownCharset(childEntityErr) && !message.IsUnknownEncoding(childEntityErr) {
 			child := &Node{Path: path + ".1", Header: entity.Header, MediaType: "text/plain", DecodedBody: body}
 			if index != nil {

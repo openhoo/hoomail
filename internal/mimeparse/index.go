@@ -151,6 +151,12 @@ func (index *rawIndex) parseEntity(start, end int, path string, depth int, diges
 			break
 		}
 	}
+	// A complete message can end after its final header CRLF (RFC 5322 §3.5).
+	// Only infer the empty body at actual EOF of this source. A bounded index
+	// that stopped in the middle of headers cannot establish their absence.
+	if headerEnd < 0 && start == 0 && end == len(index.raw) && index.complete && bytes.HasSuffix(index.raw, []byte("\r\n")) {
+		headerEnd, bodyStart = end, end
+	}
 	if headerEnd < 0 || bodyStart > end {
 		return nil, false
 	}

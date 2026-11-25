@@ -57,6 +57,8 @@ const EVIDENCE_SOURCES: Record<string, string> = {
 
 const OUTCOME_META: Record<string, { label: string; icon: IconComponent; className: string }> = {
   pass: { label: 'Pass', icon: CheckCircle2, className: 'text-green-500' },
+  warning: { label: 'Warning', icon: TriangleAlert, className: 'text-amber-500' },
+  advisory: { label: 'Advisory', icon: Info, className: 'text-blue-500' },
   fail: { label: 'Fail', icon: XCircle, className: 'text-destructive' },
   observed: { label: 'Observed', icon: Info, className: 'text-blue-500' },
   'not-evaluated': { label: 'Not evaluated', icon: TriangleAlert, className: 'text-amber-500' },
@@ -65,7 +67,7 @@ const OUTCOME_META: Record<string, { label: string; icon: IconComponent; classNa
 const RESOURCE_META: Record<string, { label: string; icon: IconComponent }> = {
   link: { label: 'Link', icon: Link2 },
   image: { label: 'Image', icon: ImageIcon },
-  'tracking-pixel': { label: 'Tracking pixel', icon: Eye },
+  'tracking-pixel': { label: 'Tracking pixel candidate', icon: Eye },
   cid: { label: 'CID resource', icon: ImageIcon },
   data: { label: 'Data resource', icon: FileText },
   attachment: { label: 'Attachment', icon: Paperclip },
@@ -258,10 +260,12 @@ function FindingGroup({ label, findings }: { label: string; findings: Inspection
 }
 
 function FindingRow({ finding }: { finding: InspectionFinding }) {
-  const outcome = OUTCOME_META[finding.outcome] ?? { label: 'Unknown', icon: Info, className: 'text-muted-foreground' }
+  const bucket = finding.outcome === 'pass' && (finding.severity === 'warning' || finding.severity === 'advisory')
+    ? finding.severity : finding.outcome
+  const outcome = OUTCOME_META[bucket] ?? { label: 'Unknown', icon: Info, className: 'text-muted-foreground' }
   const OutcomeIcon = outcome.icon
   return (
-    <li data-outcome={finding.outcome} className="rounded-lg border border-border bg-card px-3 py-2.5">
+    <li data-outcome={bucket} className="rounded-lg border border-border bg-card px-3 py-2.5">
       <div className="flex items-start gap-2.5">
         <OutcomeIcon className={cn('mt-0.5 size-4 shrink-0', outcome.className)} aria-hidden="true" />
         <div className="min-w-0 flex-1">
@@ -273,7 +277,7 @@ function FindingRow({ finding }: { finding: InspectionFinding }) {
           </div>
           <span className="sr-only">{outcome.label}</span>
           <p className="mt-1 break-words text-xs leading-relaxed text-muted-foreground">{finding.detail}</p>
-          {finding.evidence.length > 0 && <EvidenceList evidence={finding.evidence} truncated={finding.evidenceTruncated} />}
+          {(finding.evidence.length > 0 || finding.evidenceTruncated) && <EvidenceList evidence={finding.evidence} truncated={finding.evidenceTruncated} />}
           {finding.reference && <ReferenceLink reference={finding.reference} />}
         </div>
       </div>
@@ -433,17 +437,17 @@ function CompatibilitySection({ data }: { data: HTMLCompatibility }) {
     return [...seen.entries()]
   }, [data.platforms])
 
-  const effectivePlatform = data.clientsTruncated ? 'all' : platform
+  const effectivePlatform = data.clientsTruncated || !platforms.some(([key]) => key === platform) ? 'all' : platform
   const filtered = useMemo(
     () => effectivePlatform === 'all'
       ? data.warnings
-      : data.warnings.filter((warning) => warning.clients.some((client) => client.platform === effectivePlatform)),
+      : data.warnings.filter((warning) => warning.slug === 'html-script' || warning.clients.some((client) => client.platform === effectivePlatform)),
     [data.warnings, effectivePlatform],
   )
-  const platformLabel = effectivePlatform === 'all' ? null : (PLATFORM_META[effectivePlatform] ?? effectivePlatform)
+  const platformLabel = effectivePlatform === 'all' ? null : (platforms.find(([key]) => key === effectivePlatform)?.[1] ?? effectivePlatform)
   return (
     <section aria-label="HTML compatibility">
-      <SectionHeading>HTML compatibility ({data.warnings.length} {data.warnings.length === 1 ? 'warning' : 'warnings'})</SectionHeading>
+      <SectionHeading>HTML compatibility ({filtered.length} {data.warningsTruncated ? 'retained ' : ''}{filtered.length === 1 ? 'feature' : 'features'})</SectionHeading>
       <div className="rounded-lg border border-border bg-card p-3.5">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <dl className="flex flex-wrap gap-x-4 gap-y-1">
@@ -461,14 +465,14 @@ function CompatibilitySection({ data }: { data: HTMLCompatibility }) {
             </div>
           </dl>
           {!data.clientsTruncated && platforms.length > 1 && (
-            <div className="flex flex-wrap gap-1" role="group" aria-label="Filter warnings by client platform">
+            <div className="flex flex-wrap gap-1" role="group" aria-label="Filter features by client platform">
               <button
                 type="button"
-                aria-pressed={platform === 'all'}
+                aria-pressed={effectivePlatform === 'all'}
                 onClick={() => setPlatform('all')}
                 className={cn(
                   'rounded-md border px-2 py-1 text-xs transition-colors focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none',
-                  platform === 'all' ? 'border-transparent bg-primary text-primary-foreground' : 'border-border text-muted-foreground hover:text-foreground',
+                  effectivePlatform === 'all' ? 'border-transparent bg-primary text-primary-foreground' : 'border-border text-muted-foreground hover:text-foreground',
                 )}
               >
                 All platforms
@@ -477,11 +481,11 @@ function CompatibilitySection({ data }: { data: HTMLCompatibility }) {
                 <button
                   key={key}
                   type="button"
-                  aria-pressed={platform === key}
+                  aria-pressed={effectivePlatform === key}
                   onClick={() => setPlatform(key)}
                   className={cn(
                     'rounded-md border px-2 py-1 text-xs transition-colors focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none',
-                    platform === key ? 'border-transparent bg-primary text-primary-foreground' : 'border-border text-muted-foreground hover:text-foreground',
+                    effectivePlatform === key ? 'border-transparent bg-primary text-primary-foreground' : 'border-border text-muted-foreground hover:text-foreground',
                   )}
                 >
                   {label}
@@ -493,17 +497,20 @@ function CompatibilitySection({ data }: { data: HTMLCompatibility }) {
         <p className="mt-2 text-[12px] text-muted-foreground">
           {data.nodes.toLocaleString()} HTML nodes · {data.tests.toLocaleString()} tests · Can I Email data {data.dataVersion} updated {data.dataUpdated}
         </p>
+        {(data.truncated || data.warningsTruncated) && (
+          <p className="text-[12px] text-muted-foreground">Only part of the markup or warning list is shown.</p>
+        )}
         {data.clientsTruncated && (
           <p className="text-[12px] text-muted-foreground">
             Client details and platform filters are unavailable because this bounded report was trimmed.
           </p>
         )}
         <p className="text-[12px] text-muted-foreground">
-          Static markup support from the <a href="https://www.caniemail.com" target="_blank" rel="noopener noreferrer" className="rounded-sm underline underline-offset-2 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none">Can I Email</a> dataset; no messages are sent to real clients.
+          The overall score is a markup heuristic. Feature percentages count tested client versions equally and exclude unknown results. Support data comes from <a href="https://www.caniemail.com" target="_blank" rel="noopener noreferrer" className="rounded-sm underline underline-offset-2 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none">Can I Email</a>; Hoomail does not render messages in those clients.
         </p>
       </div>
       {filtered.length === 0 ? (
-        <p className="mt-2 text-sm text-muted-foreground">No warnings{platformLabel ? ` for ${platformLabel}` : ''}.</p>
+        <p className="mt-2 text-sm text-muted-foreground">{data.truncated || data.warningsTruncated ? 'No matching features in the retained results' : 'No matching features'}{platformLabel ? ` for ${platformLabel}` : ''}.</p>
       ) : (
         <ul className="mt-2 flex flex-col gap-2">
           {filtered.map((warning) => <CompatibilityWarningRow key={warning.slug} warning={warning} platform={effectivePlatform} />)}
@@ -515,7 +522,10 @@ function CompatibilitySection({ data }: { data: HTMLCompatibility }) {
 
 function CompatibilityWarningRow({ warning, platform }: { warning: CompatibilityWarning; platform: string }) {
   const clients = platform === 'all' ? warning.clients : warning.clients.filter((client) => client.platform === platform)
-  const score = platform === 'all' ? warning.score : clientScore(clients)
+  const score = platform === 'all' || warning.slug === 'html-script'
+    ? (warning.score.supported + warning.score.partial + warning.score.unsupported > 0 ? warning.score : null)
+    : clientScore(clients)
+  const sourceLabel = warning.slug === 'html-script' ? 'Mailpit' : 'Can I Email'
   const categoryLabel = COMPATIBILITY_CATEGORY_LABELS[warning.category] ?? (warning.category || 'Unknown')
   return (
     <li className="rounded-lg border border-border bg-card px-3 py-2.5">
@@ -534,7 +544,7 @@ function CompatibilityWarningRow({ warning, platform }: { warning: Compatibility
           <span className="font-medium text-destructive">{formatPercent(score.unsupported)} unsupported</span>
         </p>
       ) : (
-        <p className="mt-1.5 text-[12px] text-muted-foreground">Compatibility score unavailable for this platform.</p>
+        <p className="mt-1.5 text-[12px] text-muted-foreground">No known support results for this selection.</p>
       )}
       {clients.length > 0 && (
         <ul className="mt-2 flex flex-col divide-y divide-border/60 border-t border-border/60">
@@ -560,9 +570,9 @@ function CompatibilityWarningRow({ warning, platform }: { warning: Compatibility
           target="_blank"
           rel="noopener noreferrer"
           className="mt-2 inline-flex items-center gap-1 rounded-sm text-xs font-medium text-foreground underline underline-offset-2 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
-          aria-label={`Open Can I Email reference for ${warning.title} in a new tab`}
+          aria-label={`Open ${sourceLabel} reference for ${warning.title} in a new tab`}
         >
-          Can I Email
+          {sourceLabel}
           <ExternalLink className="size-3" aria-hidden="true" />
         </a>
       )}

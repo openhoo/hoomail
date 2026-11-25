@@ -95,7 +95,7 @@ export interface InspectionHeader {
   line: number
 }
 
-export type CompatibilitySupport = 'yes' | 'partial' | 'no'
+export type CompatibilitySupport = 'yes' | 'partial' | 'no' | 'unknown'
 
 export interface CompatibilityClient {
   name: string

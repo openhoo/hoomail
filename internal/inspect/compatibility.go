@@ -5,14 +5,14 @@ import (
 	_ "embed"
 	"encoding/json"
 	"io"
-	"regexp"
 	"sort"
 	"strings"
 
 	"golang.org/x/net/html"
 )
 
-// Exact Mailpit caniemail-data.json clone at b859b0d986d66bbf1d7d9533317faf867afa1ed1 (MIT).
+// Can I Email API export (MIT): https://www.caniemail.com/api/data.json
+// Snapshot: 2026-09-16; SHA-256: 7328f873fae3bb24455d10bf3005464b2af12cbbcc5b54da51683d4911235628.
 //
 //go:embed caniemail-data.json
 var canIEmailData []byte
@@ -101,30 +101,18 @@ var caniEmailFeatures = func() map[string]caniEmailFeature {
 	}
 	return out
 }()
-var compatibilityCSSRegex = func() map[string]*regexp.Regexp {
-	out := make(map[string]*regexp.Regexp)
-	for k, v := range cssInlineRegexTests {
-		out[k] = v
-	}
-	for k, v := range cssRegexpTests {
-		out[k] = v
-	}
-	for k, v := range cssRegexpUnitTests {
-		out[k] = v
-	}
-	return out
-}()
+var compatibilityRules = compatibilityRuleIDs()
 
 func analyzeHTMLCompatibility(raw []byte) *HTMLCompatibility {
 	if len(raw) == 0 {
 		return nil
 	}
-	fullDocument := regexp.MustCompile(`(?i)</body\s*>`).Match(raw)
+	elements := 0
 	truncated := false
 	counts := map[string]int{}
 	nodes := 0
 	inStyle := false
-	var styles strings.Builder
+	styleBytes := 0
 	truncationCause := ""
 	stylesTruncated := false
 	t := html.NewTokenizer(bytes.NewReader(raw))
@@ -142,65 +130,36 @@ func analyzeHTMLCompatibility(raw []byte) *HTMLCompatibility {
 		switch typ {
 		case html.StartTagToken, html.SelfClosingTagToken:
 			name := strings.ToLower(tok.Data)
-			if !fullDocument || (name != "html" && name != "head" && name != "meta" && name != "body") {
+			elements++
+			if elements > MaxHTMLNodes {
+				truncated = true
+				truncationCause = "HTML nodes"
+				goto done
+			}
+			if name != "html" && name != "head" && name != "meta" && name != "body" {
 				nodes++
-				if nodes > MaxHTMLNodes {
-					nodes = MaxHTMLNodes
-					truncated = true
-					truncationCause = "HTML nodes"
-					goto done
-				}
 			}
 			attrs := htmlAttrs(tok.Attr)
-			for slug := range htmlTests {
-				if slug == "html-body" && !fullDocument {
-					continue
-				}
-				if compatibilityHTMLMatch(slug, htmlTests[slug], name, attrs) {
-					counts[slug]++
-				}
-			}
-			if name == "script" && !strings.EqualFold(attrs["type"], "application/ld+json") && !strings.EqualFold(attrs["type"], "application/json") {
-				counts["html-script"]++
-			}
-			if name == "img" {
-				src := strings.ToLower(strings.TrimSpace(attrs["src"]))
-				for slug, re := range imageRegexpTests {
-					if re.MatchString(src) {
-						counts[slug]++
-					}
-				}
-			}
+			inspectCompatibilityTag(name, attrs, counts)
 			if style := attrs["style"]; style != "" {
-				for slug, re := range cssInlineRegexTests {
-					if re.MatchString(style) {
-						counts[slug]++
-					}
-				}
-				for slug, re := range cssRegexpUnitTests {
-					counts[slug] += len(re.FindAllString(style, maxCompatibilityOccurrences))
-				}
-			}
-			for slug, selector := range styleInlineAttributes {
-				attr := strings.Trim(selector, "[]")
-				if _, ok := attrs[attr]; ok {
-					counts[slug]++
-				}
+				inspectCompatibilityCSS(style, true, counts)
 			}
 			if name == "style" && typ == html.StartTagToken {
-				inStyle = true
+				kind := strings.TrimSpace(attrs["type"])
+				inStyle = kind == "" || strings.EqualFold(kind, "text/css")
 			}
 		case html.TextToken:
-			if inStyle && styles.Len() < MaxHTMLTokenBytes {
-				remaining := MaxHTMLTokenBytes - styles.Len()
-				text := tok.Data
-				if len(text) > remaining {
-					text = text[:remaining]
+			if inStyle {
+				remaining := MaxHTMLTokenBytes - styleBytes
+				source := tok.Data
+				if len(source) > remaining {
+					source = source[:remaining]
 					stylesTruncated = true
 				}
-				styles.WriteString(text)
-			} else if inStyle {
-				stylesTruncated = true
+				if len(source) > 0 {
+					inspectCompatibilityCSS(source, false, counts)
+					styleBytes += len(source)
+				}
 			}
 		case html.EndTagToken:
 			if strings.EqualFold(tok.Data, "style") {
@@ -210,31 +169,18 @@ func analyzeHTMLCompatibility(raw []byte) *HTMLCompatibility {
 	}
 
 done:
-	css := styles.String()
-	for _, match := range regexp.MustCompile(`(?s)\{([^{}]*)\}`).FindAllStringSubmatch(css, maxCompatibilityOccurrences) {
-		declarations := match[1]
-		for slug, re := range cssInlineRegexTests {
-			if re.MatchString(declarations) {
-				counts[slug]++
-			}
-		}
-		for slug, re := range cssRegexpUnitTests {
-			counts[slug] += len(re.FindAllString(declarations, maxCompatibilityOccurrences))
-		}
-	}
-	for slug, re := range cssRegexpTests {
-		counts[slug] += len(re.FindAllString(css, maxCompatibilityOccurrences))
-	}
-
-	tests := 1 + len(htmlTests) + len(imageRegexpTests) + len(cssInlineRegexTests) + len(styleInlineAttributes) + len(cssRegexpUnitTests) + len(cssRegexpTests)
 	slugs := make([]string, 0, len(counts))
 	for slug, count := range counts {
 		if count > maxCompatibilityOccurrences {
 			count = maxCompatibilityOccurrences
+			truncated = true
+			if truncationCause == "" {
+				truncationCause = "compatibility occurrences"
+			}
 		}
 		counts[slug] = count
 		if count > 0 {
-			if _, ok := caniEmailFeatures[slug]; ok {
+			if _, ok := caniEmailFeatures[slug]; ok || slug == "html-script" {
 				slugs = append(slugs, slug)
 			}
 		}
@@ -249,6 +195,14 @@ done:
 	for index, slug := range slugs {
 		feature := caniEmailFeatures[slug]
 		warning := CompatibilityWarning{Slug: slug, Title: feature.Title, Category: feature.Category, Description: feature.Description, URL: feature.URL, Occurrences: counts[slug], Clients: []CompatibilityClient{}}
+		if slug == "html-script" {
+			// Mailpit's one hand-authored rule; the dataset has no script feature.
+			warning.Title = "<script> element"
+			warning.Category = "html"
+			warning.Description = "Executable scripts are generally blocked by email clients."
+			warning.URL = "https://mailpit.axllent.org/docs/usage/html-check/"
+			warning.Score.Unsupported = 100
+		}
 		for family, byPlatform := range feature.Stats {
 			for platform, versions := range byPlatform {
 				for version, rawSupport := range versions {
@@ -288,8 +242,8 @@ done:
 			warning.Score.Partial = warning.Score.Partial / total * 100
 			warning.Score.Unsupported = warning.Score.Unsupported / total * 100
 		}
-		if nodes > 0 {
-			weight := float64(warning.Occurrences) / float64(nodes)
+		if elements > 0 {
+			weight := min(1.0, float64(warning.Occurrences)/float64(max(1, nodes)))
 			partial = max(partial, warning.Score.Partial*weight)
 			unsupported = max(unsupported, warning.Score.Unsupported*weight)
 		}
@@ -334,7 +288,7 @@ done:
 	}
 	return &HTMLCompatibility{
 		DataVersion: canIEmailDataset.APIVersion, DataUpdated: canIEmailDataset.LastUpdateDate,
-		Nodes: nodes, Tests: tests, Score: score, Platforms: platformList, Warnings: warnings,
+		Nodes: nodes, Tests: len(compatibilityRules), Score: score, Platforms: platformList, Warnings: warnings,
 		WarningsTruncated: warningsTruncated, ClientsTruncated: clientsTruncated, Truncated: isTruncated,
 		truncationCause: cause,
 	}
@@ -343,16 +297,23 @@ done:
 func compatibilitySupport(raw json.RawMessage, notes map[string]string) (string, *string) {
 	var value string
 	if json.Unmarshal(raw, &value) != nil {
-		return "partial", nil
+		return "unknown", nil
 	}
-	switch value {
+	tokens := strings.Fields(value)
+	if len(tokens) == 0 {
+		return "unknown", nil
+	}
+	support := "unknown"
+	switch tokens[0] {
 	case "y":
-		return "yes", nil
+		support = "yes"
+	case "a":
+		support = "partial"
 	case "n":
-		return "no", nil
+		support = "no"
 	}
 	var noteTexts []string
-	for _, token := range strings.Fields(value) {
+	for _, token := range tokens[1:] {
 		if !strings.HasPrefix(token, "#") {
 			continue
 		}
@@ -362,9 +323,9 @@ func compatibilitySupport(raw json.RawMessage, notes map[string]string) (string,
 	}
 	if len(noteTexts) > 0 {
 		combined := strings.Join(noteTexts, "\n")
-		return "partial", &combined
+		return support, &combined
 	}
-	return "partial", nil
+	return support, nil
 }
 
 func compatibilityTotalScore(partial, unsupported float64) CompatibilityScore {
@@ -374,52 +335,7 @@ func compatibilityTotalScore(partial, unsupported float64) CompatibilityScore {
 	if unsupported < 0 {
 		unsupported = 0
 	}
-	if partial > 100 {
-		partial = 100
-	}
-	if unsupported > 100-partial {
-		unsupported = 100 - partial
-	}
+	unsupported = min(100, unsupported)
+	partial = min(100-unsupported, partial)
 	return CompatibilityScore{Supported: 100 - partial - unsupported, Partial: partial, Unsupported: unsupported}
-}
-func compatibilityHTMLMatch(slug string, _ string, name string, attrs map[string]string) bool {
-	switch slug {
-	case "html-body":
-		return name == "body"
-	case "html-object":
-		return name == "object" || name == "embed" || name == "image" || name == "pdf"
-	case "html-link":
-		return name == "link"
-	case "html-srcset":
-		_, ok := attrs["srcset"]
-		return ok
-	case "html-required":
-		_, ok := attrs["required"]
-		return ok
-	case "html-image-maps":
-		return name == "map" || (name == "img" && attrs["usemap"] != "")
-	case "html-anchor-links":
-		return name == "a" && strings.HasPrefix(attrs["href"], "#")
-	case "html-input-checkbox", "html-input-radio", "html-input-text":
-		return name == "input" && strings.EqualFold(attrs["type"], strings.TrimPrefix(slug, "html-input-"))
-	case "html-input-hidden":
-		return name == "input" && strings.EqualFold(attrs["type"], "hidden")
-	case "html-input-submit":
-		return name == "input" && strings.EqualFold(attrs["type"], "submit")
-	case "html-button-reset":
-		return name == "button" && strings.EqualFold(attrs["type"], "reset")
-	case "html-button-submit":
-		return name == "button" && strings.EqualFold(attrs["type"], "submit")
-	}
-	for _, x := range strings.Split(htmlTests[slug], ",") {
-		if strings.TrimSpace(x) == name {
-			return true
-		}
-	}
-	if strings.HasPrefix(htmlTests[slug], "[") {
-		k := strings.Trim(htmlTests[slug], "[]")
-		_, ok := attrs[k]
-		return ok
-	}
-	return false
 }

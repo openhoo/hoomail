@@ -1,0 +1,2 @@
+# Preserve the upstream Can I Email export byte for byte, including blank lines.
+internal/inspect/caniemail-data.json -whitespace

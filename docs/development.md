@@ -163,6 +163,25 @@ bun run test:e2e -- e2e/reset.spec.ts
 
 Use `bun run test:e2e:ui` when interactive Playwright inspection is useful. It retains the same automatic build, isolated database, ports, and real-server setup.
 
+## Inspect comparisons
+
+With the client built, run the inspection smoke against a local binary:
+
+```bash
+go build -o /tmp/hoomail-inspect ./cmd/hoomail
+python3 scripts/smoke-inspect.py /tmp/hoomail-inspect
+```
+
+This starts its own server and temporary database. Five SMTP messages cover valid and invalid headers, a newsletter, attachments, and an undecodable text part. The test compares the HTTP report with Python's MIME parser, checks client verdicts against the bundled Can I Email snapshot, and verifies that repeated inspection preserves the raw message and its unread state.
+
+For the independent compatibility corpus, check out `hteumeuleu/caniemail` at `cb8109c3f8658e003aa064b47a71b232ddc28d39`, then run:
+
+```bash
+HOOMAIL_CANIEMAIL_SOURCE=/path/to/caniemail go test -race ./internal/inspect -run TestCompatibilityUpstreamCorpus -v
+```
+
+This optional test reads the upstream HTML files locally. The ordinary Go suite checks all bundled client/version verdicts without an external checkout. See the [November 25 inspection review](reviews/2026-11-25-inspect.md) for the comparison and its limits.
+
 ## Container workflow smoke
 
 The Docker CI job also runs `scripts/smoke.py` against its freshly built,
