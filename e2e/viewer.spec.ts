@@ -108,7 +108,7 @@ test('message viewer tabs, inspection, and attachments expose the complete plain
   await expect(summary).toBeVisible()
   const outcomeTokens: Array<[outcome: string, token: string]> = [
     ['pass', '--color-green-500'],
-    ['fail', '--color-destructive'],
+    ['advisory', '--color-blue-500'],
     ['observed', '--color-blue-500'],
     ['not-evaluated', '--color-amber-500'],
   ]
@@ -283,6 +283,69 @@ test('raw source preview is bounded and offers the complete download', async ({ 
   await expect(page.getByRole('tab', { name: 'Source' })).toBeVisible()
 })
 
+
+test('Inspect shows the SMTP newsletter verdicts without loading its remote content', async ({ page }) => {
+  const recipient = 'inspection-newsletter@hoomail.test'
+  const subject = 'Inspection newsletter'
+  const external: string[] = []
+  await page.route('https://*.example.test/**', async (route) => {
+    external.push(route.request().url())
+    await route.abort()
+  })
+  await sendRawMessage([
+    'Date: Wed, 25 Nov 2026 12:00:00 +0000',
+    'From: author@example.test',
+    'Sender: publisher@example.test',
+    `To: ${recipient}`,
+    `Subject: ${subject}`,
+    'Message-ID: <newsletter@example.test>',
+    'Authentication-Results: mx.example.test; none',
+    'MIME-Version: 1.0',
+    'Content-Type: text/html; charset=utf-8', '',
+    '<html lang="en"><body>',
+    '<a href="#summary" title="Summary"></a><a id="summary"></a>',
+    '<p style="display: grid">Newsletter</p>',
+    '<img src="https://images.example.test/logo.svg?edition=2" alt="Logo" style="opacity: 0.5">',
+    '<img src="https://images.example.test/open" width="1" height="1" alt="">',
+    '</body></html>',
+  ].join('\r\n'), recipient)
+  await messageRow(page, subject).click()
+  await page.getByRole('tab', { name: 'Inspect' }).click()
+  const summary = page.getByRole('region', { name: 'Inspection summary' })
+  await expect(summary.locator('dt', { hasText: /^Fail$/ }).locator('+ dd')).toHaveText('0')
+  const finding = (label: string) => page.locator('li[data-outcome]').filter({ has: page.getByText(label, { exact: true }) })
+  await expect(finding('Sender')).toHaveAttribute('data-outcome', 'pass')
+  await expect(finding('Authentication-Results')).toHaveAttribute('data-outcome', 'observed')
+  await expect(finding('Link names')).toHaveAttribute('data-outcome', 'pass')
+  await expect(finding('Body alternatives')).toHaveAttribute('data-outcome', 'warning')
+  await expect(finding('Tracking pixels')).toHaveAttribute('data-outcome', 'advisory')
+  const resources = page.getByRole('region', { name: 'Links and images' })
+  await expect(resources.getByRole('listitem').filter({ hasText: 'Tracking pixel' })).toHaveCount(1)
+  await expect(resources.getByRole('listitem').filter({ hasText: 'Tracking pixel' })).toContainText('images.example.test/open')
+  const compatibility = page.getByRole('region', { name: 'HTML compatibility' })
+  await expect(compatibility.getByRole('link', { name: /Can I Email reference for display:\s*grid/i })).toBeVisible()
+  await expect(compatibility.getByText('Unknown', { exact: true }).first()).toBeAttached()
+  expect(external).toEqual([])
+})
+
+test('bounded SMTP evidence still renders the partial report and its failures', async ({ page }) => {
+  const subject = 'Newsletter with repeated images'
+  const recipient = 'bounded-newsletter@hoomail.test'
+  await sendRawMessage([
+    'From: author@example.test', `To: ${recipient}`, `Subject: ${subject}`,
+    'Message-ID: <bounded@example.test>', 'MIME-Version: 1.0',
+    'Content-Type: text/html; charset=utf-8', '',
+    ...Array.from({ length: 21 }, () => '<img src="https://img.example.invalid/hero.png" alt="Hero">'),
+  ].join('\r\n'), recipient)
+  await messageRow(page, subject).click()
+  await page.getByRole('tab', { name: 'Inspect' }).click()
+  const summary = page.getByRole('region', { name: 'Inspection summary' })
+  await expect(summary.getByText('Partial analysis', { exact: true })).toBeVisible()
+  await expect(summary.getByText('Truncated', { exact: true })).toBeVisible()
+  await expect(page.getByRole('region', { name: 'Analysis', exact: true })).toContainText('Analysis limits reached: evidence')
+  await expect(page.locator('li[data-outcome="fail"]').filter({ has: page.getByText('Date', { exact: true }) })).toBeVisible()
+  await expect(page.getByRole('region', { name: 'Links and images' })).toContainText('21 occurrences')
+})
 
 test('inspection failure exposes retry and recovers the same message', async ({ page, request }) => {
   const recipient = 'viewer-inspection-retry@hoomail.test'

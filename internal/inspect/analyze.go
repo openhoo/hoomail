@@ -11,11 +11,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	messagemail "github.com/emersion/go-message/mail"
+
 	"github.com/openhoo/hoomail/internal/mimeparse"
-	"io"
-	"mime/quotedprintable"
-	"net/mail"
 	"net/url"
 	"regexp"
 	"sort"
@@ -29,10 +26,9 @@ var (
 	parseMIME       = mimeparse.Parse
 	analyzeHTMLPass = analyzeHTML
 	fieldNameRE     = regexp.MustCompile(`^[!-9;-~]+$`)
-	msgIDRE         = regexp.MustCompile(`^<[^<>\s@]+@(?:[^<>\s]+|\[[^\]\r\n]+\])>$`)
 	tokenRE         = regexp.MustCompile(`^[!#$%&'*+\-.^_` + "`" + `|~0-9A-Za-z]+$`)
 	dkimBase64RE    = regexp.MustCompile(`^[A-Za-z0-9+/]*={0,2}$`)
-	textResourceRE  = regexp.MustCompile(`(?i)https?://[^\s<>"')\]]+`)
+	textResourceRE  = regexp.MustCompile(`(?i)https?://[^\s<>"]+`)
 )
 
 const (
@@ -70,6 +66,8 @@ type analyzer struct {
 	htmlPath    *string
 	textPath    *string
 	fallback    bool
+	htmlClipped bool
+	textClipped bool
 	facts       *HTMLFacts
 }
 
@@ -120,6 +118,9 @@ func Analyze(ctx context.Context, input Input) (Report, error) {
 	if err := ctx.Err(); err != nil {
 		return Report{}, err
 	}
+	if doc.Root == nil {
+		a.addUnavailable("message", "mime", "authentication", "unsubscribe")
+	}
 	if a.rawPresent && doc.Root != nil && !hasCause(a.causes, "raw bytes") {
 		if doc.Truncated {
 			a.addUnavailable("mime")
@@ -168,6 +169,8 @@ func (a *analyzer) selectBodies() {
 	a.fallback = true
 	a.html = boundedLegacyBody(a.input.LegacyHTML, a)
 	a.text = boundedLegacyBody(a.input.LegacyText, a)
+	a.htmlClipped = a.input.LegacyHTML != nil && len(a.html) < len(*a.input.LegacyHTML)
+	a.textClipped = a.input.LegacyText != nil && len(a.text) < len(*a.input.LegacyText)
 }
 
 func boundedLegacyBody(value *string, a *analyzer) []byte {
@@ -325,7 +328,7 @@ func inspectHeaderBlock(raw []byte, node *mimeparse.Node) (string, int, string) 
 			seenField = true
 		}
 		for _, b := range line {
-			if b < 32 && b != '\t' {
+			if b < 32 && b != '\t' || b == 127 {
 				return "A prohibited control byte was found in a header field.", lineNo, string(line)
 			}
 		}
@@ -358,12 +361,9 @@ func (a *analyzer) ruleLineLength(complete bool) {
 	if maxOctets > 998 {
 		value := fmt.Sprintf("%d octets", maxOctets)
 		a.addFinding(finding("message.line-length", "message", "fail", "error", "standard", "all", "Line length", "At least one physical line exceeds the 998-octet maximum.", []Evidence{{Source: "raw-line", Line: &longLine, Value: &value}}, rfc("RFC 5322 §2.1.1", "https://www.rfc-editor.org/rfc/rfc5322#section-2.1.1")))
-	} else if maxOctets > 78 || maxChars > 78 {
-		line := longLine
-		value := fmt.Sprintf("maximum %d octets; %d Unicode characters", maxOctets, maxChars)
-		if maxChars > 78 {
-			line = longCharsLine
-		}
+	} else if maxChars > 78 {
+		line := longCharsLine
+		value := fmt.Sprintf("%d Unicode characters", maxChars)
 		a.addFinding(finding("message.line-length", "message", "pass", "warning", "recommendation", "all", "Line length", "At least one physical line exceeds the recommended 78-character line length.", []Evidence{{Source: "raw-line", Line: &line, Value: &value}}, rfc("RFC 5322 §2.1.1", "https://www.rfc-editor.org/rfc/rfc5322#section-2.1.1")))
 	} else if complete {
 		value := fmt.Sprintf("maximum %d octets", maxOctets)
@@ -377,8 +377,7 @@ func (a *analyzer) ruleDate(fields []headerOccurrence, complete bool) {
 		a.addFinding(finding("message.date", "message", "fail", "error", "standard", "all", "Date", "Exactly one Date field is required.", occurrencesEvidence(values, "Date", nil), rfc("RFC 5322 §3.6", "https://www.rfc-editor.org/rfc/rfc5322#section-3.6")))
 		return
 	}
-	h := messagemail.Header{Header: a.doc.Root.Header}
-	if _, err := h.Date(); err != nil {
+	if !validMessageDate(values[0].value) {
 		a.addFinding(finding("message.date", "message", "fail", "error", "standard", "all", "Date", "The Date field is not a complete valid date-time.", occurrencesEvidence(values, "Date", nil), rfc("RFC 5322 §3.3", "https://www.rfc-editor.org/rfc/rfc5322#section-3.3")))
 	} else if complete {
 		a.addFinding(finding("message.date", "message", "pass", "none", "standard", "all", "Date", "Exactly one syntactically valid Date field is present.", nil, rfc("RFC 5322 §3.6", "https://www.rfc-editor.org/rfc/rfc5322#section-3.6")))
@@ -416,16 +415,16 @@ func (a *analyzer) ruleSender(fields []headerOccurrence, fromCount int, fromGrou
 		return
 	}
 	count, groups, err := parseAddressField(values[0].value, false)
-	if err != nil || count != 1 {
-		a.addFinding(finding("message.sender", "message", "fail", "error", "standard", "all", "Sender", "Sender must contain exactly one valid mailbox.", occurrencesEvidence(values, "Sender", nil), rfc("RFC 5322 §3.6.2", "https://www.rfc-editor.org/rfc/rfc5322#section-3.6.2")))
+	if err != nil || count > 1 || count == 0 && !groups || !singleAddress(values[0].value) {
+		a.addFinding(finding("message.sender", "message", "fail", "error", "standard", "all", "Sender", "Sender must contain one address: a mailbox or a group with at most one mailbox.", occurrencesEvidence(values, "Sender", nil), rfc("RFC 5322 §3.6.2", "https://www.rfc-editor.org/rfc/rfc5322#section-3.6.2")))
 		return
 	}
 	if groups {
-		a.addFinding(finding("message.sender", "message", "pass", "warning", "recommendation", "all", "Sender", "Sender uses a single-mailbox group form; direct mailbox form is more interoperable.", nil, rfc("RFC 6854", "https://www.rfc-editor.org/rfc/rfc6854")))
-	} else if !required && fromCount == 1 && !fromGroups {
-		a.addFinding(finding("message.sender", "message", "pass", "warning", "recommendation", "all", "Sender", "Sender is syntactically valid but unnecessary for a single-mailbox From field.", nil, rfc("RFC 5322 §3.6.2", "https://www.rfc-editor.org/rfc/rfc5322#section-3.6.2")))
+		a.addFinding(finding("message.sender", "message", "pass", "warning", "recommendation", "all", "Sender", "Sender uses group syntax; direct mailbox form is more interoperable.", nil, rfc("RFC 6854", "https://www.rfc-editor.org/rfc/rfc6854")))
+	} else if fromValid && fromCount == 1 && !fromGroups && sameMailbox(fieldsNamed(fields, "From")[0].value, values[0].value) {
+		a.addFinding(finding("message.sender", "message", "pass", "warning", "recommendation", "all", "Sender", "Sender repeats the single author mailbox; this redundant Sender field is discouraged.", nil, rfc("RFC 5322 §3.6.2", "https://www.rfc-editor.org/rfc/rfc5322#section-3.6.2")))
 	} else {
-		a.addFinding(finding("message.sender", "message", "pass", "none", "standard", "all", "Sender", "The required Sender field contains exactly one valid mailbox.", nil, rfc("RFC 5322 §3.6.2", "https://www.rfc-editor.org/rfc/rfc5322#section-3.6.2")))
+		a.addFinding(finding("message.sender", "message", "pass", "none", "standard", "all", "Sender", "Sender contains one valid transmitter mailbox.", nil, rfc("RFC 5322 §3.6.2", "https://www.rfc-editor.org/rfc/rfc5322#section-3.6.2")))
 	}
 }
 
@@ -530,10 +529,10 @@ func (a *analyzer) ruleInternationalizedHeaders() {
 func (a *analyzer) runMIMERules() {
 	root := a.doc.Root
 	topFields := a.headerOccurrences(root)
-	mimeTriggered := len(fieldsNamed(topFields, "Content-Type"))+len(fieldsNamed(topFields, "Content-Transfer-Encoding"))+len(fieldsNamed(topFields, "MIME-Version")) > 0 || strings.HasPrefix(root.MediaType, "multipart/") || strings.HasPrefix(root.MediaType, "message/")
+	mimeTriggered := hasMIMEFields(topFields) || strings.HasPrefix(root.MediaType, "multipart/") || strings.HasPrefix(root.MediaType, "message/")
 	if mimeTriggered {
 		values := fieldsNamed(topFields, "MIME-Version")
-		valid := len(values) == 1 && strings.TrimSpace(stripComments(values[0].value)) == "1.0"
+		valid := len(values) == 1 && validMIMEVersion(values[0].value)
 		if valid {
 			a.addFinding(finding("mime.version", "mime", "pass", "none", "standard", "all", "MIME-Version", "Exactly one MIME-Version: 1.0 field is present.", nil, rfc("RFC 2045 §4", "https://www.rfc-editor.org/rfc/rfc2045#section-4")))
 		} else {
@@ -585,6 +584,9 @@ func structuralDefect(node *mimeparse.Node) string {
 			if !n.BoundaryClosed {
 				return "A multipart entity has no closing boundary delimiter."
 			}
+			if len(n.Children) == 0 {
+				return "A multipart entity contains no body parts."
+			}
 		}
 		stack = append(stack, n.Children...)
 	}
@@ -594,7 +596,7 @@ func structuralDefect(node *mimeparse.Node) string {
 func (a *analyzer) ruleMIMEContentType(node *mimeparse.Node) {
 	fields := a.headerOccurrences(node)
 	values := fieldsNamed(fields, "Content-Type")
-	bad := len(values) > 1 || node.MalformedContentType || strings.HasPrefix(node.MediaType, "multipart/") && strings.TrimSpace(node.MediaParams["boundary"]) == ""
+	bad := len(values) > 1 || !validMediaType(node.MediaType) || node.MalformedContentType || strings.HasPrefix(node.MediaType, "multipart/") && strings.TrimSpace(node.MediaParams["boundary"]) == ""
 	id := "mime.content-type." + node.Path
 	path := stringPointer(node.Path)
 	if bad {
@@ -613,12 +615,12 @@ func (a *analyzer) ruleMIMETransfer(node *mimeparse.Node) {
 	if encoding == "" {
 		encoding = "7bit"
 	}
-	if len(values) > 1 || !tokenRE.MatchString(encoding) {
+	if len(values) > 1 || len(values) == 1 && values[0].value == "" || !tokenRE.MatchString(encoding) {
 		a.addFinding(finding(id, "mime", "fail", "error", "standard", "all", "Transfer encoding "+node.Path, "Content-Transfer-Encoding is duplicated or is not a valid token.", occurrencesEvidence(values, "Content-Transfer-Encoding", path), rfc("RFC 2045 §6", "https://www.rfc-editor.org/rfc/rfc2045#section-6")))
 		return
 	}
-	if len(node.Children) != 0 && encoding != "7bit" && encoding != "8bit" && encoding != "binary" {
-		a.addFinding(finding(id, "mime", "fail", "error", "standard", "all", "Transfer encoding "+node.Path, "Composite MIME entities may only use 7bit, 8bit, or binary transfer encoding.", occurrencesEvidence(values, "Content-Transfer-Encoding", path), rfc("RFC 2045 §6.4", "https://www.rfc-editor.org/rfc/rfc2045#section-6.4")))
+	if (strings.HasPrefix(node.MediaType, "multipart/") || node.MediaType == "message/rfc822" || node.MediaType == "message/partial" || node.MediaType == "message/external-body") && encoding != "7bit" && encoding != "8bit" && encoding != "binary" {
+		a.addFinding(finding(id, "mime", "fail", "error", "standard", "all", "Transfer encoding "+node.Path, "This MIME type may only use 7bit, 8bit, or binary transfer encoding.", occurrencesEvidence(values, "Content-Transfer-Encoding", path), rfc("RFC 2045 §6.4", "https://www.rfc-editor.org/rfc/rfc2045#section-6.4")))
 		return
 	}
 	body, bodyKnown := rawBody(a.doc.Raw, node)
@@ -637,7 +639,7 @@ func (a *analyzer) ruleMIMETransfer(node *mimeparse.Node) {
 	if (encoding == "7bit" || encoding == "8bit") && bodyKnown {
 		contradiction := transferDomainContradiction(body, encoding)
 		if contradiction != "" {
-			a.addFinding(finding(id, "mime", "observed", "none", "evidence", "all", "Transfer encoding "+node.Path, contradiction+" Hoomail does not retain BODY or 8BITMIME transport metadata.", []Evidence{{Source: "mime-part", Path: path}}, rfc("RFC 2045 §6", "https://www.rfc-editor.org/rfc/rfc2045#section-6")))
+			a.addFinding(finding(id, "mime", "fail", "error", "standard", "all", "Transfer encoding "+node.Path, contradiction+" Hoomail does not retain BODY or 8BITMIME transport metadata.", []Evidence{{Source: "mime-part", Path: path}}, rfc("RFC 2045 §6", "https://www.rfc-editor.org/rfc/rfc2045#section-6")))
 			return
 		}
 	}
@@ -655,14 +657,23 @@ func (a *analyzer) ruleMIMECharset(node *mimeparse.Node) {
 	id := "mime.charset." + node.Path
 	path := stringPointer(node.Path)
 	charset := strings.TrimSpace(node.MediaParams["charset"])
-	if charset == "" && node.DecodeError == nil && !isASCIIBytes(node.DecodedBody) {
-		a.addFinding(finding(id, "mime", "fail", "error", "standard", "all", "Charset "+node.Path, "Non-ASCII decoded text relies on the US-ASCII default charset.", []Evidence{{Source: "mime-part", Path: path}}, rfc("RFC 2045 §5.2", "https://www.rfc-editor.org/rfc/rfc2045#section-5.2")))
-	} else if node.DecodeError != nil {
-		detail := "The declared charset or text decoder failed; recipients may not display the part interoperably."
+	ref := rfc("RFC 6657", "https://www.rfc-editor.org/rfc/rfc6657")
+	ev := []Evidence{{Source: "mime-part", Path: path}}
+	switch {
+	case node.DecodeError != nil:
 		value := evidenceValue(node.DecodeError.Error())
-		a.addFinding(finding(id, "mime", "pass", "warning", "recommendation", "all", "Charset "+node.Path, detail, []Evidence{{Source: "mime-part", Path: path, Value: &value}}, rfc("RFC 2045 §5", "https://www.rfc-editor.org/rfc/rfc2045#section-5")))
-	} else {
-		a.addFinding(finding(id, "mime", "pass", "none", "standard", "all", "Charset "+node.Path, "Text charset conversion completed or the US-ASCII default is safe for the decoded content.", nil, rfc("RFC 2045 §5", "https://www.rfc-editor.org/rfc/rfc2045#section-5")))
+		ev[0].Value = &value
+		a.addFinding(finding(id, "mime", "not-evaluated", "none", "evidence", "all", "Charset "+node.Path, "The part could not be decoded, so its text charset could not be checked.", ev, ref))
+	case (strings.EqualFold(charset, "us-ascii") || charset == "" && node.MediaType == "text/plain") && !isASCIIBytes(node.DecodedBody):
+		a.addFinding(finding(id, "mime", "fail", "error", "standard", "all", "Charset "+node.Path, "The transfer-decoded text contains non-ASCII bytes despite its declared or default US-ASCII charset.", ev, ref))
+	case charset == "" && node.MediaType == "text/calendar" && !isASCIIBytes(node.DecodedBody):
+		a.addFinding(finding(id, "mime", "fail", "error", "standard", "all", "Charset "+node.Path, "A non-ASCII iCalendar object sent by email must explicitly declare its UTF-8 MIME charset.", ev, rfc("RFC 6047 §2.4", "https://www.rfc-editor.org/rfc/rfc6047#section-2.4")))
+	case strings.EqualFold(charset, "utf-8") && !utf8.Valid(node.DecodedBody):
+		a.addFinding(finding(id, "mime", "fail", "error", "standard", "all", "Charset "+node.Path, "The transfer-decoded text is not valid in its declared or default UTF-8 charset.", ev, ref))
+	case charset == "" && node.MediaType != "text/plain" && node.MediaType != "text/calendar":
+		a.addFinding(finding(id, "mime", "observed", "none", "evidence", "all", "Charset "+node.Path, "No MIME charset is declared. Charset determination depends on this media subtype and may use information inside the body.", ev, ref))
+	default:
+		a.addFinding(finding(id, "mime", "pass", "none", "standard", "all", "Charset "+node.Path, "Text decoding completed for the declared or applicable default charset.", nil, ref))
 	}
 }
 
@@ -674,7 +685,7 @@ func (a *analyzer) ruleMIMEDisposition(node *mimeparse.Node) {
 	}
 	id := "mime.disposition." + node.Path
 	path := stringPointer(node.Path)
-	if len(values) > 1 || node.MalformedDisposition {
+	if len(values) > 1 || node.MalformedDisposition || !tokenRE.MatchString(node.Disposition) {
 		a.addFinding(finding(id, "mime", "fail", "error", "standard", "all", "Disposition "+node.Path, "Content-Disposition is duplicated or malformed.", occurrencesEvidence(values, "Content-Disposition", path), rfc("RFC 2183", "https://www.rfc-editor.org/rfc/rfc2183")))
 		return
 	}
@@ -709,13 +720,17 @@ func (a *analyzer) ruleRelated(node *mimeparse.Node) {
 	id := "mime.related." + node.Path
 	path := stringPointer(node.Path)
 	typeParam := strings.TrimSpace(node.MediaParams["type"])
-	if len(node.Children) == 0 || typeParam == "" {
+	if len(node.Children) == 0 || !validMediaType(typeParam) {
 		a.addFinding(finding(id, "mime", "fail", "error", "standard", "all", "Related structure "+node.Path, "multipart/related requires children and a valid type parameter.", []Evidence{{Source: "mime-part", Path: path}}, rfc("RFC 2387", "https://www.rfc-editor.org/rfc/rfc2387")))
 		return
 	}
 	root := node.Children[0]
 	start := normalizeContentID(node.MediaParams["start"])
-	if start != "" {
+	if rawStart, present := node.MediaParams["start"]; present {
+		if !validMessageID(rawStart) {
+			a.addFinding(finding(id, "mime", "fail", "error", "standard", "all", "Related structure "+node.Path, "The start parameter must contain a valid Content-ID.", []Evidence{{Source: "mime-part", Path: path}}, rfc("RFC 2387 §3", "https://www.rfc-editor.org/rfc/rfc2387#section-3")))
+			return
+		}
 		matches := 0
 		for _, child := range node.Children {
 			if normalizeContentID(child.Header.Get("Content-ID")) == start {
@@ -746,13 +761,15 @@ func (a *analyzer) ruleAlternative(node *mimeparse.Node) {
 		if candidate.HTML != nil {
 			htmlIndex = index
 		}
-		if candidate.Text != nil && candidate.HTML == nil {
-			textIndex = index
+		if candidate.Text != nil {
+			textIndex = index // A nested alternative may supply both bodies.
 		}
 	}
-	if htmlIndex >= 0 && textIndex < 0 {
+	if htmlIndex < 0 {
+		a.addFinding(finding(id, "mime", "not-evaluated", "none", "evidence", "all", "Alternative ordering "+node.Path, "No supported HTML representation was found to compare with plain text.", nil, rfc("RFC 2046 §5.1.4", "https://www.rfc-editor.org/rfc/rfc2046#section-5.1.4")))
+	} else if textIndex < 0 {
 		a.addFinding(finding(id, "mime", "pass", "warning", "recommendation", "all", "Alternative ordering "+node.Path, "HTML is available without a plain-text alternative; including both improves interoperability and accessibility.", nil, rfc("RFC 2046 §5.1.4", "https://www.rfc-editor.org/rfc/rfc2046#section-5.1.4")))
-	} else if htmlIndex >= 0 && textIndex > htmlIndex {
+	} else if textIndex > htmlIndex {
 		a.addFinding(finding(id, "mime", "pass", "warning", "recommendation", "all", "Alternative ordering "+node.Path, "A later supported plain-text child makes plain text preferred over the earlier HTML child.", nil, rfc("RFC 2046 §5.1.4", "https://www.rfc-editor.org/rfc/rfc2046#section-5.1.4")))
 	} else {
 		a.addFinding(finding(id, "mime", "pass", "none", "recommendation", "all", "Alternative ordering "+node.Path, "Supported alternatives are ordered from plain text toward richer HTML presentation.", nil, rfc("RFC 2046 §5.1.4", "https://www.rfc-editor.org/rfc/rfc2046#section-5.1.4")))
@@ -771,7 +788,7 @@ func (a *analyzer) runAuthenticationRules() {
 			a.addFinding(finding(id, "authentication", "observed", "none", "evidence", "all", "Authentication-Results", "Observed assertion from "+authserv+"; trust not established.", ev, rfc("RFC 8601 §5", "https://www.rfc-editor.org/rfc/rfc8601#section-5")))
 		}
 	}
-	dkimClaims := make([]map[string]string, 0)
+	dkimClaims := make([]map[string]string, len(fieldsNamed(fields, "DKIM-Signature")))
 	for index, item := range fieldsNamed(fields, "DKIM-Signature") {
 		id := fmt.Sprintf("authentication.dkim.%d", index+1)
 		tags, err := parseTagList(item.value)
@@ -785,10 +802,14 @@ func (a *analyzer) runAuthenticationRules() {
 			a.addFinding(finding(id, "authentication", "fail", "error", "standard", "all", "DKIM signature", "The DKIM-Signature field is structurally malformed. Signature and body hash were not cryptographically verified.", ev, rfc("RFC 6376", "https://www.rfc-editor.org/rfc/rfc6376")))
 			continue
 		}
-		dkimClaims = append(dkimClaims, tags)
 		algorithm := strings.ToLower(tags["a"])
-		if algorithm == "rsa-sha1" || tags["l"] != "" {
-			a.addFinding(finding(id, "authentication", "pass", "warning", "recommendation", "all", "DKIM signature", "The signature uses obsolete rsa-sha1 or the risky l= body-length tag. Signature and body hash were not cryptographically verified.", ev, rfc("RFC 8301", "https://www.rfc-editor.org/rfc/rfc8301")))
+		if algorithm == "rsa-sha1" {
+			a.addFinding(finding(id, "authentication", "fail", "error", "standard", "all", "DKIM signature", "The signer used rsa-sha1, which RFC 8301 prohibits. Signature and body hash were not cryptographically verified.", ev, rfc("RFC 8301 §3.1", "https://www.rfc-editor.org/rfc/rfc8301#section-3.1")))
+			continue
+		}
+		dkimClaims[index] = tags
+		if tags["l"] != "" {
+			a.addFinding(finding(id, "authentication", "pass", "warning", "recommendation", "all", "DKIM signature", "The signature uses the l= body-length tag, which may leave appended content unsigned. Signature and body hash were not cryptographically verified.", ev, rfc("RFC 8301", "https://www.rfc-editor.org/rfc/rfc8301")))
 		} else if algorithm != "rsa-sha256" && algorithm != "ed25519-sha256" {
 			a.addFinding(finding(id, "authentication", "observed", "none", "evidence", "all", "DKIM signature", "A syntactically valid unrecognized algorithm was observed. Signature and body hash were not cryptographically verified.", ev, rfc("RFC 6376", "https://www.rfc-editor.org/rfc/rfc6376")))
 		} else {
@@ -831,12 +852,11 @@ func (a *analyzer) runARCRule(fields []headerOccurrence) {
 	}
 	if failed == "" {
 		for _, item := range ams {
-			tags, err := parseTagList(item.value)
+			i, tags, err := parseARCSignatureTags(item.value)
 			if err == nil {
 				err = validateDKIM(tags, true)
 			}
-			i, e := strconv.Atoi(tags["i"])
-			if err != nil || e != nil || i < 1 || i > 50 {
+			if err != nil {
 				failed = "ARC-Message-Signature has malformed static syntax."
 				break
 			}
@@ -854,12 +874,11 @@ func (a *analyzer) runARCRule(fields []headerOccurrence) {
 	}
 	if failed == "" {
 		for _, item := range seal {
-			tags, err := parseTagList(item.value)
+			i, tags, err := parseARCSignatureTags(item.value)
 			if err == nil {
 				err = validateARCSeal(tags)
 			}
-			i, e := strconv.Atoi(tags["i"])
-			if err != nil || e != nil || i < 1 || i > 50 {
+			if err != nil {
 				failed = "ARC-Seal has malformed static syntax."
 				break
 			}
@@ -912,6 +931,9 @@ func (a *analyzer) runUnsubscribeRules() {
 		valid := len(post) == 1 && strings.TrimSpace(post[0].value) == "List-Unsubscribe=One-Click" && listOK
 		httpsCount := 0
 		for _, u := range uris {
+			if strings.EqualFold(u.Scheme, "http") {
+				valid = false
+			}
 			if strings.EqualFold(u.Scheme, "https") {
 				httpsCount++
 			}
@@ -920,7 +942,7 @@ func (a *analyzer) runUnsubscribeRules() {
 		if valid {
 			a.addFinding(finding("unsubscribe.one-click-pairing", "unsubscribe", "pass", "none", "standard", "one-click-claim", "One-click unsubscribe pairing", "The static RFC 8058 header pair is valid. DKIM validity, endpoint behavior, recipient binding, and operational eligibility are unverified.", append(occurrencesEvidence(list, "List-Unsubscribe", nil), occurrencesEvidence(post, "List-Unsubscribe-Post", nil)...), rfc("RFC 8058", "https://www.rfc-editor.org/rfc/rfc8058")))
 		} else {
-			a.addFinding(finding("unsubscribe.one-click-pairing", "unsubscribe", "fail", "error", "standard", "one-click-claim", "One-click unsubscribe pairing", "The one-click claim requires exactly one post field with List-Unsubscribe=One-Click and exactly one HTTPS unsubscribe URI. Endpoint behavior is unverified.", append(occurrencesEvidence(list, "List-Unsubscribe", nil), occurrencesEvidence(post, "List-Unsubscribe-Post", nil)...), rfc("RFC 8058", "https://www.rfc-editor.org/rfc/rfc8058")))
+			a.addFinding(finding("unsubscribe.one-click-pairing", "unsubscribe", "fail", "error", "standard", "one-click-claim", "One-click unsubscribe pairing", "The one-click claim requires exactly one post field with List-Unsubscribe=One-Click and exactly one HTTPS unsubscribe URI; other URIs must use non-HTTP schemes. Endpoint behavior is unverified.", append(occurrencesEvidence(list, "List-Unsubscribe", nil), occurrencesEvidence(post, "List-Unsubscribe-Post", nil)...), rfc("RFC 8058", "https://www.rfc-editor.org/rfc/rfc8058")))
 		}
 	}
 	if len(list)+len(post) > 0 {
@@ -942,19 +964,29 @@ func (a *analyzer) runUnsubscribeDKIMCoverage(fields []headerOccurrence, claims 
 		}
 	}
 	if len(evidence) > 0 {
-		a.addFinding(finding("unsubscribe.dkim-coverage", "unsubscribe", "observed", "none", "evidence", "one-click-claim", "Claimed DKIM coverage", "Structurally valid DKIM h= lists claim both one-click fields; cryptographic coverage was not verified.", evidence, rfc("RFC 8058 §3.1", "https://www.rfc-editor.org/rfc/rfc8058#section-3.1")))
+		a.addFinding(finding("unsubscribe.dkim-coverage", "unsubscribe", "observed", "none", "evidence", "one-click-claim", "Claimed DKIM coverage", "Structurally valid DKIM h= lists claim both one-click fields; cryptographic coverage was not verified.", evidence, rfc("RFC 8058 §4", "https://www.rfc-editor.org/rfc/rfc8058#section-4")))
 	} else {
-		a.addFinding(finding("unsubscribe.dkim-coverage", "unsubscribe", "pass", "warning", "recommendation", "one-click-claim", "Claimed DKIM coverage", "No structurally valid DKIM h= list claims both one-click fields; DKIM validity itself is not verified.", nil, rfc("RFC 8058 §3.1", "https://www.rfc-editor.org/rfc/rfc8058#section-3.1")))
+		a.addFinding(finding("unsubscribe.dkim-coverage", "unsubscribe", "fail", "error", "standard", "one-click-claim", "Claimed DKIM coverage", "No structurally valid DKIM h= list claims both one-click fields; DKIM validity itself is not verified.", nil, rfc("RFC 8058 §4", "https://www.rfc-editor.org/rfc/rfc8058#section-4")))
 	}
 }
 
 func (a *analyzer) analyzeContent() error {
 	if a.html != nil {
-		facts, causes, err := analyzeHTMLPass(a.ctx, a.html, a.htmlPath)
+		var facts HTMLFacts
+		var causes []string
+		var err error
+		if a.htmlClipped {
+			facts, causes, err = analyzeHTMLSource(a.ctx, a.html, a.htmlPath, true)
+		} else {
+			facts, causes, err = analyzeHTMLPass(a.ctx, a.html, a.htmlPath)
+		}
 		if err != nil {
 			return err
 		}
 		a.facts = &facts
+		if facts.truncated {
+			a.addUnavailable("content", "privacy")
+		}
 		for _, cause := range causes {
 			a.addCause(cause)
 		}
@@ -970,14 +1002,28 @@ func (a *analyzer) analyzeContent() error {
 		return nil
 	}
 	if a.text != nil {
-		for _, matchRange := range textResourceRE.FindAllIndex(a.text, -1) {
-			if matchRange[1]-matchRange[0] > 2048 {
+		for offset := 0; offset < len(a.text); {
+			matchRange := textResourceRE.FindIndex(a.text[offset:])
+			if matchRange == nil {
+				break
+			}
+			start, end := offset+matchRange[0], offset+matchRange[1]
+			offset = end
+			if a.textClipped && end == len(a.text) {
+				break // The uninspected suffix may continue the URI.
+			}
+			if end-start > 2048 {
 				a.addCause("resource values")
 				continue
 			}
-			match := string(a.text[matchRange[0]:matchRange[1]])
+			match := string(a.text[start:end])
+			// Angle brackets explicitly delimit a URI. In prose, remove
+			// surrounding punctuation while retaining balanced URL syntax.
+			if !(start > 0 && a.text[start-1] == '<' && end < len(a.text) && a.text[end] == '>') {
+				match = trimProseURL(match)
+			}
 			u, err := url.Parse(match)
-			if err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" {
+			if err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Hostname() != "" {
 				a.addResource("link", a.textPath, match, "")
 			}
 		}
@@ -994,6 +1040,13 @@ func (a *analyzer) runContentRules() {
 		}
 		a.addFinding(finding("content.body", "content", "not-evaluated", "none", "evidence", "all", "Message body", detail, nil, nil))
 		a.addFinding(finding("content.alternative", "content", "not-evaluated", "none", "evidence", "all", "Body alternatives", "Stored fallback bodies cannot prove MIME alternative selection or ordering.", nil, nil))
+	} else if selectedDecodeFailed(a.doc.Presentation.HTML) || selectedDecodeFailed(a.doc.Presentation.Text) {
+		if len(a.html) > 0 || len(a.text) > 0 {
+			a.addFinding(finding("content.body", "content", "pass", "none", "recommendation", "all", "Message body", "At least one authoritative selected body is non-empty.", nil, nil))
+		} else {
+			a.addFinding(finding("content.body", "content", "not-evaluated", "none", "evidence", "all", "Message body", "A selected body could not be decoded; its contents are unknown.", nil, nil))
+		}
+		a.addFinding(finding("content.alternative", "content", "not-evaluated", "none", "evidence", "all", "Body alternatives", "A selected representation could not be decoded.", nil, nil))
 	} else {
 		hasHTML := len(a.html) != 0
 		hasText := len(a.text) != 0
@@ -1047,9 +1100,9 @@ func (a *analyzer) runPrivacyRules() {
 		return
 	}
 	if a.facts.externalImages > 0 {
-		a.addHTMLFinding(finding("privacy.external-images", "privacy", "pass", "advisory", "heuristic", "html", "External images", fmt.Sprintf("%d external image occurrence(s) were found. Inspection is offline and did not fetch them.", a.facts.externalImages), a.facts.externalEvidence, nil), a.facts.externalImages, len(a.facts.externalEvidence))
+		a.addHTMLFinding(finding("privacy.external-images", "privacy", "pass", "advisory", "heuristic", "html", "External images", fmt.Sprintf("%d external image source occurrence(s) were found. Inspection is offline and did not fetch them.", a.facts.externalImages), a.facts.externalEvidence, nil), a.facts.externalImages, len(a.facts.externalEvidence))
 	} else if !a.facts.truncated {
-		a.addFinding(finding("privacy.external-images", "privacy", "pass", "none", "heuristic", "html", "External images", "No external HTTP(S) image source was found. Inspection made no network requests.", nil, nil))
+		a.addFinding(finding("privacy.external-images", "privacy", "pass", "none", "heuristic", "html", "External images", "No external source was found in the inspected image attributes. Inspection made no network requests.", nil, nil))
 	}
 	if a.facts.trackingPixels > 0 {
 		a.addHTMLFinding(finding("privacy.tracking-pixels", "privacy", "pass", "advisory", "heuristic", "html", "Tracking pixels", fmt.Sprintf("%d hidden or at-most-one-pixel image candidate(s) were found; false positives and negatives are possible.", a.facts.trackingPixels), a.facts.trackingEvidence, nil), a.facts.trackingPixels, len(a.facts.trackingEvidence))
@@ -1066,17 +1119,30 @@ func (a *analyzer) runPrivacyRules() {
 func (a *analyzer) runCompatibilityRules() {
 	if a.html != nil {
 		size := len(a.html)
-		value := fmt.Sprintf("%d decoded HTML bytes", size)
+		representation := "Selected decoded HTML"
+		if a.fallback {
+			size = len(*a.input.LegacyHTML)
+			representation = "Stored fallback HTML"
+		}
+		value := fmt.Sprintf("%s: %d bytes", representation, size)
 		evidence := []Evidence{{Source: "html", Path: a.htmlPath, Value: &value}}
 		if size > 102*1024 {
-			a.addFinding(finding("compatibility.html-size", "compatibility", "pass", "advisory", "heuristic", "html", "HTML size", fmt.Sprintf("Selected decoded HTML is %d bytes. Commonly observed Gmail clipping risk; provider behavior can change.", size), evidence, nil))
+			a.addFinding(finding("compatibility.html-size", "compatibility", "pass", "advisory", "heuristic", "html", "HTML size", fmt.Sprintf("%s is %d bytes. Commonly observed Gmail clipping risk; provider behavior can change.", representation, size), evidence, nil))
 		} else {
-			a.addFinding(finding("compatibility.html-size", "compatibility", "observed", "none", "evidence", "html", "HTML size", fmt.Sprintf("Selected decoded HTML is %d bytes, at or below the 102 KiB observation threshold.", size), evidence, nil))
+			a.addFinding(finding("compatibility.html-size", "compatibility", "observed", "none", "evidence", "html", "HTML size", fmt.Sprintf("%s is %d bytes, at or below the 102 KiB observation threshold.", representation, size), evidence, nil))
 		}
 	}
 	var detail string
-	if a.rawPresent {
-		detail = fmt.Sprintf("Raw message bytes: %d; selected decoded HTML bytes: %d; selected decoded text bytes: %d", len(a.input.Raw), len(a.html), len(a.text))
+	if a.rawPresent && a.fallback {
+		detail = fmt.Sprintf("Raw message bytes: %d; stored fallback HTML bytes: %d; stored fallback text bytes: %d. Authoritative selected body sizes are unavailable.", len(a.input.Raw), len(pointerValue(a.input.LegacyHTML)), len(pointerValue(a.input.LegacyText)))
+	} else if a.rawPresent {
+		decodedSize := func(node *mimeparse.Node, body []byte) string {
+			if selectedDecodeFailed(node) {
+				return "unknown"
+			}
+			return strconv.Itoa(len(body))
+		}
+		detail = fmt.Sprintf("Raw message bytes: %d; selected decoded HTML bytes: %s; selected decoded text bytes: %s", len(a.input.Raw), decodedSize(a.doc.Presentation.HTML, a.html), decodedSize(a.doc.Presentation.Text, a.text))
 		if node := a.doc.Presentation.HTML; node != nil {
 			if body, ok := rawBody(a.doc.Raw, node); ok {
 				detail += fmt.Sprintf("; encoded selected HTML part bytes: %d", len(body))
@@ -1088,15 +1154,19 @@ func (a *analyzer) runCompatibilityRules() {
 			}
 		}
 	} else {
-		detail = fmt.Sprintf("Persisted fallback size: %d; stored fallback HTML bytes: %d; stored fallback text bytes: %d. These are not raw or encoded MIME byte counts.", a.input.StoredSize, len(a.html), len(a.text))
+		detail = fmt.Sprintf("Persisted fallback size: %d; stored fallback HTML bytes: %d; stored fallback text bytes: %d. These are not raw or encoded MIME byte counts.", a.input.StoredSize, len(pointerValue(a.input.LegacyHTML)), len(pointerValue(a.input.LegacyText)))
 	}
 	a.addFinding(finding("compatibility.body-sizes", "compatibility", "observed", "none", "evidence", "all", "Body sizes", detail, nil, nil))
+}
+
+func selectedDecodeFailed(node *mimeparse.Node) bool {
+	return node != nil && node.DecodeError != nil
 }
 
 func (a *analyzer) addAttachmentResources() {
 	attachments := a.doc.Presentation.Attachments
 	if a.doc.Root != nil && !a.doc.Presentation.Supported {
-		attachments = collectLeafAttachments(a.doc.Root, attachments)
+		attachments = collectLeafAttachments(a.doc.Root, nil)
 	}
 	for _, candidate := range attachments {
 		node := candidate.Node
@@ -1131,12 +1201,15 @@ func (a *analyzer) finishReport() (Report, error) {
 	if err := a.ctx.Err(); err != nil {
 		return Report{}, err
 	}
-	if len(a.findings) >= MaxFindings {
-		a.findings = a.findings[:MaxFindings-1]
-		a.addCause("findings")
-	}
 	compatibility := analyzeHTMLCompatibility(a.html)
 	if compatibility != nil {
+		if a.htmlClipped {
+			compatibility.Truncated = true
+			a.addUnavailable("compatibility")
+			if compatibility.truncationCause == "" {
+				compatibility.truncationCause = "legacy body bytes"
+			}
+		}
 		if compatibility.Truncated {
 			cause := compatibility.truncationCause
 			if cause == "" {
@@ -1195,28 +1268,26 @@ func (a *analyzer) finishReport() (Report, error) {
 }
 
 func (a *analyzer) ensureTruncationFinding() {
-	detail := "Analysis limits reached: " + strings.Join(a.orderedCauses(), ", ") + ". Only the deterministic completed prefix is reported."
+	detail := func() string {
+		return "Analysis limits reached: " + strings.Join(a.orderedCauses(), ", ") + ". Only the deterministic completed prefix is reported."
+	}
 	for i := range a.findings {
 		if a.findings[i].ID == "analysis.truncated" {
-			a.findings[i].Detail = detail
+			a.findings[i].Detail = detail()
 			return
 		}
 	}
-	marker := finding("analysis.truncated", "analysis", "observed", "none", "evidence", "all", "Analysis truncated", detail, nil, nil)
 	if len(a.findings) >= MaxFindings {
-		for i := len(a.findings) - 1; i >= 0; i-- {
-			if a.findings[i].ID != "analysis.truncated" {
-				a.findings = append(a.findings[:i], a.findings[i+1:]...)
-				break
-			}
-		}
+		a.findings = a.findings[:MaxFindings-1]
+		a.addCause("findings")
 	}
-	a.findings = append(a.findings, marker)
+	a.findings = append(a.findings, finding("analysis.truncated", "analysis", "observed", "none", "evidence", "all", "Analysis truncated", detail(), nil, nil))
 }
 
 func (a *analyzer) addFinding(item Finding) {
-	if item.Evidence == nil {
-		item.Evidence = []Evidence{}
+	if len(a.findings) >= MaxFindings {
+		a.addCause("findings")
+		return
 	}
 	if len(item.Evidence) > MaxEvidencePerFinding {
 		item.Evidence = item.Evidence[:MaxEvidencePerFinding]
@@ -1351,6 +1422,9 @@ func (a *analyzer) searchableHeaders() []Header {
 }
 
 func finding(id, category, outcome, severity, basis, applicability, label, detail string, evidence []Evidence, reference *Reference) Finding {
+	if evidence == nil {
+		evidence = []Evidence{}
+	}
 	return Finding{ID: id, Category: category, Outcome: outcome, Severity: severity, Basis: basis, Applicability: applicability, Label: label, Detail: detail, Evidence: evidence, Reference: reference}
 }
 func rfc(label, url string) *Reference   { return &Reference{Label: label, URL: url} }
@@ -1454,170 +1528,6 @@ func occurrencesEvidence(fields []headerOccurrence, name string, path *string) [
 	}
 	return out
 }
-func stripComments(value string) string {
-	out, depth, escaped := strings.Builder{}, 0, false
-	for _, r := range value {
-		if escaped {
-			if depth == 0 {
-				out.WriteRune(r)
-			}
-			escaped = false
-			continue
-		}
-		if r == '\\' {
-			escaped = true
-			continue
-		}
-		if r == '(' {
-			depth++
-			continue
-		}
-		if r == ')' && depth > 0 {
-			depth--
-			continue
-		}
-		if depth == 0 {
-			out.WriteRune(r)
-		}
-	}
-	return out.String()
-}
-func validMessageID(value string) bool {
-	return msgIDRE.MatchString(strings.TrimSpace(stripComments(value)))
-}
-func validMessageIDList(value string) bool {
-	s := strings.TrimSpace(stripComments(value))
-	count := 0
-	for s != "" {
-		start := strings.IndexByte(s, '<')
-		if start < 0 || strings.TrimSpace(s[:start]) != "" {
-			return false
-		}
-		end := strings.IndexByte(s[start:], '>')
-		if end < 0 {
-			return false
-		}
-		end += start
-		token := s[start : end+1]
-		if !validMessageID(token) {
-			return false
-		}
-		count++
-		s = strings.TrimSpace(s[end+1:])
-	}
-	return count > 0
-}
-
-func parseAddressField(value string, allowEmpty bool) (int, bool, error) {
-	value = strings.TrimSpace(value)
-	if value == "" && allowEmpty {
-		return 0, false, nil
-	}
-	segments, groups, err := splitAddressGroups(value)
-	if err != nil {
-		return 0, groups, err
-	}
-	count := 0
-	for _, segment := range segments {
-		segment = strings.TrimSpace(segment)
-		if segment == "" {
-			continue
-		}
-		addresses, err := mail.ParseAddressList(segment)
-		if err != nil {
-			return count, groups, err
-		}
-		count += len(addresses)
-	}
-	if count == 0 && !groups {
-		return 0, groups, errors.New("empty address list")
-	}
-	return count, groups, nil
-}
-func splitAddressGroups(value string) ([]string, bool, error) {
-	var out []string
-	start, groupStart := -1, -1
-	quote, escape, angle, comment := false, false, 0, 0
-	groups := false
-	for i, r := range value {
-		if escape {
-			escape = false
-			continue
-		}
-		if r == '\\' && (quote || comment > 0) {
-			escape = true
-			continue
-		}
-		if comment > 0 {
-			if r == '(' {
-				comment++
-			}
-			if r == ')' {
-				comment--
-			}
-			continue
-		}
-		if r == '(' && !quote {
-			comment = 1
-			continue
-		}
-		if r == '"' && angle == 0 {
-			quote = !quote
-			continue
-		}
-		if quote {
-			continue
-		}
-		switch r {
-		case '<':
-			angle++
-		case '>':
-			angle--
-			if angle < 0 {
-				return nil, groups, errors.New("unexpected angle")
-			}
-		case ':':
-			if angle == 0 {
-				if groupStart >= 0 {
-					return nil, groups, errors.New("nested group")
-				}
-				groups = true
-				groupStart = i + 1
-				if start < 0 {
-					prefix := strings.TrimSpace(value[:i])
-					if prefix == "" {
-						return nil, groups, errors.New("empty group name")
-					}
-				}
-			}
-		case ';':
-			if angle == 0 && groupStart >= 0 {
-				out = append(out, value[groupStart:i])
-				groupStart = -1
-				start = i + 1
-			}
-		case ',':
-			if angle == 0 && groupStart < 0 {
-				if start < 0 {
-					start = 0
-				}
-				out = append(out, value[start:i])
-				start = i + 1
-			}
-		}
-	}
-	if quote || comment != 0 || angle != 0 || groupStart >= 0 {
-		return nil, groups, errors.New("unterminated address syntax")
-	}
-	if start < 0 {
-		start = 0
-	}
-	if start < len(value) {
-		out = append(out, value[start:])
-	}
-	return out, groups, nil
-}
-
 func invalidBase64(body []byte) bool {
 	clean := make([]byte, 0, len(body))
 	for _, b := range body {
@@ -1635,6 +1545,17 @@ func invalidBase64(body []byte) bool {
 func invalidQuotedPrintable(body []byte) bool {
 	for i := 0; i < len(body); i++ {
 		if body[i] != '=' {
+			b := body[i]
+			switch {
+			case b == '\r' && i+1 < len(body) && body[i+1] == '\n':
+				i++
+			case b == ' ' || b == '\t':
+				if i+1 == len(body) || body[i+1] == '\r' || body[i+1] == '\n' {
+					return true
+				}
+			case b < 33 || b > 126:
+				return true
+			}
 			continue
 		}
 		if i+2 >= len(body) {
@@ -1649,10 +1570,9 @@ func invalidQuotedPrintable(body []byte) bool {
 		}
 		i += 2
 	}
-	_, err := io.ReadAll(quotedprintable.NewReader(bytes.NewReader(body)))
-	return err != nil
+	return false
 }
-func isHex(b byte) bool { return b >= '0' && b <= '9' || b >= 'A' && b <= 'F' || b >= 'a' && b <= 'f' }
+func isHex(b byte) bool { return b >= '0' && b <= '9' || b >= 'A' && b <= 'F' }
 func encodedLineOver(body []byte, max int) bool {
 	start := 0
 	for start < len(body) {
@@ -1676,11 +1596,9 @@ func transferDomainContradiction(body []byte, encoding string) string {
 	if encoding == "7bit" && !isASCIIBytes(body) {
 		return "The raw body contains high octets that contradict declared 7bit content."
 	}
-	if bytes.Contains(body, []byte{'\n'}) {
-		for i, b := range body {
-			if b == '\n' && (i == 0 || body[i-1] != '\r') {
-				return "The raw body uses non-CRLF line breaks that contradict the declared transfer domain."
-			}
+	for i, b := range body {
+		if b == '\n' && (i == 0 || body[i-1] != '\r') || b == '\r' && (i+1 == len(body) || body[i+1] != '\n') {
+			return "The raw body uses non-CRLF line breaks that contradict the declared transfer domain."
 		}
 	}
 	if encodedLineOver(body, 998) {
@@ -1700,139 +1618,20 @@ func normalizeContentID(value string) string {
 	return strings.Trim(strings.TrimSpace(value), "<>")
 }
 
-func parseAuthenticationResults(value string) (string, bool) {
-	parts := splitSemicolon(value)
-	if len(parts) < 1 {
-		return "", false
-	}
-	head := strings.Fields(stripComments(parts[0]))
-	if len(head) < 1 || !validAuthservID(strings.TrimSuffix(head[0], ".0")) {
-		return "", false
-	}
-	for _, clause := range parts[1:] {
-		clause = strings.TrimSpace(clause)
-		if clause == "" {
-			continue
-		}
-		fields, ok := splitAuthFields(clause)
-		if !ok || len(fields) == 0 {
-			return "", false
-		}
-		pair := strings.SplitN(fields[0], "=", 2)
-		if len(pair) != 2 {
-			return "", false
-		}
-		method := strings.SplitN(pair[0], "/", 2)[0]
-		if !tokenRE.MatchString(method) || !tokenRE.MatchString(pair[1]) {
-			return "", false
-		}
-		for _, property := range fields[1:] {
-			pair = strings.SplitN(property, "=", 2)
-			if len(pair) != 2 || strings.TrimSpace(pair[1]) == "" {
-				return "", false
-			}
-			name := strings.SplitN(pair[0], ".", 2)[0]
-			if !tokenRE.MatchString(name) {
-				return "", false
-			}
-		}
-	}
-	return head[0], true
-}
-
-func splitAuthFields(value string) ([]string, bool) {
-	fields := make([]string, 0, 4)
-	start, comment := -1, 0
-	quote, escape := false, false
-	for index, r := range value {
-		if escape {
-			escape = false
-			continue
-		}
-		if r == '\\' && (quote || comment > 0) {
-			escape = true
-			continue
-		}
-		if !quote {
-			if r == '(' {
-				comment++
-			}
-			if r == ')' {
-				comment--
-				if comment < 0 {
-					return nil, false
-				}
-			}
-		}
-		if comment == 0 && r == '"' {
-			quote = !quote
-		}
-		if comment == 0 && !quote && unicode.IsSpace(r) {
-			if start >= 0 {
-				fields = append(fields, value[start:index])
-				start = -1
-			}
-			continue
-		}
-		if start < 0 && comment == 0 {
-			start = index
-		}
-	}
-	if quote || comment != 0 || escape {
-		return nil, false
-	}
-	if start >= 0 {
-		fields = append(fields, value[start:])
-	}
-	return fields, true
-}
-func validAuthservID(value string) bool { return value != "" && !strings.ContainsAny(value, " \t;()") }
-func splitSemicolon(value string) []string {
-	var out []string
-	start, comment := 0, 0
-	quote, escape := false, false
-	for i, r := range value {
-		if escape {
-			escape = false
-			continue
-		}
-		if r == '\\' {
-			escape = true
-			continue
-		}
-		if !quote {
-			if r == '(' {
-				comment++
-			}
-			if r == ')' && comment > 0 {
-				comment--
-			}
-		}
-		if comment == 0 && r == '"' {
-			quote = !quote
-		}
-		if comment == 0 && !quote && r == ';' {
-			out = append(out, value[start:i])
-			start = i + 1
-		}
-	}
-	out = append(out, value[start:])
-	return out
-}
 func parseTagList(value string) (map[string]string, error) {
 	tags := map[string]string{}
-	for _, part := range splitSemicolon(value) {
+	for _, part := range strings.Split(strings.TrimSuffix(strings.TrimSpace(value), ";"), ";") {
 		part = strings.TrimSpace(part)
 		if part == "" {
-			continue
+			return nil, errors.New("empty tag")
 		}
 		pair := strings.SplitN(part, "=", 2)
 		if len(pair) != 2 {
 			return nil, errors.New("tag lacks equals")
 		}
-		name := strings.ToLower(strings.TrimSpace(pair[0]))
+		name := strings.TrimSpace(pair[0])
 		val := strings.TrimSpace(pair[1])
-		if !tokenRE.MatchString(name) {
+		if !tagNameRE.MatchString(name) {
 			return nil, errors.New("invalid tag name")
 		}
 		if _, ok := tags[name]; ok {
@@ -1861,6 +1660,26 @@ func validateDKIM(tags map[string]string, arc bool) error {
 	if !validDKIMBase64(tags["b"]) || !validDKIMBase64(tags["bh"]) {
 		return errors.New("invalid base64 tag")
 	}
+	if !validSigningDomain(tags["d"], true) || !validSigningDomain(tags["s"], false) {
+		return errors.New("invalid domain or selector")
+	}
+	if !algorithmRE.MatchString(tags["a"]) || arc && strings.EqualFold(tags["a"], "rsa-sha1") {
+		return errors.New("invalid signature algorithm")
+	}
+	if limit, ok := tags["l"]; ok && (!digitsOnly(limit) || len(limit) > 76) {
+		return errors.New("invalid body length")
+	}
+	for _, name := range strings.Split(tags["h"], ":") {
+		if arc {
+			switch strings.ToLower(strings.TrimSpace(name)) {
+			case "authentication-results", "arc-authentication-results", "arc-message-signature", "arc-seal":
+				return errors.New("AMS covers a prohibited authentication or ARC header")
+			}
+		}
+		if !fieldNameRE.MatchString(strings.TrimSpace(name)) {
+			return errors.New("invalid h header name")
+		}
+	}
 	if tags["h"] == "" || !containsFold(strings.Split(tags["h"], ":"), "from") {
 		return errors.New("h omits From")
 	}
@@ -1871,18 +1690,28 @@ func validateDKIM(tags map[string]string, arc bool) error {
 }
 func validDKIMBase64(value string) bool {
 	value = strings.Join(strings.Fields(value), "")
-	return value != "" && dkimBase64RE.MatchString(value)
+	if value == "" || !dkimBase64RE.MatchString(value) {
+		return false
+	}
+	_, err := base64.StdEncoding.DecodeString(value)
+	return err == nil
 }
 func validateTimestamp(tags map[string]string) error {
 	var t, x int64
 	var err error
-	if tags["t"] != "" {
+	if value, exists := tags["t"]; exists {
+		if !digitsOnly(value) || len(value) > 12 {
+			return errors.New("invalid t")
+		}
 		t, err = strconv.ParseInt(tags["t"], 10, 64)
 		if err != nil {
 			return errors.New("invalid t")
 		}
 	}
-	if tags["x"] != "" {
+	if value, exists := tags["x"]; exists {
+		if !digitsOnly(value) || len(value) > 12 {
+			return errors.New("invalid x")
+		}
 		x, err = strconv.ParseInt(tags["x"], 10, 64)
 		if err != nil {
 			return errors.New("invalid x")
@@ -1905,8 +1734,8 @@ func validateARCSeal(tags map[string]string) error {
 			return errors.New("missing " + name)
 		}
 	}
-	if !validDKIMBase64(tags["b"]) {
-		return errors.New("invalid base64")
+	if !validDKIMBase64(tags["b"]) || !algorithmRE.MatchString(tags["a"]) || strings.EqualFold(tags["a"], "rsa-sha1") || !validSigningDomain(tags["d"], true) || !validSigningDomain(tags["s"], false) {
+		return errors.New("invalid ARC-Seal signature parameters")
 	}
 	cv := strings.ToLower(tags["cv"])
 	if cv != "none" && cv != "pass" && cv != "fail" {
@@ -1915,46 +1744,59 @@ func validateARCSeal(tags map[string]string) error {
 	return validateTimestamp(tags)
 }
 func parseARCInstanceFromAAR(value string) (int, bool) {
-	parts := strings.SplitN(strings.TrimSpace(value), ";", 2)
-	if len(parts) != 2 {
+	instance, payload, ok := arcInstancePrefix(value)
+	if !ok {
 		return 0, false
 	}
-	if instance, ok := arcInstanceTag(parts[0]); ok {
-		payload := strings.TrimSpace(parts[1])
-		_, valid := parseAuthenticationResults(payload)
-		return instance, valid && instance >= 1 && instance <= 50
-	}
-	head := strings.Fields(parts[0])
-	if len(head) < 2 {
-		return 0, false
-	}
-	instance := 0
-	authserv := ""
-	for _, part := range head {
-		if strings.HasPrefix(strings.ToLower(part), "i=") {
-			instance, _ = strconv.Atoi(strings.TrimPrefix(strings.ToLower(part), "i="))
-		} else {
-			authserv = part
-		}
-	}
-	_, ok := parseAuthenticationResults(authserv + ";" + parts[1])
-	return instance, ok && instance >= 1 && instance <= 50
+	_, ok = parseAuthenticationResults(payload)
+	return instance, ok
 }
 
-func arcInstanceTag(segment string) (int, bool) {
-	fields := strings.Fields(segment)
-	if len(fields) != 1 {
-		return 0, false
+func parseARCSignatureTags(value string) (int, map[string]string, error) {
+	instance, remainder, ok := arcInstancePrefix(value)
+	if !ok {
+		return 0, nil, errors.New("missing or malformed leading ARC instance")
 	}
-	tag := fields[0]
-	if len(tag) < 3 || !strings.EqualFold(tag[:2], "i=") {
-		return 0, false
-	}
-	instance, err := strconv.Atoi(tag[2:])
+	tags, err := parseTagList(remainder)
 	if err != nil {
-		return 0, false
+		return 0, nil, err
 	}
-	return instance, true
+	if _, exists := tags["i"]; exists {
+		return 0, nil, errors.New("duplicate ARC instance")
+	}
+	tags["i"] = strconv.Itoa(instance)
+	return instance, tags, nil
+}
+
+// RFC 8617 §§3, 4.1: the case-sensitive instance tag comes first on each
+// ARC field. Comments may contain semicolons, so consume CFWS before looking
+// for the delimiter that separates the instance from the A-R or tag list.
+func arcInstancePrefix(value string) (int, string, bool) {
+	var ok bool
+	for _, token := range []string{"i", "="} {
+		value, ok = skipCFWS(value)
+		if !ok || !strings.HasPrefix(value, token) {
+			return 0, "", false
+		}
+		value = value[1:]
+	}
+	value, ok = skipCFWS(value)
+	if !ok {
+		return 0, "", false
+	}
+	end := 0
+	for end < len(value) && value[end] >= '0' && value[end] <= '9' {
+		end++
+	}
+	if end < 1 || end > 2 {
+		return 0, "", false
+	}
+	instance, err := strconv.Atoi(value[:end])
+	rest, ok := skipCFWS(value[end:])
+	if err != nil || instance < 1 || instance > 50 || !ok || !strings.HasPrefix(rest, ";") {
+		return 0, "", false
+	}
+	return instance, rest[1:], true
 }
 func containsFold(values []string, target string) bool {
 	for _, value := range values {
@@ -1984,12 +1826,12 @@ func parseListUnsubscribe(fields []headerOccurrence) ([]*url.URL, bool) {
 		}
 		inside := part[1 : len(part)-1]
 		u, err := url.Parse(inside)
-		if err != nil || u.Scheme == "" || strings.ContainsAny(inside, "<>\r\n") {
+		if err != nil || u.Scheme == "" || strings.ContainsAny(inside, "<> \t\r\n") {
 			return nil, false
 		}
 		scheme := strings.ToLower(u.Scheme)
 		if scheme == "http" || scheme == "https" {
-			if u.Host == "" || !strings.HasPrefix(strings.ToLower(inside), scheme+"://") {
+			if u.Hostname() == "" || !strings.HasPrefix(strings.ToLower(inside), scheme+"://") {
 				return nil, false
 			}
 		} else if scheme == "mailto" && u.Opaque == "" && u.Path == "" {
@@ -2000,32 +1842,29 @@ func parseListUnsubscribe(fields []headerOccurrence) ([]*url.URL, bool) {
 	return ures, true
 }
 func splitAngleList(value string) ([]string, bool) {
-	parts := make([]string, 0, 2)
-	start, depth := 0, 0
-	for index, r := range value {
-		switch r {
-		case '<':
-			depth++
-			if depth > 1 {
-				return nil, false
-			}
-		case '>':
-			depth--
-			if depth < 0 {
-				return nil, false
-			}
-		case ',':
-			if depth == 0 {
-				parts = append(parts, value[start:index])
-				start = index + 1
-			}
+	var parts []string
+	for {
+		rest, ok := skipCFWS(value)
+		if !ok || len(rest) == 0 || rest[0] != '<' {
+			return nil, false
 		}
+		end := strings.IndexByte(rest, '>')
+		if end < 0 {
+			return nil, false
+		}
+		parts = append(parts, rest[:end+1])
+		value, ok = skipCFWS(rest[end+1:])
+		if !ok {
+			return nil, false
+		}
+		if value == "" {
+			return parts, true
+		}
+		if value[0] != ',' {
+			return nil, false
+		}
+		value = value[1:]
 	}
-	if depth != 0 {
-		return nil, false
-	}
-	parts = append(parts, value[start:])
-	return parts, true
 }
 
 func buildMIMETree(root *mimeparse.Node, raw []byte, semanticDecoded bool) *MimeNode {
@@ -2060,7 +1899,7 @@ func buildMIMETree(root *mimeparse.Node, raw []byte, semanticDecoded bool) *Mime
 			size := len(body)
 			item.RawSize = &size
 		}
-		if semanticDecoded && len(node.Children) == 0 && node.DecodeError == nil {
+		if semanticDecoded && !strings.HasPrefix(node.MediaType, "multipart/") && len(node.Children) == 0 && node.DecodeError == nil && node.DecodedBody != nil {
 			size := len(node.DecodedBody)
 			item.DecodedSize = &size
 			md5Sum := md5.Sum(node.DecodedBody)   // #nosec G401 -- Compatibility checksum, not a security primitive.

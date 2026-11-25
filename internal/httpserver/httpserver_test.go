@@ -140,6 +140,10 @@ func TestGeneratedOpenAPIEndpoint(t *testing.T) {
 			t.Errorf("inspection report schema missing %s", property)
 		}
 	}
+	support, _ := document.Components.Schemas["CompatibilityClient"].Properties["support"].(map[string]any)
+	if got, _ := json.Marshal(support["enum"]); string(got) != `["yes","partial","no","unknown"]` {
+		t.Errorf("documented compatibility support: %s", got)
+	}
 	mimeSchema := document.Components.Schemas["MimeNode"]
 	if mimeSchema.Properties["checksums"] == nil {
 		t.Error("MIME node schema missing checksums")

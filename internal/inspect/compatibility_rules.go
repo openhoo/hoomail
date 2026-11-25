@@ -1,218 +1,210 @@
 package inspect
 
-import "regexp"
+import (
+	"net/url"
+	"path"
+	"strings"
+)
 
-// Detection rules derived from Mailpit internal/htmlcheck at
-// b859b0d986d66bbf1d7d9533317faf867afa1ed1 (MIT).
-
-// HTML tests
-var htmlTests = map[string]string{
-	// body check is manually done because it always exists in *goquery.Document
-	"html-body": "body",
-	// HTML tests
-	"html-object":         "object, embed, image, pdf",
-	"html-link":           "link",
-	"html-hr":             "hr",
-	"html-dialog":         "dialog",
-	"html-srcset":         "[srcset]",
-	"html-picture":        "picture",
-	"html-svg":            "svg",
-	"html-progress":       "progress",
-	"html-required":       "[required]",
-	"html-meter":          "meter",
-	"html-audio":          "audio",
-	"html-form":           "form",
-	"html-input-submit":   "submit",
-	"html-button-reset":   "button[type=\"reset\"]",
-	"html-button-submit":  "submit, button[type=\"submit\"]",
-	"html-base":           "base",
-	"html-input-checkbox": "checkbox",
-	"html-input-hidden":   "[type=\"hidden\"]",
-	"html-input-radio":    "radio",
-	"html-input-text":     "input[type=\"text\"]",
-	"html-video":          "video",
-	"html-semantics":      "article, aside, details, figcaption, figure, footer, header, main, mark, nav, section, summary, time",
-	"html-select":         "select",
-	"html-textarea":       "textarea",
-	"html-anchor-links":   "a[href^=\"#\"]",
-	"html-style":          "style",
-	"html-image-maps":     "map, img[usemap]",
+// The initial feature selection derives from Mailpit internal/htmlcheck at
+// b859b0d986d66bbf1d7d9533317faf867afa1ed1 (MIT). Keys below are actual
+// HTML/CSS constructs; values are feature IDs in the bundled Can I Email data.
+func featureNames(names, prefix string) map[string]string {
+	out := map[string]string{}
+	for _, name := range strings.Fields(names) {
+		out[name] = prefix + name
+	}
+	return out
 }
 
-// Image tests using regex to match against img[src]
-var imageRegexpTests = map[string]*regexp.Regexp{
-	"image-apng":   regexp.MustCompile(`(?i)\.apng$`),
-	"image-avif":   regexp.MustCompile(`(?i)\.avif$`),
-	"image-base64": regexp.MustCompile(`^(?i)data:image\/`),
-	"image-bmp":    regexp.MustCompile(`(?i)\.bmp$`),
-	"image-gif":    regexp.MustCompile(`(?i)\.gif$`),
-	"image-hdr":    regexp.MustCompile(`(?i)\.hdr$`),
-	"image-heif":   regexp.MustCompile(`(?i)\.heif$`),
-	"image-ico":    regexp.MustCompile(`(?i)\.ico$`),
-	"image-mp4":    regexp.MustCompile(`(?i)\.mp4$`),
-	"image-ppm":    regexp.MustCompile(`(?i)\.ppm$`),
-	"image-svg":    regexp.MustCompile(`(?i)\.svg$`),
-	"image-tiff":   regexp.MustCompile(`(?i)\.tiff?$`),
-	"image-webp":   regexp.MustCompile(`(?i)\.webp$`),
+var cssProperties = func() map[string]string {
+	m := featureNames(`accent-color align-items animation aspect-ratio backdrop-filter background-blend-mode background-clip
+	background-color background-image background-origin background-position background-repeat background-size background
+	border-collapse border-image border-radius border-spacing border box-shadow box-sizing caption-side clear clip-path
+	color-scheme column-count cursor direction display empty-cells filter flex-direction flex-wrap float font-kerning font-size-adjust
+	font-size font-stretch font-weight font gap grid-template height hyphenate-character hyphenate-limit-chars hyphens inline-size inset
+	justify-content letter-spacing line-height list-style-image list-style-position list-style-type list-style margin mask-image
+	max-block-size max-height max-inline-size max-width min-block-size min-height min-inline-size min-width mix-blend-mode object-fit
+	object-position opacity orphans outline-offset outline overflow-wrap overflow padding position resize shape-margin shape-outside
+	tab-size table-layout text-align-last text-align text-decoration-color text-decoration-line text-decoration-skip-ink text-decoration-style
+	text-decoration-thickness text-decoration text-emphasis-position text-emphasis text-indent text-justify text-orientation text-overflow
+	text-shadow text-transform text-underline-offset text-underline-position text-wrap transform transition user-select vertical-align
+	visibility white-space-collapse white-space widows width word-break word-spacing word-wrap writing-mode z-index`, "css-")
+	for slug, properties := range map[string]string{
+		"css-block-inline-size":              "block-size",
+		"css-border-inline-block":            "border-inline border-block",
+		"css-border-inline-block-individual": "border-inline-start border-inline-end border-block-start border-block-end border-inline-color border-inline-width border-inline-style border-block-color border-block-width border-block-style",
+		"css-border-inline-block-longhand":   "border-inline-start-color border-inline-end-color border-block-start-color border-block-end-color border-inline-start-style border-inline-end-style border-block-start-style border-block-end-style border-inline-start-width border-inline-end-width border-block-start-width border-block-end-width",
+		"css-border-radius-logical":          "border-start-start-radius border-start-end-radius border-end-start-radius border-end-end-radius",
+		"css-column-layout-properties":       "columns column-width column-fill column-gap column-rule column-rule-color column-rule-style column-rule-width column-span",
+		"css-grid-template":                  "grid-template-rows grid-template-columns grid-template-areas",
+		"css-left-right-top-bottom":          "left right top bottom",
+		"css-margin-inline-block":            "margin-inline margin-block",
+		"css-margin-inline-start-end":        "margin-inline-start margin-inline-end",
+		"css-margin-block-start-end":         "margin-block-start margin-block-end",
+		"css-padding-inline-block":           "padding-inline padding-block",
+		"css-padding-inline-start-end":       "padding-inline-start padding-inline-end",
+		"css-padding-block-start-end":        "padding-block-start padding-block-end",
+		"css-scroll-snap":                    "scroll-snap-type scroll-snap-align scroll-snap-stop",
+	} {
+		for _, property := range strings.Fields(properties) {
+			m[property] = slug
+		}
+	}
+	return m
+}()
+
+var cssSizeProperties = map[string]bool{"height": true, "width": true, "min-height": true, "min-width": true, "max-height": true, "max-width": true, "block-size": true, "inline-size": true, "max-block-size": true, "max-inline-size": true, "min-block-size": true, "min-inline-size": true}
+var cssAtRules = featureNames("font-face import keyframes media supports", "css-at-")
+var cssMediaFeatures = map[string]string{
+	"hover": "css-at-media-hover", "any-hover": "css-at-media-hover",
+	"orientation": "css-at-media-orientation", "prefers-color-scheme": "css-at-media-prefers-color-scheme",
+	"prefers-reduced-motion":     "css-at-media-prefers-reduced-motion",
+	"-webkit-device-pixel-ratio": "css-at-media-device-pixel-ratio", "-webkit-min-device-pixel-ratio": "css-at-media-device-pixel-ratio", "-webkit-max-device-pixel-ratio": "css-at-media-device-pixel-ratio",
+}
+var cssPseudoClasses = featureNames("active checked default first-child first-of-type focus focus-visible focus-within has hover lang last-child last-of-type link not nth-child nth-last-child nth-last-of-type nth-of-type only-child only-of-type target visited", "css-pseudo-class-")
+var cssPseudoElements = featureNames("after before first-letter first-line marker placeholder", "css-pseudo-element-")
+var cssUnits = featureNames("ch rem vh vmax vmin vw", "css-unit-")
+var cssDisplayValues = map[string]string{"flex": "css-display-flex", "inline-flex": "css-display-flex", "grid": "css-display-grid", "inline-grid": "css-display-grid", "none": "css-display-none"}
+var cssFunctions = map[string]string{"calc": "css-unit-calc", "rgb": "css-rgb", "rgba": "css-rgba", "var": "css-variables", "lch": "css-modern-color", "oklch": "css-modern-color", "lab": "css-modern-color", "oklab": "css-modern-color", "conic-gradient": "css-conic-gradient", "radial-gradient": "css-radial-gradient", "linear-gradient": "css-linear-gradient", "clamp": "css-function-clamp", "min": "css-function-min", "max": "css-function-max", "light-dark": "css-function-light-dark"}
+
+var htmlTags = func() map[string]string {
+	m := featureNames("body object link hr dialog picture svg progress meter audio form base video select textarea style", "html-")
+	for _, tag := range strings.Fields("article aside details figcaption figure footer header main mark nav section summary time") {
+		m[tag] = "html-semantics"
+	}
+	return m
+}()
+var imageExtensions = func() map[string]string {
+	m := featureNames("apng avif bmp gif hdr heif ico jpg mp4 png svg tiff webp", "image-")
+	m["jpeg"], m["tif"], m["heic"] = "image-jpg", "image-tiff", "image-heif"
+	return m
+}()
+
+func compatibilityImageFormat(src string) string {
+	src = strings.TrimSpace(src)
+	if len(src) >= 5 && strings.EqualFold(src[:5], "data:") {
+		metadata, _, ok := strings.Cut(src[5:], ",")
+		if ok && strings.HasPrefix(strings.ToLower(metadata), "image/") && strings.HasSuffix(strings.ToLower(metadata), ";base64") {
+			return "image-base64"
+		}
+		return ""
+	}
+	u, err := url.Parse(src)
+	if err != nil || u.Opaque != "" {
+		return ""
+	}
+	return imageExtensions[strings.TrimPrefix(strings.ToLower(path.Ext(u.Path)), ".")]
 }
 
-// inline attribute <match>=""
-var styleInlineAttributes = map[string]string{
-	"css-background-color": "[bgcolor]",
-	"css-background":       "[background]",
-	"css-border":           "[border]",
-	"css-height":           "[height]",
-	"css-padding":          "[padding]",
-	"css-width":            "[width]",
+func inspectCompatibilityTag(name string, attrs map[string]string, counts map[string]int) {
+	if slug := htmlTags[name]; slug != "" {
+		counts[slug]++
+	}
+	has := func(attribute string) bool { _, ok := attrs[attribute]; return ok }
+	if has("popover") || ((name == "button" || (name == "input" && strings.EqualFold(attrs["type"], "button"))) && (has("popovertarget") || has("popovertargetaction"))) {
+		counts["html-popover"]++
+	}
+	if name == "button" && (has("command") || has("commandfor")) {
+		counts["html-command-attribute"]++
+	}
+	switch name {
+	case "meta":
+		if strings.EqualFold(attrs["name"], "color-scheme") {
+			counts["html-meta-color-scheme"]++
+		}
+	case "script":
+		if scriptIsExecutable(attrs["type"]) {
+			counts["html-script"]++
+		}
+	case "input":
+		switch strings.ToLower(attrs["type"]) {
+		case "radio", "checkbox", "hidden", "submit", "reset", "text":
+			counts["html-input-"+strings.ToLower(attrs["type"])]++
+		case "":
+			counts["html-input-text"]++
+		}
+	case "button":
+		switch strings.ToLower(attrs["type"]) {
+		case "submit":
+			counts["html-button-submit"]++
+		case "reset":
+			counts["html-button-reset"]++
+		}
+	case "a":
+		if strings.HasPrefix(strings.TrimSpace(attrs["href"]), "#") {
+			counts["html-anchor-links"]++
+		}
+	case "map":
+		counts["html-image-maps"]++
+	case "img":
+		if has("usemap") {
+			counts["html-image-maps"]++
+		}
+	}
+	if name == "img" || name == "source" {
+		formats := map[string]bool{}
+		if name == "img" {
+			formats[compatibilityImageFormat(attrs["src"])] = true
+		}
+		if has("srcset") {
+			counts["html-srcset"]++
+			walkImageCandidates(attrs["srcset"], func(url string) { formats[compatibilityImageFormat(url)] = true })
+		}
+		for slug := range formats {
+			if slug != "" {
+				counts[slug]++
+			}
+		}
+	}
+	if (name == "input" || name == "select" || name == "textarea") && has("required") {
+		counts["html-required"]++
+	}
+	if (name == "body" || name == "table" || name == "td" || name == "th") && has("background") {
+		counts["html-background"]++
+	}
+	switch name {
+	case "img", "table", "td", "th", "video", "canvas", "iframe", "embed", "object", "input":
+		for _, dimension := range []string{"height", "width"} {
+			if has(dimension) {
+				counts["html-"+dimension]++
+			}
+		}
+	}
+	if name == "table" {
+		for _, spacing := range []string{"cellspacing", "cellpadding"} {
+			if has(spacing) {
+				counts["html-"+spacing]++
+			}
+		}
+	}
 }
 
-// inline style="<match>"
-var cssInlineRegexTests = map[string]*regexp.Regexp{
-	"css-accent-color":                   regexp.MustCompile(`(?i)(^|\s|;)accent-color(\s+)?:`),
-	"css-align-items":                    regexp.MustCompile(`(?i)(^|\s|;)align-items(\s+)?:`),
-	"css-aspect-ratio":                   regexp.MustCompile(`(?i)(^|\s|;)aspect-ratio(\s+)?:`),
-	"css-background-blend-mode":          regexp.MustCompile(`(?i)(^|\s|;)background-blend-mode(\s+)?:`),
-	"css-background-clip":                regexp.MustCompile(`(?i)(^|\s|;)background-clip(\s+)?:`),
-	"css-background-color":               regexp.MustCompile(`(?i)(^|\s|;)background-color(\s+)?:`),
-	"css-background-image":               regexp.MustCompile(`(?i)(^|\s|;)background-image(\s+)?:`),
-	"css-background-origin":              regexp.MustCompile(`(?i)(^|\s|;)background-origin(\s+)?:`),
-	"css-background-position":            regexp.MustCompile(`(?i)(^|\s|;)background-position(\s+)?:`),
-	"css-background-repeat":              regexp.MustCompile(`(?i)(^|\s|;)background-repeat(\s+)?:`),
-	"css-background-size":                regexp.MustCompile(`(?i)(^|\s|;)background-size(\s+)?:`),
-	"css-background":                     regexp.MustCompile(`(?i)(^|\s|;)background(\s+)?:`),
-	"css-block-inline-size":              regexp.MustCompile(`(?i)(^|\s|;)block-inline-size(\s+)?:`),
-	"css-border-image":                   regexp.MustCompile(`(?i)(^|\s|;)border-image(\s+)?:`),
-	"css-border-inline-block-individual": regexp.MustCompile(`(?i)(^|\s|;)border-inline(\s+)?:`),
-	"css-border-radius":                  regexp.MustCompile(`(?i)(^|\s|;)border-radius(\s+)?:`),
-	"css-border":                         regexp.MustCompile(`(?i)(^|\s|;)border(\s+)?:`),
-	"css-box-shadow":                     regexp.MustCompile(`(?i)(^|\s|;)box-shadow(\s+)?:`),
-	"css-box-sizing":                     regexp.MustCompile(`(?i)(^|\s|;)box-sizing(\s+)?:`),
-	"css-caption-side":                   regexp.MustCompile(`(?i)(^|\s|;)caption-side(\s+)?:`),
-	"css-clip-path":                      regexp.MustCompile(`(?i)(^|\s|;)clip-path(\s+)?:`),
-	"css-column-count":                   regexp.MustCompile(`(?i)(^|\s|;)column-count(\s+)?:`),
-	"css-column-layout-properties":       regexp.MustCompile(`(?i)(^|\s|;)column-layout-properties(\s+)?:`),
-	"css-conic-gradient":                 regexp.MustCompile(`(?i)(^|\s|;)conic-gradient(\s+)?:`),
-	"css-direction":                      regexp.MustCompile(`(?i)(^|\s|;)direction(\s+)?:`),
-	"css-display-flex":                   regexp.MustCompile(`(?i)(^|\s|;)display(\s+)?:(\s+)?flex($|\s|;)`),
-	"css-display-grid":                   regexp.MustCompile(`(?i)(^|\s|;)display:grid`),
-	"css-display-none":                   regexp.MustCompile(`(?i)(^|\s|;)display:none`),
-	"css-display":                        regexp.MustCompile(`(?i)(^|\s|;)display(\s+)?:`),
-	"css-filter":                         regexp.MustCompile(`(?i)(^|\s|;)filter(\s+)?:`),
-	"css-flex-direction":                 regexp.MustCompile(`(?i)(^|\s|;)flex-direction(\s+)?:`),
-	"css-flex-wrap":                      regexp.MustCompile(`(?i)(^|\s|;)flex-wrap(\s+)?:`),
-	"css-float":                          regexp.MustCompile(`(?i)(^|\s|;)float(\s+)?:`),
-	"css-font-kerning":                   regexp.MustCompile(`(?i)(^|\s|;)font-kerning(\s+)?:`),
-	"css-font-weight":                    regexp.MustCompile(`(?i)(^|\s|;)font-weight(\s+)?:`),
-	"css-font":                           regexp.MustCompile(`(?i)(^|\s|;)font(\s+)?:`),
-	"css-gap":                            regexp.MustCompile(`(?i)(^|\s|;)gap(\s+)?:`),
-	"css-grid-template":                  regexp.MustCompile(`(?i)(^|\s|;)grid-template(\s+)?:`),
-	"css-height":                         regexp.MustCompile(`(?i)(^|\s|;)height(\s+)?:`),
-	"css-hyphens":                        regexp.MustCompile(`(?i)(^|\s|;)hyphens(\s+)?:`),
-	"css-important":                      regexp.MustCompile(`(?i)!important($|\s|;)`),
-	"css-inline-size":                    regexp.MustCompile(`(?i)(^|\s|;)inline-size(\s+)?:`),
-	"css-intrinsic-size":                 regexp.MustCompile(`(?i)(^|\s|;)intrinsic-size(\s+)?:`),
-	"css-justify-content":                regexp.MustCompile(`(?i)(^|\s|;)justify-content(\s+)?:`),
-	"css-letter-spacing":                 regexp.MustCompile(`(?i)(^|\s|;)letter-spacing(\s+)?:`),
-	"css-line-height":                    regexp.MustCompile(`(?i)(^|\s|;)line-height(\s+)?:`),
-	"css-list-style-image":               regexp.MustCompile(`(?i)(^|\s|;)list-style-image(\s+)?:`),
-	"css-list-style-position":            regexp.MustCompile(`(?i)(^|\s|;)list-style-position(\s+)?:`),
-	"css-list-style":                     regexp.MustCompile(`(?i)(^|\s|;)list-style(\s+)?:`),
-	"css-margin-block-start-end":         regexp.MustCompile(`(?i)(^|\s|;)margin-block-(start|end)(\s+)?:`),
-	"css-margin-inline-block":            regexp.MustCompile(`(?i)(^|\s|;)margin-inline-block(\s+)?:`),
-	"css-margin-inline-start-end":        regexp.MustCompile(`(?i)(^|\s|;)margin-inline-(start|end)(\s+)?:`),
-	"css-margin-inline":                  regexp.MustCompile(`(?i)(^|\s|;)margin-inline(\s+)?:`),
-	"css-margin":                         regexp.MustCompile(`(?i)(^|\s|;)margin(\s+)?:`),
-	"css-max-block-size":                 regexp.MustCompile(`(?i)(^|\s|;)max-block-size(\s+)?:`),
-	"css-max-height":                     regexp.MustCompile(`(?i)(^|\s|;)max-height(\s+)?:`),
-	"css-max-width":                      regexp.MustCompile(`(?i)(^|\s|;)max-width(\s+)?:`),
-	"css-min-height":                     regexp.MustCompile(`(?i)(^|\s|;)min-height(\s+)?:`),
-	"css-min-inline-size":                regexp.MustCompile(`(?i)(^|\s|;)min-inline-size(\s+)?:`),
-	"css-min-width":                      regexp.MustCompile(`(?i)(^|\s|;)min-width(\s+)?:`),
-	"css-mix-blend-mode":                 regexp.MustCompile(`(?i)(^|\s|;)mix-blend-mode(\s+)?:`),
-	"css-modern-color":                   regexp.MustCompile(`(?i)(^|\s|;)modern-color(\s+)?:`),
-	"css-object-fit":                     regexp.MustCompile(`(?i)(^|\s|;)object-fit(\s+)?:`),
-	"css-object-position":                regexp.MustCompile(`(?i)(^|\s|;)object-position(\s+)?:`),
-	"css-opacity":                        regexp.MustCompile(`(?i)(^|\s|;)opacity(\s+)?:`),
-	"css-outline-offset":                 regexp.MustCompile(`(?i)(^|\s|;)outline-offset(\s+)?:`),
-	"css-outline":                        regexp.MustCompile(`(?i)(^|\s|;)outline(\s+)?:`),
-	"css-overflow-wrap":                  regexp.MustCompile(`(?i)(^|\s|;)overflow-wrap(\s+)?:`),
-	"css-overflow":                       regexp.MustCompile(`(?i)(^|\s|;)overflow(\s+)?:`),
-	"css-padding-block-start-end":        regexp.MustCompile(`(?i)(^|\s|;)padding-block-(start|end)(\s+)?:`),
-	"css-padding-inline-block":           regexp.MustCompile(`(?i)(^|\s|;)padding-inline-block(\s+)?:`),
-	"css-padding-inline-start-end":       regexp.MustCompile(`(?i)(^|\s|;)padding-inline-(start|end)(\s+)?:`),
-	"css-padding":                        regexp.MustCompile(`(?i)(^|\s|;)padding(\s+)?:`),
-	"css-position":                       regexp.MustCompile(`(?i)(^|\s|;)position(\s+)?:`),
-	"css-radial-gradient":                regexp.MustCompile(`(?i)(^|\s|;)radial-gradient(\s+)?:`),
-	"css-rgb":                            regexp.MustCompile(`(?i)(\s|:)rgb\(`),
-	"css-rgba":                           regexp.MustCompile(`(?i)(\s|:)rgba\(`),
-	"css-scroll-snap":                    regexp.MustCompile(`(?i)(^|\s|;)roll-snap(\s+)?:`),
-	"css-tab-size":                       regexp.MustCompile(`(?i)(^|\s|;)tab-size(\s+)?:`),
-	"css-table-layout":                   regexp.MustCompile(`(?i)(^|\s|;)table-layout(\s+)?:`),
-	"css-text-align-last":                regexp.MustCompile(`(?i)(^|\s|;)text-align-last(\s+)?:`),
-	"css-text-align":                     regexp.MustCompile(`(?i)(^|\s|;)text-align(\s+)?:`),
-	"css-text-decoration-color":          regexp.MustCompile(`(?i)(^|\s|;)text-decoration-color(\s+)?:`),
-	"css-text-decoration-thickness":      regexp.MustCompile(`(?i)(^|\s|;)text-decoration-thickness(\s+)?:`),
-	"css-text-decoration":                regexp.MustCompile(`(?i)(^|\s|;)text-decoration(\s+)?:`),
-	"css-text-emphasis-position":         regexp.MustCompile(`(?i)(^|\s|;)text-emphasis-position(\s+)?:`),
-	"css-text-emphasis":                  regexp.MustCompile(`(?i)(^|\s|;)text-emphasis(\s+)?:`),
-	"css-text-indent":                    regexp.MustCompile(`(?i)(^|\s|;)text-indent(\s+)?:`),
-	"css-text-overflow":                  regexp.MustCompile(`(?i)(^|\s|;)text-overflow(\s+)?:`),
-	"css-text-shadow":                    regexp.MustCompile(`(?i)(^|\s|;)text-shadow(\s+)?:`),
-	"css-text-transform":                 regexp.MustCompile(`(?i)(^|\s|;)text-transform(\s+)?:`),
-	"css-text-underline-offset":          regexp.MustCompile(`(?i)(^|\s|;)text-underline-offset(\s+)?:`),
-	"css-transform":                      regexp.MustCompile(`(?i)(^|\s|;)transform(\s+)?:`),
-	"css-unit-calc":                      regexp.MustCompile(`(?i)(\s|:)calc\(`),
-	"css-variables":                      regexp.MustCompile(`(?i)(^|\s|;)variables(\s+)?:`),
-	"css-visibility":                     regexp.MustCompile(`(?i)(^|\s|;)visibility(\s+)?:`),
-	"css-white-space":                    regexp.MustCompile(`(?i)(^|\s|;)white-space(\s+)?:`),
-	"css-width":                          regexp.MustCompile(`(?i)(^|\s|;)width(\s+)?:`),
-	"css-word-break":                     regexp.MustCompile(`(?i)(^|\s|;)word-break(\s+)?:`),
-	"css-writing-mode":                   regexp.MustCompile(`(?i)(^|\s|;)writing-mode(\s+)?:`),
-	"css-z-index":                        regexp.MustCompile(`(?i)(^|\s|;)z-index(\s+)?:`),
+// Script elements can also contain non-executable data such as JSON-LD.
+func scriptIsExecutable(kind string) bool {
+	kind = strings.TrimSpace(strings.ToLower(kind))
+	switch kind {
+	case "", "module", "importmap", "speculationrules":
+		return true
+	}
+	kind, _, _ = strings.Cut(kind, ";")
+	switch strings.TrimSpace(kind) {
+	case "application/ecmascript", "application/javascript", "application/x-ecmascript", "application/x-javascript",
+		"text/ecmascript", "text/javascript", "text/javascript1.0", "text/javascript1.1", "text/javascript1.2", "text/javascript1.3", "text/javascript1.4", "text/javascript1.5", "text/jscript", "text/livescript", "text/x-ecmascript", "text/x-javascript":
+		return true
+	}
+	return false
 }
 
-// some CSS tests using regex for things that can't be merged inline
-var cssRegexpTests = map[string]*regexp.Regexp{
-	"css-at-font-face":                  regexp.MustCompile(`(?mi)@font\-face\s+?{`),
-	"css-at-import":                     regexp.MustCompile(`(?mi)@import\s`),
-	"css-at-keyframes":                  regexp.MustCompile(`(?mi)@keyframes\s`),
-	"css-at-media":                      regexp.MustCompile(`(?mi)@media\s?\(`),
-	"css-at-supports":                   regexp.MustCompile(`(?mi)@supports\s?\(`),
-	"css-pseudo-class-active":           regexp.MustCompile(`:active`),
-	"css-pseudo-class-checked":          regexp.MustCompile(`:checked`),
-	"css-pseudo-class-first-child":      regexp.MustCompile(`:first\-child`),
-	"css-pseudo-class-first-of-type":    regexp.MustCompile(`:first\-of\-type`),
-	"css-pseudo-class-focus":            regexp.MustCompile(`:focus`),
-	"css-pseudo-class-has":              regexp.MustCompile(`:has`),
-	"css-pseudo-class-hover":            regexp.MustCompile(`:hover`),
-	"css-pseudo-class-lang":             regexp.MustCompile(`:lang\s?\(`),
-	"css-pseudo-class-last-child":       regexp.MustCompile(`:last\-child`),
-	"css-pseudo-class-last-of-type":     regexp.MustCompile(`:last\-of\-type`),
-	"css-pseudo-class-link":             regexp.MustCompile(`:link`),
-	"css-pseudo-class-not":              regexp.MustCompile(`:not(\s+)?\(`),
-	"css-pseudo-class-nth-child":        regexp.MustCompile(`:nth\-child(\s+)?\(`),
-	"css-pseudo-class-nth-last-child":   regexp.MustCompile(`:nth\-last\-child(\s+)?\(`),
-	"css-pseudo-class-nth-last-of-type": regexp.MustCompile(`:nth\-last\-of\-type(\s+)?\(`),
-	"css-pseudo-class-nth-of-type":      regexp.MustCompile(`:nth\-of\-type(\s+)?\(`),
-	"css-pseudo-class-only-child":       regexp.MustCompile(`:only\-child(\s+)?\(`),
-	"css-pseudo-class-only-of-type":     regexp.MustCompile(`:only\-of\-type(\s+)?\(`),
-	"css-pseudo-class-target":           regexp.MustCompile(`:target`),
-	"css-pseudo-class-visited":          regexp.MustCompile(`:visited`),
-	"css-pseudo-element-after":          regexp.MustCompile(`:after`),
-	"css-pseudo-element-before":         regexp.MustCompile(`:before`),
-	"css-pseudo-element-first-letter":   regexp.MustCompile(`::first\-letter`),
-	"css-pseudo-element-first-line":     regexp.MustCompile(`::first\-line`),
-	"css-pseudo-element-marker":         regexp.MustCompile(`::marker`),
-	"css-pseudo-element-placeholder":    regexp.MustCompile(`::placeholder`),
-}
-
-// some CSS tests using regex for units
-var cssRegexpUnitTests = map[string]*regexp.Regexp{
-	"css-unit-ch":      regexp.MustCompile(`\b\d+ch\b`),
-	"css-unit-initial": regexp.MustCompile(`:\s?initial\b`),
-	"css-unit-rem":     regexp.MustCompile(`\b\d+rem\b`),
-	"css-unit-vh":      regexp.MustCompile(`\b\d+vh\b`),
-	"css-unit-vmax":    regexp.MustCompile(`\b\d+vmax\b`),
-	"css-unit-vmin":    regexp.MustCompile(`\b\d+vmin\b`),
-	"css-unit-vw":      regexp.MustCompile(`\b\d+vw\b`),
+func compatibilityRuleIDs() map[string]bool {
+	ids := map[string]bool{}
+	for _, aliases := range []map[string]string{cssProperties, cssAtRules, cssMediaFeatures, cssPseudoClasses, cssPseudoElements, cssDisplayValues, cssFunctions, cssUnits, htmlTags, imageExtensions} {
+		for _, slug := range aliases {
+			ids[slug] = true
+		}
+	}
+	for _, slug := range strings.Fields("css-intrinsic-size css-important css-unit-initial html-script html-popover html-command-attribute html-meta-color-scheme html-input-radio html-input-checkbox html-input-hidden html-input-submit html-input-reset html-input-text html-button-submit html-button-reset html-anchor-links html-image-maps html-srcset html-required html-background html-width html-height html-cellspacing html-cellpadding image-base64") {
+		ids[slug] = true
+	}
+	return ids
 }

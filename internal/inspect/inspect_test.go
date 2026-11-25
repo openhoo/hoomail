@@ -394,7 +394,7 @@ func TestAnalyzeHTMLResolvesNestedLabelAndDetectsStyledHiddenTrackers(t *testing
 	if facts.trackingPixels != 2 {
 		t.Fatalf("trackingPixels=%d want 2", facts.trackingPixels)
 	}
-	if len(facts.resources) != 3 || facts.resources[0].kind != "tracking-pixel" || facts.resources[1].kind != "tracking-pixel" || facts.resources[2].text != "Open account" {
+	if len(facts.resources) != 3 || facts.resources[0].text != "Open account" || facts.resources[1].kind != "tracking-pixel" || facts.resources[2].kind != "tracking-pixel" {
 		t.Fatalf("resources=%#v", facts.resources)
 	}
 }
@@ -534,7 +534,7 @@ func TestCompatibilityAnalyzerParityContracts(t *testing.T) {
 	if result.Nodes != 4 {
 		t.Fatalf("nodes=%d want 4 content nodes", result.Nodes)
 	}
-	for _, slug := range []string{"css-background-color", "css-border", "css-width", "css-display-grid", "css-border-radius", "html-image-maps"} {
+	for _, slug := range []string{"html-width", "css-display-grid", "css-border-radius", "html-image-maps"} {
 		found := false
 		for _, warning := range result.Warnings {
 			if warning.Slug == slug {

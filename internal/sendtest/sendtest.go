@@ -126,7 +126,12 @@ func plainMessage(to, subject string, now time.Time) []byte {
 	writeQuotedPrintable(&body, html)
 	fmt.Fprintf(&body, "\r\n--%s--\r\n", alternative)
 	attachment := base64.StdEncoding.EncodeToString([]byte("This is a sample attachment from the hoomail test sender.\nHoot hoot!\n"))
-	fmt.Fprintf(&body, "--%s\r\nContent-Type: text/plain; name=\"hoot.txt\"\r\nContent-Disposition: attachment; filename=\"hoot.txt\"\r\nContent-Transfer-Encoding: base64\r\n\r\n%s\r\n--%s--\r\n", mixed, attachment, mixed)
+	fmt.Fprintf(&body, "--%s\r\nContent-Type: text/plain; name=\"hoot.txt\"\r\nContent-Disposition: attachment; filename=\"hoot.txt\"\r\nContent-Transfer-Encoding: base64\r\n\r\n", mixed)
+	for len(attachment) > 76 {
+		fmt.Fprintf(&body, "%s\r\n", attachment[:76])
+		attachment = attachment[76:]
+	}
+	fmt.Fprintf(&body, "%s\r\n--%s--\r\n", attachment, mixed)
 	return body.Bytes()
 }
 

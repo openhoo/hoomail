@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/openhoo/hoomail/internal/httpserver"
+	"github.com/openhoo/hoomail/internal/inspect"
 )
 
 func TestPlainMessageContainsMultipartAttachment(t *testing.T) {
@@ -92,5 +93,23 @@ func TestSendTestCancelsStalledSMTPGreeting(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("stalled SMTP connection was not closed after cancellation")
+	}
+}
+
+func TestSampleMessagesPassFormatChecks(t *testing.T) {
+	for _, kind := range []string{"plain", "invite", "update", "cancellation"} {
+		raw := buildMessage(httpserver.SendTestRequest{Kind: kind, To: "reader@example.test", Subject: "Quarterly update"}, time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC))
+		report, err := inspect.Analyze(context.Background(), inspect.Input{Raw: raw})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range report.Findings {
+			if f.Outcome == "fail" {
+				t.Errorf("%s: %s: %s", kind, f.ID, f.Detail)
+			}
+			if kind != "plain" && f.ID == "mime.alternative.1" && f.Outcome != "not-evaluated" {
+				t.Errorf("%s: calendar and plain text have no HTML ordering to assess: %+v", kind, f)
+			}
+		}
 	}
 }

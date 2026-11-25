@@ -7,22 +7,20 @@ import (
 )
 
 func TestParseARCInstanceFromAARAcceptsRFC8617Form(t *testing.T) {
-	value := "i=1; mx.google.com;\r\n\tspf=pass smtp.mailfrom=example.test\r\n\tdkim=pass header.d=example.test"
+	value := "i=1; mx.google.com;\r\n\tspf=pass smtp.mailfrom=example.test;\r\n\tdkim=pass header.d=example.test"
 	instance, ok := parseARCInstanceFromAAR(value)
 	if !ok || instance != 1 {
 		t.Fatalf("instance=%d ok=%v, want instance 1 accepted", instance, ok)
 	}
-	authserv, valid := parseAuthenticationResults("mx.google.com;\r\n\tspf=pass smtp.mailfrom=example.test\r\n\tdkim=pass header.d=example.test")
+	authserv, valid := parseAuthenticationResults("mx.google.com;\r\n\tspf=pass smtp.mailfrom=example.test;\r\n\tdkim=pass header.d=example.test")
 	if !valid || authserv != "mx.google.com" {
 		t.Fatalf("authserv=%q valid=%v, want mx.google.com accepted", authserv, valid)
 	}
 }
 
-func TestParseARCInstanceFromAARRetainsLegacyAndRejectsMalformed(t *testing.T) {
-	if instance, ok := parseARCInstanceFromAAR("mx.example.test i=2; spf=pass"); !ok || instance != 2 {
-		t.Fatalf("legacy form rejected: instance=%d ok=%v", instance, ok)
-	}
+func TestParseARCInstanceFromAARRejectsMalformed(t *testing.T) {
 	for _, malformed := range []string{
+		"mx.example.test i=2; spf=pass",
 		"i=x; mx.example.test; spf=pass",
 		"i=1",
 		"i=1;",

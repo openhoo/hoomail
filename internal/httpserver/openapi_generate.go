@@ -147,7 +147,7 @@ func main() {
 		}),
 		"CompatibilityClient": object([]string{"name", "family", "platform", "version", "support", "note"}, map[string]any{
 			"name": stringSchema, "family": stringSchema, "platform": stringSchema, "version": stringSchema,
-			"support": map[string]any{"type": "string", "enum": []string{"yes", "partial", "no"}}, "note": nullable(stringSchema),
+			"support": map[string]any{"type": "string", "enum": []string{"yes", "partial", "no", "unknown"}}, "note": nullable(stringSchema),
 		}),
 		"CompatibilityWarning": object([]string{"slug", "title", "category", "description", "url", "occurrences", "score", "clients"}, map[string]any{
 			"slug": stringSchema, "title": stringSchema, "category": stringSchema, "description": stringSchema, "url": map[string]any{"type": "string", "format": "uri"},
